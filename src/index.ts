@@ -757,6 +757,8 @@ export const Popup = {
 
     VuePopups: Popups,
 
+    pendingClose: false,
+
     hideAllPopupItems() {
         this.elements.popupItems.forEach(el => {
             el.style.display = 'none'
@@ -781,6 +783,9 @@ export const Popup = {
                 this.VuePopups.show(popupID, props)
                 return
             }
+
+            this.elements.popupContainer.classList.remove('closing')
+            this.pendingClose = false
 
             this.hideAllPopupItems()
             this.elements.popupContainer.style.removeProperty('display');
@@ -839,8 +844,14 @@ export const Popup = {
             return
         }
 
-        this.elements.popupContainer.style.display = 'none';
-        this.hideAllPopupItems()
+        this.elements.popupContainer.classList.add('closing')
+        this.pendingClose = true
+        setTimeout(() => {
+            if (this.pendingClose) {
+                this.elements.popupContainer.style.display = 'none';
+                this.hideAllPopupItems()
+            }
+        }, 150);
 
         this.VuePopups.close()
     },

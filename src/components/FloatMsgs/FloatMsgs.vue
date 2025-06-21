@@ -1,56 +1,73 @@
 <template>
-    <div v-for="item in msgs" :key="item.id" :class="[item.type, item.persist ? 'persist' : '']">
+    <div v-for="item in msgs" :key="item.id" :ref="`msg-${item.id}`" :class="[item.type, item.persist ? 'persist' : '', item.closing ? 'closing' : '']">
         <i v-if="item.type == 'info'">💡</i>
         <i v-if="item.type == 'success'">✅</i>
         <i v-if="item.type == 'warn'">⚠️</i>
         <i v-if="item.type == 'error'">❌</i>
         <span v-html="item.msg"></span>
-        <i v-if="item.persist" class="closeBtn" @click="close(item.id!)"></i>
+        <i v-if="item.persist" class="closeBtn" @click="close(item.id)"></i>
     </div>
 </template>
 
 <script lang="ts">
-interface Msg {
-    id?: number
+import { logErr } from '../..'
+
+interface MsgPublic {
     type: 'info' | 'success' | 'warn' | 'error'
     msg: string
     persist?: boolean
     timeout?: number
 }
 
+interface MsgPrivate extends MsgPublic {
+    id: number
+    closing?: boolean
+}
+
 export default {
     data() {
         return {
             count: 0,
-            msgs: [] as Msg[],
+            msgs: [] as MsgPrivate[],
         }
     },
 
     methods: {
-        show(msg: Msg | string) {
+        show(msg: MsgPublic | string) {
             if (typeof msg == 'string') {
                 msg = {
                     type: 'info',
                     msg: msg
                 }
             }
-            msg.id = this.count
-            this.count++
-            this.msgs.push(msg)
-            if (!msg.persist) {
+            const msgAdd = { ...msg, id: this.count++ } as MsgPrivate
+            this.msgs.push(msgAdd)
+            if (!msgAdd.persist) {
                 setTimeout(() => {
-                    this.close(msg.id!)
-                }, msg.timeout || 4000);
+                    this.close(msgAdd.id)
+                }, msgAdd.timeout || 4000);
             }
         },
 
         close(id: number) {
-            this.msgs.forEach((item, i) => {
-                if (item.id == id) {
-                    this.msgs.splice(i, 1)
-                    return
-                }
-            })
+            const msgToClose = this.msgs.find(x => x.id == id)
+            if (!msgToClose) return
+
+            msgToClose.closing = true
+
+            try {
+                const el = (this.$refs[`msg-${id}`] as HTMLDivElement[])[0]
+                const elHeight = el.getBoundingClientRect().height
+                setTimeout(() => {
+                    el.style.marginBottom = `-${elHeight}px`
+                }, 200);
+            } catch (error) {
+                logErr(error, 'Failed to access FloatMsgs $refs')
+            }
+
+            setTimeout(() => {
+                this.msgs = this.msgs.filter(x => x != msgToClose)
+            }, 500);
         },
     }
 }
@@ -99,6 +116,16 @@ export default {
     pointer-events: all;
 }
 
+#floatMsgs>div.closing {
+    animation: floatMsgClose 0.2s forwards;
+    transition: margin-bottom 0.3s cubic-bezier(0.15, 0.7, 0.2, 0.9);
+    pointer-events: none;
+}
+
+.lowend #floatMsgs>div.closing {
+    display: none;
+}
+
 #floatMsgs>div>i {
     user-select: none;
     font-style: normal;
@@ -144,6 +171,18 @@ export default {
     to {
         opacity: 1;
         transform: translateY(0);
+    }
+}
+
+@keyframes floatMsgClose {
+    from {
+        opacity: 1;
+        transform: scale(1);
+    }
+
+    to {
+        opacity: 0;
+        transform: scale(0.9);
     }
 }
 </style>

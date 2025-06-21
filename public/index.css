@@ -1679,6 +1679,51 @@ body:not(.fullscreen) #lowerPanel.animating:not(.lowerPanelUp) {
     }
 }
 
+.popupContainer.closing {
+    pointer-events: none;
+}
+
+.popupContainer.closing .popupBG,
+.popupContainer.closing .popupItem {
+    animation-duration: 0.15s;
+    animation-fill-mode: forwards;
+    animation-timing-function: cubic-bezier(0.2, 0, 1, 1);
+}
+
+.popupContainer.closing .popupBG {
+    animation-name: fadeout;
+}
+
+.popupContainer.closing .popupItem {
+    animation-name: popup-fg-close;
+}
+
+.lowend .popupContainer.closing {
+    display: none;
+}
+
+@keyframes fadeout {
+    from {
+        opacity: 1;
+    }
+
+    to {
+        opacity: 0;
+    }
+}
+
+@keyframes popup-fg-close {
+    from {
+        opacity: 1;
+        transform: scale(1);
+    }
+
+    to {
+        opacity: 0;
+        transform: scale(0.93);
+    }
+}
+
 .popupContainer .popupItem>div:first-child {
     min-height: 0;
     padding: 1.5rem 2rem;
