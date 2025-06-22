@@ -1,4 +1,5 @@
 import FloatMsgs from './FloatMsgs'
+import ImgViewer from './ImgViewer'
 
 import { app as PopupsApp } from './Popups'
 import LoginPopup from './Popups/LoginPopup.vue'
@@ -15,4 +16,5 @@ PopupsApp.component('userHome', UserHome)
 
 export default {
     FloatMsgs,
+    ImgViewer,
 } 

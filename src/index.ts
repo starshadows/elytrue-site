@@ -1,6 +1,7 @@
 // @ts-nocheck
 import FloatMsgs from "./components/FloatMsgs"
 import Popups from "./components/Popups"
+import ImgViewer from "./components/ImgViewer"
 
 export const baseUrl = window.baseUrl
     ? (window.baseUrl.endsWith('/') ? window.baseUrl : (window.baseUrl + '/'))
@@ -1822,9 +1823,9 @@ export function logErr(err, msg) {
     console.error(msg)
 }
 
-export function setOneTimeCSS(el, styles) {
+export function setOneTimeCSS(el: HTMLElement, styles: Partial<CSSStyleDeclaration>) {
     for (let style in styles) {
-        el.style[style] = styles[style]
+        el.style[style] = styles[style]!
     }
     setTimeout(() => {
         for (let style in styles) {
@@ -2363,166 +2364,8 @@ document.getElementById('goto').addEventListener("keypress", function (event) {
 
 // image viewer
 //
-export const ImgViewer = {
-    elements: {
-        container: document.getElementById('imgViewerBox'),
-        viewer: /** @type {HTMLImageElement} */(document.getElementById('imgViewer')),
-        viewport: document.getElementById('viewport1'),
-    },
-
-    viewportContent: '',
-    imgViewerOffsetX: 0,
-    imgViewerOffsetY: 0,
-    imgViewerScale: 1,
-    imgViewerMouseMoved: false,
-
-    view(src) {
-        this.elements.viewer.src = src
-        this.elements.container.style.removeProperty('display')
-        this.elements.viewport.setAttribute('content', this.viewportContent.replace(', maximum-scale=1.0', ''))
-        window.location.hash = 'view-img'
-
-        this.imgViewerOffsetX = 0
-        this.imgViewerOffsetY = 0
-        this.imgViewerScale = 1
-        this.elements.viewer.style.transform = 'translateX(0px) translateY(0px) scale(1)'
-        this.elements.viewer.style.removeProperty('image-rendering')
-    },
-
-    close() {
-        if (location.hash == '#view-img') {
-            history.back()
-            return
-        }
-
-        this.elements.container.style.display = 'none';
-        this.elements.viewport.setAttribute('content', this.viewportContent);
-    },
-
-    isOpen() {
-        return this.elements.container.style.display != 'none' ? true : false
-    },
-
-    normalizePosition() {
-        const displayWidth = this.elements.viewer.width * this.imgViewerScale
-        const displayHeight = this.elements.viewer.height * this.imgViewerScale
-
-        if (displayWidth && displayHeight) { // make sure non-zero
-            const top = (window.innerHeight - displayHeight) / 2 + this.imgViewerOffsetY
-            const bottom = (window.innerHeight - displayHeight) / 2 - this.imgViewerOffsetY
-            const left = (window.innerWidth - displayWidth) / 2 + this.imgViewerOffsetX
-            const right = (window.innerWidth - displayWidth) / 2 - this.imgViewerOffsetX
-            // console.log(top, left, bottom, right)
-
-            if (displayHeight <= window.innerHeight) this.imgViewerOffsetY = 0
-            else {
-                if (top > 0) this.imgViewerOffsetY = 0 - (window.innerHeight - displayHeight) / 2
-                else if (bottom > 0) this.imgViewerOffsetY = (window.innerHeight - displayHeight) / 2
-            }
-
-            if (displayWidth <= window.innerWidth) this.imgViewerOffsetX = 0
-            else {
-                if (left > 0) this.imgViewerOffsetX = 0 - (window.innerWidth - displayWidth) / 2
-                else if (right > 0) this.imgViewerOffsetX = (window.innerWidth - displayWidth) / 2
-            }
-        }
-
-        this.applyPosition()
-    },
-
-    applyPosition() {
-        this.elements.viewer.style.transform = `translateX(${this.imgViewerOffsetX}px) translateY(${this.imgViewerOffsetY}px) scale(${this.imgViewerScale})`
-    },
-
-    getPixelRatio() {
-        try {
-            const actualWidth = this.elements.viewer.width * this.imgViewerScale //* window.devicePixelRatio
-            const naturalWidth = this.elements.viewer.naturalWidth
-            // check for zeros
-            return (actualWidth && naturalWidth) ? (actualWidth / naturalWidth) : 1
-        } catch (error) {
-            console.log('Failed to get image display pixel ratio')
-            return 1
-        }
-    },
-
-    init() {
-        this.viewportContent = this.elements.viewport.getAttribute('content')
-
-        this.elements.container.onmousedown = e => {
-            if (e.button == 0) {
-                this.imgViewerMouseMoved = false
-                this.elements.viewer.style.transition = 'none'
-            }
-        }
-        this.elements.container.onmouseup = e => {
-            if (e.button == 0) {
-                if (!this.imgViewerMouseMoved) {
-                    this.close()
-                }
-                this.elements.viewer.style.removeProperty('transition')
-                this.normalizePosition()
-            }
-        }
-        this.elements.container.onmouseleave = e => {
-            this.elements.viewer.style.removeProperty('transition')
-            this.normalizePosition()
-        }
-        this.elements.container.onmousemove = e => {
-            if (e.buttons == 1) {
-                this.elements.viewer.style.transition = 'none'
-
-                this.imgViewerOffsetX += e.movementX
-                this.imgViewerOffsetY += e.movementY
-                if (e.movementX != 0 || e.movementY != 0) {
-                    this.imgViewerMouseMoved = true
-                }
-                //console.log(this.imgViewerOffsetX, this.imgViewerOffsetY)
-                this.applyPosition()
-            }
-        }
-        this.elements.container.onwheel = e => {
-            e.preventDefault()
-            let scaleMultiplier = 1
-            if (e.deltaY < 0) {
-                scaleMultiplier = (1000 - e.deltaY) / 1000
-                //this.imgViewerScale *= 11 / 10
-            } else {
-                scaleMultiplier = 1000 / (1000 + e.deltaY)
-                //this.imgViewerScale *= 10 / 11
-            }
-            this.imgViewerScale *= scaleMultiplier
-
-            var mouseOffsetX = e.clientX - (window.innerWidth / 2)
-            var mouseOffsetY = e.clientY - (window.innerHeight / 2)
-            if (debug) console.log(mouseOffsetX, mouseOffsetY)
-
-            this.imgViewerOffsetX += (scaleMultiplier - 1) * (this.imgViewerOffsetX - mouseOffsetX)
-            this.imgViewerOffsetY += (scaleMultiplier - 1) * (this.imgViewerOffsetY - mouseOffsetY)
-
-            if (this.imgViewerScale < 1) {
-                this.imgViewerScale = 1
-            }
-            if (debug) console.log(this.imgViewerScale)
-
-            this.normalizePosition()
-
-            if (this.getPixelRatio() > 2) {
-                this.elements.viewer.style.imageRendering = 'pixelated'
-            } else {
-                this.elements.viewer.style.removeProperty('image-rendering')
-            }
-        }
-    },
-}
-
 export var viewImg = ImgViewer.view.bind(ImgViewer)
 export var closeImgViewer = ImgViewer.close.bind(ImgViewer)
-try {
-    ImgViewer.init()
-} catch (error) {
-    logErr(error, 'Failed to init image viewer')
-}
 
 
 // music player
