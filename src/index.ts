@@ -828,8 +828,9 @@ export const Popup = {
                     break
 
                 case 'displaySettings':
-                    let mode = getConfig('graphicsMode')
-                    document.getElementById('graphicsMode').value = mode ? mode : 'high'
+                    // moved to vue 3
+                    // let mode = getConfig('graphicsMode')
+                    // document.getElementById('graphicsMode').value = mode ? mode : 'high'
                     document.getElementById('pageZoomController').value = Math.round(Settings.pageScale * 100)
                     break
 

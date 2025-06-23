@@ -1,3 +1,5 @@
+import { createApp } from 'vue'
+
 import FloatMsgs from './FloatMsgs'
 import ImgViewer from './ImgViewer'
 
@@ -8,11 +10,15 @@ import SetAvatarPopup from './Popups/SetAvatarPopup.vue'
 import SetPasswordPopup from './Popups/SetPasswordPopup.vue'
 import UserHome from './Popups/UserHome.vue'
 
+import GraphicsMode from './GraphicsMode.vue'
+
 PopupsApp.component('loginPopup', LoginPopup)
 PopupsApp.component('promptInputPopup', InputPopup)
 PopupsApp.component('setAvatarPopup', SetAvatarPopup)
 PopupsApp.component('setPasswordPopup', SetPasswordPopup)
 PopupsApp.component('userHome', UserHome)
+
+createApp(GraphicsMode).mount('#graphicsMode')
 
 export default {
     FloatMsgs,
