@@ -1158,6 +1158,17 @@ body:not(.fullscreen) #lowerPanel.animating:not(.lowerPanelUp) {
     line-height: 55vh;
 }
 
+.pullRefresh {
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    animation: fadein 0.2s;
+}
+
+#comments .pullRefresh {
+    display: none;
+}
+
 .loadingCircle {
     display: inline-block;
     margin: 0.5rem;
@@ -2819,6 +2830,7 @@ body.fullscreen {
 .fullscreen #comments {
     flex-wrap: wrap;
     justify-content: center;
+    align-content: flex-start;
     white-space: normal;
     text-align: center;
     width: 100%;
@@ -2853,6 +2865,11 @@ body.fullscreen {
     line-height: normal !important;
     margin: 0;
     text-align: center;
+}
+
+.fullscreen #comments .pullRefresh {
+    display: flex;
+    width: 100%;
 }
 
 .fullscreen .commentSeekArrow {

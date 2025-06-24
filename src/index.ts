@@ -2,6 +2,7 @@
 import FloatMsgs from "./components/FloatMsgs"
 import Popups from "./components/Popups"
 import ImgViewer from "./components/ImgViewer"
+import { addPullDownRefresh } from "./components/controls/PullDownRefresh"
 
 export const baseUrl = window.baseUrl
     ? (window.baseUrl.endsWith('/') ? window.baseUrl : (window.baseUrl + '/'))
@@ -184,10 +185,7 @@ export function loadComments(queryObj = {}, keepPosEl = undefined, noKami = fals
             if (isCommentsNewer) {
                 console.log('comments are up to date')
                 document.getElementById('loadingIndicatorBefore').style.display = 'none'
-                commentsUpToDate = true
-                window.clearCommentsUpToDateTimeout = setTimeout(() => {
-                    commentsUpToDate = false
-                }, 10000);
+                Comments.upToDate = true
                 return
             }
             if (isCommentsOlder && queryObj.db == 'kami') {
@@ -503,8 +501,7 @@ export function clearComments(clearTop) {
     }
 
     Comments.scrollPaused = false
-    commentsUpToDate = false
-    clearTimeout(window.clearCommentsUpToDateTimeout)
+    Comments.upToDate = false
 
     document.body.classList.remove('touchKeyboardShowing')
 }
@@ -1910,7 +1907,6 @@ export function isEmail(s) {
 
 // common vars
 //
-export var commentsUpToDate = false
 export var maxTimelineTime = 0
 
 export var userCommentUser = ''
@@ -2038,6 +2034,18 @@ export const Comments = {
     seekDone: true,
     scrollPaused: false,
 
+    lastTimeUpToDate: null as number | null,
+    get upToDate() {
+        return this.lastTimeUpToDate != null ? (new Date().getTime() - this.lastTimeUpToDate < 10000) : false
+    },
+    set upToDate(value: boolean) {
+        if (value) {
+            this.lastTimeUpToDate = new Date()
+        } else {
+            this.lastTimeUpToDate = null
+        }
+    },
+
     hasItem() {
         return Boolean(document.querySelector('.commentItem'))
     },
@@ -2100,7 +2108,7 @@ export const Comments = {
         }
         //console.log(toStart, toEnd)
 
-        if (toStart <= threshold && commentsUpToDate == false) {
+        if (toStart <= threshold && Comments.upToDate == false) {
             loadNewerComments()
             this.pauseScroll(500)
         }
@@ -2165,6 +2173,15 @@ export const Comments = {
 
     init() {
         loadComments()
+
+        addPullDownRefresh(
+            this.elements.container,
+            loadNewerComments,
+            () =>
+                isFullscreen &&
+                document.getElementById('loadingIndicatorBefore')?.style.display == 'none' &&
+                document.getElementById('newCommentBox') == null
+        )
 
         this.elements.container.onwheel = e => {
             if (!isFullscreen) {
