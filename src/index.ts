@@ -2185,9 +2185,22 @@ export const Comments = {
 
         this.elements.container.onwheel = e => {
             if (!isFullscreen) {
+                // console.log(e.deltaMode, e.deltaX, e.deltaY)
+
+                // prevent back/forward when scrolling horizontally
+                if ((e.deltaX < 0 && this.elements.container.scrollLeft == 0) ||
+                    (e.deltaX > 0 && this.elements.container.scrollWidth - this.elements.container.clientWidth - this.elements.container.scrollLeft < 1)) {
+                    e.preventDefault()
+                    return
+                }
+
                 let scroll = this.GetTargetCommentScrollability(e.target)
-                if (!scroll.inputable && !scroll.scrollable)
-                    e.deltaY > 0 ? this.seek(1) : this.seek(-1)
+                if (!scroll.inputable && !scroll.scrollable
+                    // only seek when deltaX = 0 and deltaY >= 10 (usually mouse wheel scrolling vertically)
+                    // revert to natural scrolling when scrolling horizontally with trackpad or by tilting mouse wheel
+                    && !e.deltaX && Math.abs(e.deltaY) >= 10) {
+                    this.seek(e.deltaY > 0 ? 1 : -1)
+                }
             }
         }
         this.elements.container.onscroll = () => this.scroll()

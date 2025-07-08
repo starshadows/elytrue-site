@@ -157,13 +157,20 @@ export default {
 
         mouseWheelHandler(e: WheelEvent) {
             e.preventDefault()
+            // console.log(e.deltaMode, e.deltaX, e.deltaY, e.ctrlKey)
+
             let scaleMultiplier = 1
-            if (e.deltaY < 0) {
-                scaleMultiplier = (1000 - e.deltaY) / 1000
-                //this.imgViewerScale *= 11 / 10
-            } else {
-                scaleMultiplier = 1000 / (1000 + e.deltaY)
-                //this.imgViewerScale *= 10 / 11
+            if (Math.abs(e.deltaY) < 10 && e.ctrlKey) { // likely zooming with trackpad
+                scaleMultiplier = (100 - e.deltaY) / 100
+            }
+            else { // otherwise treat it as mouse wheel
+                if (e.deltaY < 0) {
+                    scaleMultiplier = (1000 - e.deltaY) / 1000
+                    //this.imgViewerScale *= 11 / 10
+                } else {
+                    scaleMultiplier = 1000 / (1000 + e.deltaY)
+                    //this.imgViewerScale *= 10 / 11
+                }
             }
             this.imgViewerScale *= scaleMultiplier
 
