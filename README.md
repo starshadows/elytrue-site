@@ -17,13 +17,14 @@
 - Mini-games
 - ... And a fan game translated to Chinese ([梦之庭的追影 汉化版](https://github.com/haojiezhe12345/YumeniwaTranslate))
 
-## About source code
+## Source code
 
 No media or images are included in this repository.  
-The site is deployed to branch [`public`](https://github.com/haojiezhe12345/haojiezhe12345.github.io/tree/public),
-where resources are loaded from https://haojiezhe12345.top:82/madohomu/
+The deployed site loads resources from https://haojiezhe12345.top:82/madohomu/
 
 **Migrating to Vue 3. Lots of components are still in Vanilla JS**
+
+Yumeniwa (iframe): [/public/yumeniwa](public/yumeniwa)
 
 ## Building
 
@@ -61,7 +62,7 @@ python transform_dist_api_endpoint.py <base_url>
 If you don't provide `<base_url>`, it defaults to `https://haojiezhe12345.top:82/madohomu/`
 
 
-## Links
+## Related links
 
 Backend: [MadoHomuAPI](https://github.com/haojiezhe12345/MadoHomuAPI)
 
