@@ -11,7 +11,14 @@
     <meta name="theme-color" content="#ffaacc">
 
     <link rel="stylesheet" href="index.css" type="text/css">
-    <style id="langCSS"></style>
+    <style id="langCSS">
+        .ui {
+            display: none !important;
+        }
+        .ui.zh {
+            display: inline !important;
+        }
+    </style>
     <style id="wallpaperEngineCSS"></style>
 
     <link rel="manifest" href="index.manifest.json">
@@ -416,9 +423,9 @@
                             <span>🌎 Language (语言)</span>
                             <i></i>
                             <ul>
-                                <li onclick="changeLang(); setConfig('lang', '')"><span class="ui zh">(自动)</span><span class="ui en">(Auto)</span></li>
-                                <li onclick="changeLang('en'); setConfig('lang', 'en')"><span>English</span></li>
-                                <li onclick="changeLang('zh'); setConfig('lang', 'zh')"><span>中文</span></li>
+                                <li onclick="Settings.lang = ''"><span class="ui zh">(自动)</span><span class="ui en">(Auto)</span></li>
+                                <li onclick="Settings.lang = 'en'"><span>English</span></li>
+                                <li onclick="Settings.lang = 'zh'"><span>中文</span></li>
                             </ul>
                         </li>
                         <li>

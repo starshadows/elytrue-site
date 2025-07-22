@@ -1,168 +1,16 @@
 // @ts-nocheck
+import XHR, { baseUrl } from "./net/xhr"
+export { baseUrl, XHR }
+
+import Settings from "./settings"
+import { getCookie, setCookie, getConfig, setConfig } from "./settings/config"
+import { changeLang } from "./settings/lang"
+export { Settings, getCookie, setCookie, getConfig, setConfig, changeLang }
+
 import FloatMsgs from "./components/FloatMsgs"
 import Popups from "./components/Popups"
 import ImgViewer from "./components/ImgViewer"
 import { addPullDownRefresh } from "./components/controls/PullDownRefresh"
-
-export const baseUrl = window.baseUrl
-    ? (window.baseUrl.endsWith('/') ? window.baseUrl : (window.baseUrl + '/'))
-    : ''
-console.log(`Base URL: "${baseUrl}"`)
-
-
-// requests
-//
-export const XHR = {
-    baseUrl: `${baseUrl}api/`,
-    token: '',
-
-    /**
-     * @typedef {Object} XHRSettings
-     * @property {boolean} includeToken 
-     * 
-     * @param {XHRSettings} settings
-     */
-    send(method, url, payload, settings) {
-        settings = (() => {
-            /** @type {XHRSettings} */
-            let s = {
-                includeToken: true
-            }
-            if (settings) {
-                Object.assign(s, settings)
-            }
-            return s
-        })()
-
-        return new Promise((resolve, reject) => {
-            const xhr = new XMLHttpRequest()
-            xhr.open(method, this.baseUrl + url)
-
-            if (this.token && settings.includeToken) xhr.setRequestHeader('token', this.token)
-
-            if (typeof payload == typeof {}) {
-                xhr.setRequestHeader("Content-Type", "application/json")
-                xhr.send(JSON.stringify(payload))
-            } else {
-                xhr.send(payload)
-            }
-
-            xhr.onload = () => {
-                if (xhr.status < 400) {
-                    try {
-                        let r = JSON.parse(xhr.responseText)
-                        r.code && r.code != 1 && FloatMsgs.show({ type: 'warn', msg: `${r.message} (${r.code})` })
-                        resolve(r)
-                    } catch (error) {
-                        resolve(xhr.responseText)
-                    }
-                } else {
-                    if (xhr.status == 401) this.token = ''
-                    FloatMsgs.show({ type: 'error', msg: `${xhr.responseText} (${xhr.status})` })
-                    try {
-                        reject(JSON.parse(xhr.responseText))
-                    } catch (error) {
-                        reject(xhr)
-                    }
-                }
-            }
-
-            xhr.onerror = () => {
-                FloatMsgs.show({ type: 'error', msg: 'Network error' })
-                reject(xhr)
-            }
-            xhr.ontimeout = () => {
-                FloatMsgs.show({ type: 'error', msg: 'Request timed out' })
-                reject(xhr)
-            }
-        });
-    },
-
-    /** @param {XHRSettings} settings */
-    get(url, payload, settings) {
-        return this.send('GET', url + obj2queryString(payload), undefined, settings)
-    },
-
-    /** @param {XHRSettings} settings */
-    post(url, payload, settings) {
-        return this.send('POST', url, payload, settings)
-    },
-
-    /** @param {XHRSettings} settings */
-    put(url, payload, settings) {
-        return this.send('PUT', url, payload, settings)
-    },
-
-    /** @param {XHRSettings} settings */
-    delete(url, payload, settings) {
-        return this.send('DELETE', url, payload, settings)
-    },
-}
-
-
-// settings
-//
-export const Settings = {
-    elements: {
-        showKami: document.getElementById('showKami'),
-    },
-
-    init() {
-        this.load()
-
-        this.elements.showKami.onchange = e => this.showKami = e.target.checked
-    },
-
-    load() {
-        if (getConfig('showKami') == 'true') this.showKami = true
-    },
-
-    get pageScale() {
-        let x = parseFloat(document.documentElement.style.fontSize) / 16
-        return x ? x : 1
-    },
-    set pageScale(scale) {
-        document.documentElement.style.fontSize = `${16 * scale}px`
-    },
-
-    get showKami() {
-        return this.elements.showKami.checked
-    },
-    set showKami(value) {
-        this.elements.showKami.checked = value
-        setConfig('showKami', value)
-        setTimeout(() => {
-            if (Comments.hasItem()) {
-                clearComments()
-                loadComments()
-            }
-        }, 0);
-    },
-
-    get showHidden() {
-        let el = document.getElementById('showHiddenCSS')
-        return el ? Boolean(el.innerHTML) : false
-    },
-
-    set showHidden(value) {
-        let el = document.getElementById('showHiddenCSS')
-        if (!el) {
-            document.head.appendChild(html2elmnt('<style id="showHiddenCSS"></style>'))
-            el = document.getElementById('showHiddenCSS')
-        }
-        el.innerHTML = value ? `
-            #comments .commentBox.hidden {
-                display: block;
-            }
-        ` : ''
-    },
-}
-
-try {
-    Settings.init()
-} catch (error) {
-    logErr(error, 'failed to init settings')
-}
 
 
 export function loadComments(queryObj = {}, keepPosEl = undefined, noKami = false) {
@@ -491,7 +339,7 @@ export function initCommentReplyQuote(el, id, params) {
     })
 }
 
-export function clearComments(clearTop) {
+export function clearComments(clearTop?: number) {
     //commentDiv.removeEventListener("scroll", commentScroll)
     if (clearTop == 1) {
         commentDiv.innerHTML = loadingIndicatorBefore + loadingIndicator
@@ -1479,43 +1327,6 @@ export function playWalpurgis(time_ms) {
     }, time_ms);
 }
 
-export function changeLang(targetLang) {
-    if (!targetLang) {
-        if (navigator.language.slice(0, 2) == 'zh' || navigator.language.slice(0, 3) == 'yue') {
-            targetLang = 'zh'
-        } else {
-            targetLang = 'en'
-        }
-    }
-    if (!['zh', 'en'].includes(targetLang)) {
-        console.log(`invalid lang "${targetLang}"`)
-        return
-    }
-    document.getElementById('langCSS').innerHTML = /*css*/`
-    .ui {
-        display: none !important;
-    }
-    .ui.${targetLang} {
-        display: inline !important;
-    }
-    `
-    console.log(`changed lang to ${targetLang}`)
-}
-
-export function changeGraphicsMode(mode) {
-    if (mode == 'high') {
-        document.body.classList.remove('lowend')
-        document.body.classList.remove('midend')
-    } else if (mode == 'mid') {
-        document.body.classList.remove('lowend')
-        document.body.classList.add('midend')
-    } else if (mode == 'low') {
-        document.body.classList.add('lowend')
-        document.body.classList.remove('midend')
-    } else return
-    setConfig('graphicsMode', mode)
-}
-
 export function getFullscreenHorizonalCommentCount() {
     if (!isFullscreen) return null
     var latestCommentEl = document.getElementById('loadingIndicatorBefore').nextElementSibling
@@ -1690,48 +1501,6 @@ export function getRandomIntInclusive(min, max) {
     min = Math.ceil(min);
     max = Math.floor(max);
     return Math.floor(Math.random() * (max - min + 1) + min); // The maximum is inclusive and the minimum is inclusive
-}
-
-export function setCookie(cname, cvalue, exdays = 999) {
-    const d = new Date();
-    d.setTime(d.getTime() + (exdays * 24 * 60 * 60 * 1000));
-    let expires = "expires=" + d.toUTCString();
-    document.cookie = cname + "=" + cvalue + ";" + expires + ";path=/";
-}
-
-export function getCookie(cname) {
-    let name = cname + "=";
-    let ca = document.cookie.split(';');
-    for (let i = 0; i < ca.length; i++) {
-        let c = ca[i];
-        while (c.charAt(0) == ' ') {
-            c = c.substring(1);
-        }
-        if (c.indexOf(name) == 0) {
-            return c.substring(name.length, c.length);
-        }
-    }
-    return "";
-}
-
-export function getConfig(key) {
-    if (localStorage.getItem(key) == null) {
-        if (getCookie(key) != '') {
-            setConfig(key, getCookie(key))
-            document.cookie = `${key}=;expires=${new Date(0).toUTCString()};path=/`;
-        } else {
-            return ''
-        }
-    }
-    return localStorage.getItem(key)
-}
-
-export function setConfig(key, value) {
-    if (value === '') {
-        localStorage.removeItem(key)
-    } else {
-        localStorage.setItem(key, value)
-    }
 }
 
 export function html2elmnt(html) {
@@ -1939,8 +1708,6 @@ export var isFullscreen = false
 // set title link href
 document.querySelector('#mainTitle>a').href = location.origin + location.pathname
 
-// set language
-changeLang(getConfig('lang'))
 
 export var debug = false
 if (location.hash == '#debug') {
@@ -1964,10 +1731,6 @@ if (location.hash.slice(0, 7) == '#popup-') {
 
 // cookies toggles
 //
-if (getConfig('graphicsMode') != '') {
-    changeGraphicsMode(getConfig('graphicsMode'))
-}
-
 if (getConfig('hideTopComment') == 'true') {
     hideTopCommentElmnt.checked = true
     document.getElementById('topComment').style.display = 'none'

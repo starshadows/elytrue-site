@@ -7,8 +7,7 @@
 </template>
 
 <script lang="ts">
-import { setOneTimeCSS } from '../..'
-import { logErr } from '../..'
+import { setOneTimeCSS, logErr } from '../..'
 
 export default {
     mounted() {
