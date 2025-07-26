@@ -1,5 +1,5 @@
 <template>
-    <div v-show="showing" :class="{ 'img-viewer-overlay': true, 'closing': pendingClose }" ref="overlay" @mousedown="mouseDownHandler" @mouseup="mouseUpHandler" @mousemove="mouseMoveHandler" @mouseleave="mouseLeaveHandler" @wheel="mouseWheelHandler">
+    <div v-show="showing" :class="{ 'img-viewer-overlay': true, 'closing': pendingClose }" ref="overlay" @mousedown.prevent="mouseDownHandler" @mouseup="mouseUpHandler" @mousemove.prevent="mouseMoveHandler" @mouseleave="mouseLeaveHandler" @wheel="mouseWheelHandler" @touchstart="touchStartHandler" @touchmove.prevent="touchMoveHandler" @touchend="touchEndHandler">
         <div class="img-viewer-wrapper" ref="wrapper">
             <img ref="viewer" draggable="false" style="transform: translateX(0px) translateY(0px) scale(1)">
         </div>
@@ -8,6 +8,7 @@
 
 <script lang="ts">
 import { setOneTimeCSS, logErr } from '../..'
+import { calcNewOffset, createPinchZoomController, createPointFromTouch, type Point } from './zoom'
 
 export default {
     mounted() {
@@ -15,7 +16,6 @@ export default {
             this.elements.overlay = this.$refs.overlay as HTMLDivElement
             this.elements.wrapper = this.$refs.wrapper as HTMLDivElement
             this.elements.viewer = this.$refs.viewer as HTMLImageElement
-            this.viewportContent = this.elements.viewport.content
         } catch (error) {
             logErr(error, 'Failed to init image viewer')
         }
@@ -26,14 +26,15 @@ export default {
                 overlay: {} as HTMLDivElement,
                 wrapper: {} as HTMLDivElement,
                 viewer: {} as HTMLImageElement,
-                viewport: document.querySelector('meta[name=viewport]') as HTMLMetaElement,
             },
 
-            viewportContent: '',
             imgViewerOffsetX: 0,
             imgViewerOffsetY: 0,
             imgViewerScale: 1,
             imgViewerMouseMoved: false,
+
+            lastTouchPoint: null as Point | null,
+            pinchZoomController: null as ReturnType<typeof createPinchZoomController> | null,
 
             showing: false,
             pendingClose: false,
@@ -44,7 +45,6 @@ export default {
             this.elements.viewer.src = src
             this.showing = true
             this.pendingClose = false
-            this.elements.viewport.setAttribute('content', this.viewportContent.replace(', maximum-scale=1.0', ''))
             window.location.hash = 'view-img'
 
             this.imgViewerOffsetX = 0
@@ -68,7 +68,6 @@ export default {
                     this.showing = false
                 }
             }, 200);
-            this.elements.viewport.setAttribute('content', this.viewportContent);
         },
 
         isOpen() {
@@ -99,29 +98,53 @@ export default {
                 }
             }
 
+            if (this.imgViewerScale < 1) {
+                this.imgViewerScale = 1
+            }
+
             this.applyPosition()
         },
 
-        applyPosition() {
-            this.elements.viewer.style.transform = `translateX(${this.imgViewerOffsetX}px) translateY(${this.imgViewerOffsetY}px) scale(${this.imgViewerScale})`
+        applyPosition(x?: number, y?: number, scale?: number) {
+            scale ??= this.imgViewerScale
+            this.elements.viewer.style.transform = `translateX(${x ?? this.imgViewerOffsetX}px) translateY(${y ?? this.imgViewerOffsetY}px) scale(${scale})`
+            this.updatePixelInterpolation(scale)
         },
 
-        getPixelRatio() {
-            try {
-                const actualWidth = this.elements.viewer.width * this.imgViewerScale //* window.devicePixelRatio
-                const naturalWidth = this.elements.viewer.naturalWidth
-                // check for zeros
-                return (actualWidth && naturalWidth) ? (actualWidth / naturalWidth) : 1
-            } catch (error) {
-                console.log('Failed to get image display pixel ratio')
-                return 1
+        disableTransition() {
+            this.elements.viewer.style.transition = 'none'
+        },
+
+        enableTransition() {
+            this.elements.viewer.style.removeProperty('transition')
+        },
+
+        updatePixelInterpolation(scale?: number) {
+            const pixelRatio = (() => {
+                try {
+                    const actualWidth = this.elements.viewer.width * (scale ?? this.imgViewerScale) //* window.devicePixelRatio
+                    const naturalWidth = this.elements.viewer.naturalWidth
+                    // check for zeros
+                    return (actualWidth && naturalWidth) ? (actualWidth / naturalWidth) : 1
+                } catch (error) {
+                    console.log('Failed to get image display pixel ratio')
+                    return 1
+                }
+            })()
+
+            if (pixelRatio > 2) {
+                this.elements.viewer.style.imageRendering = 'pixelated'
+            } else {
+                this.elements.viewer.style.removeProperty('image-rendering')
             }
         },
 
+        // mouse handlers
+        //
         mouseDownHandler(e: MouseEvent) {
             if (e.button == 0) {
                 this.imgViewerMouseMoved = false
-                this.elements.viewer.style.transition = 'none'
+                this.disableTransition()
             }
         },
 
@@ -130,14 +153,14 @@ export default {
                 if (!this.imgViewerMouseMoved) {
                     this.close()
                 }
-                this.elements.viewer.style.removeProperty('transition')
+                this.enableTransition()
                 this.normalizePosition()
             }
         },
 
         mouseMoveHandler(e: MouseEvent) {
             if (e.buttons == 1) {
-                this.elements.viewer.style.transition = 'none'
+                this.disableTransition()
 
                 this.imgViewerOffsetX += e.movementX
                 this.imgViewerOffsetY += e.movementY
@@ -150,7 +173,7 @@ export default {
         },
 
         mouseLeaveHandler() {
-            this.elements.viewer.style.removeProperty('transition')
+            this.enableTransition()
             this.normalizePosition()
         },
 
@@ -180,19 +203,75 @@ export default {
             this.imgViewerOffsetX += (scaleMultiplier - 1) * (this.imgViewerOffsetX - mouseOffsetX)
             this.imgViewerOffsetY += (scaleMultiplier - 1) * (this.imgViewerOffsetY - mouseOffsetY)
 
-            if (this.imgViewerScale < 1) {
-                this.imgViewerScale = 1
-            }
-            // console.log(this.imgViewerScale)
-
             this.normalizePosition()
+        },
 
-            if (this.getPixelRatio() > 2) {
-                this.elements.viewer.style.imageRendering = 'pixelated'
-            } else {
-                this.elements.viewer.style.removeProperty('image-rendering')
+        // touch handlers
+        //
+        touchStartHandler(e: TouchEvent) {
+            this.disableTransition()
+            if (e.touches.length == 1) {
+                this.lastTouchPoint = createPointFromTouch(e.touches[0])
             }
-        }
+            else if (e.touches.length == 2) {
+                this.pinchZoomController = createPinchZoomController(e.touches[0], e.touches[1])
+            }
+        },
+
+        touchMoveHandler(e: TouchEvent) {
+            this.disableTransition()
+            if (e.touches.length == 1) {
+                if (!this.lastTouchPoint) return
+                const newPoint = createPointFromTouch(e.touches[0])
+
+                const vector = newPoint.subtract(this.lastTouchPoint)
+                this.imgViewerOffsetX += vector.x
+                this.imgViewerOffsetY += vector.y
+                this.applyPosition()
+
+                this.lastTouchPoint = newPoint
+            }
+            else if (e.touches.length == 2) {
+                if (!this.pinchZoomController) return
+                this.pinchZoomController.calcZoom(e.touches[0], e.touches[1])
+
+                let { x, y } = calcNewOffset(this.imgViewerOffsetX, this.imgViewerOffsetY, this.pinchZoomController.scale, this.pinchZoomController.startMidPoint)
+                x += this.pinchZoomController.x
+                y += this.pinchZoomController.y
+
+                const scale = this.imgViewerScale * this.pinchZoomController.scale
+
+                this.applyPosition(x, y, scale)
+            }
+            // 3+ fingers not supported yet
+        },
+
+        touchEndHandler(e: TouchEvent) {
+            if (e.touches.length == 0) {
+                this.enableTransition()
+                this.normalizePosition()
+            }
+            else if (e.touches.length == 1 || e.touches.length == 2) {
+                this.lastTouchPoint = createPointFromTouch(e.touches[0])
+
+                if (!this.pinchZoomController) return
+
+                let { x, y } = calcNewOffset(this.imgViewerOffsetX, this.imgViewerOffsetY, this.pinchZoomController.scale, this.pinchZoomController.startMidPoint)
+                x += this.pinchZoomController.x
+                y += this.pinchZoomController.y
+
+                this.imgViewerOffsetX = x
+                this.imgViewerOffsetY = y
+                this.imgViewerScale *= this.pinchZoomController.scale
+
+                this.applyPosition()
+
+                // ensure smooth transition from 3+ fingers to 2-finger
+                if (e.touches.length == 2) {
+                    this.pinchZoomController = createPinchZoomController(e.touches[0], e.touches[1])
+                }
+            }
+        },
     }
 }
 </script>
