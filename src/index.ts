@@ -12,6 +12,8 @@ import Popups from "./components/Popups"
 import ImgViewer from "./components/ImgViewer"
 import { addPullDownRefresh } from "./components/controls/PullDownRefresh"
 
+import { createApp, watch } from "vue"
+import ProgressSlider from "./components/controls/ProgressSlider.vue"
 
 export function loadComments(queryObj = {}, keepPosEl = undefined, noKami = false) {
     //if (from == null && time == null) setTodayCommentCount()
@@ -2171,7 +2173,7 @@ export const MusicPlayer = {
         playBtn: document.getElementById('musicPlayBtn'),
         playingIndicators: document.getElementsByClassName('musicPlayingIndicator'),
         titles: document.getElementsByClassName('currentSong'),
-        progress: document.getElementById('nowPlayingProgress').firstElementChild,
+        progressSlider: undefined as InstanceType<typeof ProgressSlider>,
         list: document.getElementById('songList'),
         shuffleBtn: document.getElementById('musicShuffleBtn'),
     },
@@ -2292,6 +2294,7 @@ export const MusicPlayer = {
             this.play()
         }
 
+        // UI handlers
         this.elements.playBtn.onclick = () => {
             if (this.elements.player.paused) {
                 this.play()
@@ -2304,11 +2307,6 @@ export const MusicPlayer = {
                 this.play(Array.from(this.elements.list.children).indexOf(e.target))
             }
         }
-        this.elements.progress.parentNode.onclick = e => {
-            let percent = e.offsetX / this.elements.progress.parentNode.offsetWidth
-            this.elements.player.currentTime = this.elements.player.duration * percent
-            this.elements.progress.style.width = `${percent * 100}%`
-        }
         this.elements.shuffleBtn.onchange = () => {
             this.playOrder = []
         }
@@ -2316,6 +2314,18 @@ export const MusicPlayer = {
             this.elements.list.querySelector('.playing').scrollIntoView({ block: "center" })
         }
 
+        // progress indicator
+        this.elements.progressSlider = createApp(ProgressSlider, {
+            onChange: progress => {
+                // console.log('manual prgress update:', progress)
+                this.elements.player.currentTime = this.elements.player.duration * progress
+            }
+        } satisfies InstanceType<typeof ProgressSlider>).mount('#nowPlayingProgress')
+        setInterval(() => {
+            this.elements.progressSlider.progress = this.elements.player.currentTime / this.elements.player.duration
+        }, 500);
+
+        // player events
         this.elements.player.onplay = () => {
             for (let i = 0; i < this.elements.playingIndicators.length; i++) {
                 this.elements.playingIndicators[i].classList.add('playing');
@@ -2332,10 +2342,6 @@ export const MusicPlayer = {
         document.addEventListener('click', () => {
             if (!this.userPaused && this.elements.player.paused) this.play()
         })
-
-        setInterval(() => {
-            this.elements.progress.style.width = `${this.elements.player.currentTime / this.elements.player.duration * 100}%`
-        }, 500);
 
         if (navigator.mediaSession) {
             navigator.mediaSession.setActionHandler('play', () => this.play())

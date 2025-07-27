@@ -5,8 +5,6 @@
 </template>
 
 <script setup lang="ts">
-import { defineModel, defineProps } from 'vue'
-
 const props = defineProps<{
     options: Record<string, unknown>
 }>()
