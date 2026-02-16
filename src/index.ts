@@ -1079,7 +1079,7 @@ export const Theme = {
         if (new Date(`Dec 25 ${y} 00:00`) < d && d < new Date(`Dec 26 ${y} 06:00`)) {
             return 'christmas'
         }
-        if (new Date(`Jan 29 2025 00:00`) < d && d < new Date(`Feb 3 2025 06:00`)) {
+        if (new Date(`Feb 17 2026 00:00`) < d && d < new Date(`Feb 20 2026 06:00`)) {
             return 'lunarNewYear'
         }
         if (new Date(`Aug 10 2024 00:00`) < d && d < new Date(`Aug 11 2024 06:00`)) {
