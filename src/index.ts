@@ -1,6 +1,7 @@
 // @ts-nocheck
 import XHR, { baseUrl } from "./net/xhr"
-export { baseUrl, XHR }
+import { bgBaseUrl } from "./net"
+export { baseUrl, bgBaseUrl, XHR }
 
 import Settings from "./settings"
 import { getCookie, setCookie, getConfig, setConfig } from "./settings/config"
@@ -217,7 +218,7 @@ export function insertComment(comment, isKami = false) {
 
     let commentEl = html2elmnt(/*html*/`
         <div class="commentBox commentItem${comment.hidden ? ' hidden' : ''}" ${isKami == true ? `data-kamiid="#${comment.id}"` : `id="#${comment.id}"`} data-timestamp="${comment.time}">
-            <img class="bg" loading="lazy" src="${baseUrl}bg/msgbg${randBG}.jpg" ${(comment.hidden == 1) ? 'style="display: none;"' : ''}>
+            <img class="bg" loading="lazy" src="${bgBaseUrl}msgbg${randBG}.jpg" ${(comment.hidden == 1) ? 'style="display: none;"' : ''}>
             <div class="bgcover"></div>
             <img class="avatar" loading="lazy" src="${isKami == true ? `https://kami.im/getavatar.php?uid=${comment.uid}` : User.convertAvatarPath(comment.avatar)}">
             <div class="sender" onclick="this.previousElementSibling.click()">
@@ -647,7 +648,7 @@ export const Popup = {
                         try {
                             for (let j = 0; j < document.getElementsByClassName(`${themeName}bg`).length; j++) {
                                 document.getElementById('getImgPopup').firstElementChild.lastElementChild.appendChild(html2elmnt(/*html*/`
-                                    <img loading="lazy" src="${baseUrl}bg/${themeName != 'default' ? themeName : ''}/mainbg${j + 1}.jpg" style="min-height: 40vh;" onload="this.style.removeProperty('min-height')">
+                                    <img loading="lazy" src="${bgBaseUrl}${themeName != 'default' ? themeName : ''}/mainbg${j + 1}.jpg" style="min-height: 40vh;" onload="this.style.removeProperty('min-height')">
                                     <p>
                                         ${document.getElementsByClassName(`${themeName}bg`)[j].children[1].innerHTML}
                                         ${document.getElementsByClassName(`${themeName}bg`)[j].dataset.pixivid != null ? `
@@ -663,7 +664,7 @@ export const Popup = {
                     }
                     for (let i = 0; i < msgBgCount; i++) {
                         document.getElementById('getImgPopup').firstElementChild.lastElementChild.appendChild(html2elmnt(/*html*/`
-                            <img loading="lazy" src="${baseUrl}bg/msgbg${i + 1}.jpg" style="min-height: 40vh;" onload="this.style.removeProperty('min-height')">
+                            <img loading="lazy" src="${bgBaseUrl}msgbg${i + 1}.jpg" style="min-height: 40vh;" onload="this.style.removeProperty('min-height')">
                             <p>
                                 ${msgBgInfo[i].description != null
                                 ? msgBgInfo[i].description
@@ -1215,7 +1216,7 @@ export const Theme = {
         let next = this.currentBG + 1 < this.getCurrentBgCount() ? this.currentBG + 1 : 0
 
         let bgs = document.getElementsByClassName(`${this.theme}bg`)
-        let bgurl = this.theme == 'default' ? `${baseUrl}bg/` : `${baseUrl}bg/${this.theme}/`
+        let bgurl = this.theme == 'default' ? `${bgBaseUrl}` : `${bgBaseUrl}${this.theme}/`
 
         try {
             bgs[prev].classList.remove('visible')
@@ -1759,7 +1760,7 @@ if (location.hash == '#video') {
 
     document.getElementsByClassName('walpurgisbg')[0].style.opacity = 1
     document.getElementsByClassName('walpurgisbg')[0].style.display = 'block'
-    document.getElementsByClassName('walpurgisbg')[0].firstElementChild.style.backgroundImage = `url("${baseUrl}bg/walpurgis/mainbg1.jpg")`
+    document.getElementsByClassName('walpurgisbg')[0].firstElementChild.style.backgroundImage = `url("${bgBaseUrl}walpurgis/mainbg1.jpg")`
     document.getElementsByClassName('walpurgisbg')[0].firstElementChild.style.animationName = 'bgzoom'
     document.getElementsByClassName('walpurgisbg')[0].firstElementChild.style.animationDuration = '1.5s'
 

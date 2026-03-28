@@ -18,6 +18,6 @@ export default defineConfig({
         changeOrigin: true,
       },
     },
-    allowedHosts: ['pc.haojiezhe12345.top'],
+    allowedHosts: true,
   }
 })

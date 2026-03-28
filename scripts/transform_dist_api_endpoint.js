@@ -2,25 +2,29 @@
 import * as fs from 'fs'
 import * as path from 'path'
 
-const baseUrl = (() => {
-    let url = 'https://haojiezhe12345.top:82/madohomu/'
+const argUrl = (() => {
     if (process.argv.length > 2) {
-        url = process.argv[2]
+        const url = process.argv[2]
+        return url.endsWith('/') ? url : (url + '/')
     }
-    if (!url.endsWith('/')) {
-        url += '/'
-    }
-    return url
 })()
+
+const baseUrl = argUrl || 'https://haojiezhe12345.top:82/madohomu/'
+const bgBaseUrl = argUrl ? (argUrl + 'bg/') : 'https://assets.madohomu.haojiezhe12345.top/bg/'
 
 const replaceDir = '../dist'
 
 const replaceDict = {
-    'bg/': `${baseUrl}bg/`,
+    'bg/': `${bgBaseUrl}`,
     'api/': `${baseUrl}api/`,
     'media/': `${baseUrl}media/`,
     'res/': `${baseUrl}res/`,
-    '<!-- Insert base URL here -->': `<script> window.baseUrl = "${baseUrl}" </script>`,
+    '<!-- Insert base URL here -->': /*html*/`
+        <script>
+            window.baseUrl = "${baseUrl}"
+            window.bgBaseUrl = "${bgBaseUrl}"
+        </script>
+    `,
     '"/madohomu"': '"/?no-redirect"',
 }
 

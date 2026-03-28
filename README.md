@@ -19,8 +19,8 @@
 
 ## Source code
 
-No media or images are included in this repository.  
-The deployed site loads resources from https://haojiezhe12345.top:82/madohomu/
+Part of the images are served from [assets](https://github.com/haojiezhe12345/haojiezhe12345.github.io/tree/assets) branch. They're deployed to https://assets.madohomu.haojiezhe12345.top/  
+Other resources are loaded from https://haojiezhe12345.top:82/madohomu/
 
 **Migrating to Vue 3. Lots of components are still in Vanilla JS**
 

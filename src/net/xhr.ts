@@ -1,11 +1,9 @@
 import Settings from "../settings"
 import FloatMsgs from "../components/FloatMsgs"
 import { obj2queryString } from ".."
+import { baseUrl } from "."
 
-
-export const baseUrl = window.baseUrl
-    ? (window.baseUrl.endsWith('/') ? window.baseUrl : (window.baseUrl + '/'))
-    : ''
+export { baseUrl }
 console.log(`Base URL: "${baseUrl}"`)
 
 
