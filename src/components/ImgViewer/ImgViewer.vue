@@ -179,21 +179,23 @@ export default {
 
         mouseWheelHandler(e: WheelEvent) {
             e.preventDefault()
-            // console.log(e.deltaMode, e.deltaX, e.deltaY, e.ctrlKey)
 
-            let scaleMultiplier = 1
-            if (Math.abs(e.deltaY) < 10 && e.ctrlKey) { // likely zooming with trackpad
-                scaleMultiplier = (100 - e.deltaY) / 100
-            }
-            else { // otherwise treat it as mouse wheel
-                if (e.deltaY < 0) {
-                    scaleMultiplier = (1000 - e.deltaY) / 1000
-                    //this.imgViewerScale *= 11 / 10
-                } else {
-                    scaleMultiplier = 1000 / (1000 + e.deltaY)
-                    //this.imgViewerScale *= 10 / 11
+            const scaleMultiplier: number = (() => {
+                if (e.deltaMode == WheelEvent.DOM_DELTA_PIXEL) {
+                    // trackpad zoom
+                    if (e.ctrlKey && Math.abs(e.deltaY) < 30) {
+                        return (100 - e.deltaY) / 100
+                    }
+                    // mouse wheel + pixels
+                    if (e.deltaY < 0) {
+                        return (1000 - e.deltaY) / 1000
+                    } else {
+                        return 1000 / (1000 + e.deltaY)
+                    }
                 }
-            }
+                // mouse wheel + lines / pages
+                return e.deltaY < 0 ? 11 / 10 : 10 / 11
+            })()
             this.imgViewerScale *= scaleMultiplier
 
             var mouseOffsetX = e.clientX - (window.innerWidth / 2)
@@ -204,6 +206,8 @@ export default {
             this.imgViewerOffsetY += (scaleMultiplier - 1) * (this.imgViewerOffsetY - mouseOffsetY)
 
             this.normalizePosition()
+
+            // console.log('mode:', e.deltaMode, 'X:', e.deltaX, 'Y:', e.deltaY, 'ctrl:', e.ctrlKey, 'scale:', scaleMultiplier)
         },
 
         // touch handlers

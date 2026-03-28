@@ -1949,23 +1949,34 @@ export const Comments = {
         )
 
         this.elements.container.onwheel = e => {
-            if (!isFullscreen) {
-                // console.log(e.deltaMode, e.deltaX, e.deltaY)
+            // if you access `deltaX/Y` directly, it will usually be pixels
+            // console.log('X:', e.deltaX, 'Y:', e.deltaY, 'mode:', e.deltaMode)
+            // SPECIAL FOR FIREFOX:
+            // if you access `deltaMode` before accessing `deltaX/Y`, `deltaMode` will be `1` (lines) instead of `0` (pixels)
+            // in earlier versions of firefox, `deltaMode` will always be `1`
+            // console.log('mode:', e.deltaMode, 'X:', e.deltaX, 'Y:', e.deltaY)
 
-                // prevent back/forward when scrolling horizontally
-                if ((e.deltaX < 0 && this.elements.container.scrollLeft == 0) ||
-                    (e.deltaX > 0 && this.elements.container.scrollWidth - this.elements.container.clientWidth - this.elements.container.scrollLeft < 1)) {
-                    e.preventDefault()
-                    return
-                }
+            if (isFullscreen) return
 
-                let scroll = this.GetTargetCommentScrollability(e.target)
-                if (!scroll.inputable && !scroll.scrollable
-                    // only seek when deltaX = 0 and deltaY >= 10 (usually mouse wheel scrolling vertically)
-                    // revert to natural scrolling when scrolling horizontally with trackpad or by tilting mouse wheel
-                    && !e.deltaX && Math.abs(e.deltaY) >= 10) {
-                    this.seek(e.deltaY > 0 ? 1 : -1)
-                }
+            // prevent back/forward gesture when scrolling horizontally
+            if ((e.deltaX < 0 && this.elements.container.scrollLeft == 0) ||
+                (e.deltaX > 0 && this.elements.container.scrollWidth - this.elements.container.clientWidth - this.elements.container.scrollLeft < 1)) {
+                e.preventDefault()
+                return
+            }
+
+            // revert to natural scrolling behavior when:
+            if (
+                e.deltaX ||  // horizontal trackpad scroll / mouse wheel tilt
+                (e.deltaMode == WheelEvent.DOM_DELTA_PIXEL && Math.abs(e.deltaY) < 10)  // deltaY too few pixels (like vertical trackpad scroll)
+            ) return
+
+            // override default shift + wheel behavior
+            if (e.shiftKey) e.preventDefault()
+
+            let scroll = this.GetTargetCommentScrollability(e.target)
+            if (!scroll.inputable && !scroll.scrollable) {
+                this.seek(e.deltaY > 0 ? 1 : -1)
             }
         }
         this.elements.container.onscroll = () => this.scroll()
