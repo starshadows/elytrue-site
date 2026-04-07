@@ -222,7 +222,7 @@ export function insertComment(comment, isKami = false) {
             <div class="bgcover"></div>
             <img class="avatar" loading="lazy" src="${isKami == true ? `https://kami.im/getavatar.php?uid=${comment.uid}` : User.convertAvatarPath(comment.avatar)}">
             <div class="sender" onclick="this.previousElementSibling.click()">
-                ${comment.sender == '匿名用户' ? '<span class="ui zh">匿名用户</span><span class="ui en">Anonymous</span>' : comment.sender}
+                ${comment.sender == '匿名用户' ? '<span class="ui zh">匿名用户</span><span class="ui en">Anonymous</span>' : htmlEscape(comment.sender)}
             </div>
             <div class="id">#${comment.id}${isKami == true ? ' (kami.im)' : ''}</div>
             <div class="comment">${htmlEscape(comment.comment)}${commentExtra}</div>
@@ -917,7 +917,7 @@ export function showUserComment(user, avatar, uid) {
         userCommentEl.innerHTML = /*html*/`
         <h2>
             <img src="${avatar}" onclick="viewImg(this.src)">
-            <span>${user == '匿名用户' ? '<span class="ui zh">匿名用户</span><span class="ui en">Anonymous</span>' : user}${uid ? `<span class='kamiuid'>${uid}</span>` : ''}</span>
+            <span>${user == '匿名用户' ? '<span class="ui zh">匿名用户</span><span class="ui en">Anonymous</span>' : htmlEscape(user)}${uid ? `<span class='kamiuid'>${uid}</span>` : ''}</span>
         </h2>
         `
         showPopup('showUserCommentPopup')
