@@ -15,6 +15,7 @@ import { addPullDownRefresh } from "./components/controls/PullDownRefresh"
 
 import { createApp, watch } from "vue"
 import ProgressSlider from "./components/controls/ProgressSlider.vue"
+import { GallerySwipeController } from "./components/controls/GallerySwiper"
 
 export function loadComments(queryObj = {}, keepPosEl = undefined, noKami = false) {
     //if (from == null && time == null) setTodayCommentCount()
@@ -1470,7 +1471,7 @@ export function toggleFullscreen() {
             setTimelineActiveMonth(true)
         }, 35);
         document.body.classList.remove('fullscreen')
-        document.getElementById('fullscreenBtn').innerHTML = '<span class="ui zh">全屏 ↗</span><span class="ui en">Expand ↗</span>'
+        document.getElementById('fullscreenBtn').innerHTML = '<span class="ui zh">竖屏 ↕</span><span class="ui en">Expand ↕</span>'
         isFullscreen = false
     }
     Comments.pauseScroll(500)
@@ -1800,6 +1801,8 @@ export const Comments = {
     seekDone: true,
     scrollPaused: false,
 
+    swipeController: undefined as GallerySwipeController,
+
     lastTimeUpToDate: null as number | null,
     get upToDate() {
         return this.lastTimeUpToDate != null ? (new Date().getTime() - this.lastTimeUpToDate < 10000) : false
@@ -1819,7 +1822,7 @@ export const Comments = {
     seek(delta) {
         if (!this.hasItem()) return
 
-        const commentWidth = getFirstVisibleComment().getBoundingClientRect().width + 20 * Settings.pageScale
+        const commentWidth = this.getCommentWidth()
         if (this.seekDone) {
             this.seekLeft = (Math.round((this.elements.container.scrollLeft) / commentWidth) + delta) * commentWidth
             window.requestAnimationFrame(t1 => this.seekAnimate(t1, this.elements.container.scrollWidth))
@@ -1877,10 +1880,12 @@ export const Comments = {
         if (toStart <= threshold && Comments.upToDate == false) {
             loadNewerComments()
             this.pauseScroll(500)
+            this.swipeController.stopOngoingScroll()
         }
         if (toEnd <= threshold) {
             loadOlderComments()
             this.pauseScroll(500)
+            this.swipeController.stopOngoingScroll()
         }
 
         if (!isFullscreen) {
@@ -1895,6 +1900,10 @@ export const Comments = {
         setTimeout(() => {
             this.scrollPaused = false
         }, time);
+    },
+
+    getCommentWidth(): number {
+        return getFirstVisibleComment().getBoundingClientRect().width + 20 * Settings.pageScale
     },
 
     GetTargetCommentScrollability(target) {
@@ -1948,6 +1957,16 @@ export const Comments = {
                 document.getElementById('loadingIndicatorBefore')?.style.display == 'none' &&
                 document.getElementById('newCommentBox') == null
         )
+
+        this.swipeController = new GallerySwipeController(this.elements.container, {
+            getStopPosition: itemDelta => {
+                const commentWidth = this.getCommentWidth()
+                return (Math.round((this.elements.container.scrollLeft) / commentWidth) + itemDelta) * commentWidth
+            },
+            getItemSize: () => {
+                return this.getCommentWidth()
+            },
+        })
 
         this.elements.container.onwheel = e => {
             // if you access `deltaX/Y` directly, it will usually be pixels

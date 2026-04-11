@@ -752,9 +752,12 @@ body:not(.fullscreen) #lowerPanel.animating:not(.lowerPanelUp) {
     max-height: calc(100vh - 6.25rem);
 }
 
-.enableClickDelayed,
-#comments .commentBox>*:not(.loadingCircle) {
+.enableClickDelayed {
     pointer-events: initial;
+}
+
+#comments .commentBox>*:not(.loadingCircle) {
+    pointer-events: none;
 }
 
 #lowerPanel:hover:not(.lowerPanelDown) .enableClickDelayed,
@@ -781,6 +784,7 @@ body:not(.fullscreen) #lowerPanel.animating:not(.lowerPanelUp) {
 }
 
 #comments .commentBox .bg {
+    display: block;
     width: 100%;
     height: 100%;
     object-fit: cover;
