@@ -1959,6 +1959,7 @@ export const Comments = {
         )
 
         this.swipeController = new GallerySwipeController(this.elements.container, {
+            maxItemDelta: 1,
             getStopPosition: itemDelta => {
                 const commentWidth = this.getCommentWidth()
                 return (Math.round((this.elements.container.scrollLeft) / commentWidth) + itemDelta) * commentWidth

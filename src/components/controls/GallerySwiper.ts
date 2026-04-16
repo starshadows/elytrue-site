@@ -13,19 +13,21 @@ const animationFrameCallback: FrameRequestCallback = timestamp => {
 
 requestAnimationFrame(animationFrameCallback)
 
+export const GallerySwipeHorizontal = 1
+export const GallerySwipeVertical = 2
+
 export interface GallerySwipeSettings {
-    direction: number // TODO: vertical not implemented
+    direction: typeof GallerySwipeHorizontal | typeof GallerySwipeVertical // TODO: vertical not implemented
+    maxItemDelta: number
     getItemSize?: () => number
     getStopPosition?: (itemDelta: number) => number
 }
 
 export class GallerySwipeController {
-    static readonly Horizontal = 1
-    static readonly Vertical = 2
-
     element: HTMLElement
     options: GallerySwipeSettings = {
-        direction: GallerySwipeController.Horizontal
+        direction: GallerySwipeHorizontal,
+        maxItemDelta: Infinity,
     }
 
     private _touchStartX: number | undefined = undefined
@@ -209,7 +211,7 @@ export class GallerySwipeController {
                     touchSpeed = (totalTouchSpeed + lastTouchSpeed) / 2
                 }
 
-                let itemDelta = -touchSpeed * 500
+                let itemDelta = -touchSpeed * 750
                 if (this.options.getItemSize) {
                     itemDelta /= this.options.getItemSize()
                 } else {
@@ -217,7 +219,10 @@ export class GallerySwipeController {
                 }
                 // console.log(itemDelta)
 
-                this.stopPosition = this.options.getStopPosition(Math.round(itemDelta))
+                if (itemDelta > this.options.maxItemDelta) itemDelta = this.options.maxItemDelta
+                itemDelta = Math.round(itemDelta)
+
+                this.stopPosition = this.options.getStopPosition(itemDelta)
 
                 if (this.stopPosition < 0) {
                     this.stopPosition = 0
@@ -255,7 +260,7 @@ export class GallerySwipeController {
     }
 
     get isDirectionHorizontal(): boolean {
-        return this.options.direction == GallerySwipeController.Horizontal
+        return this.options.direction == GallerySwipeHorizontal
     }
 
     get currentPosition(): number {
