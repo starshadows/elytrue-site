@@ -17,6 +17,8 @@ import { createApp, watch } from "vue"
 import ProgressSlider from "./components/controls/ProgressSlider.vue"
 import { GallerySwipeController } from "./components/controls/GallerySwiper"
 
+export const STATIC_SHOWCASE_MODE = false
+
 export function loadComments(queryObj = {}, keepPosEl = undefined, noKami = false) {
     //if (from == null && time == null) setTodayCommentCount()
 
@@ -219,7 +221,7 @@ export function insertComment(comment, isKami = false) {
 
     let commentEl = html2elmnt(/*html*/`
         <div class="commentBox commentItem${comment.hidden ? ' hidden' : ''}" ${isKami == true ? `data-kamiid="#${comment.id}"` : `id="#${comment.id}"`} data-timestamp="${comment.time}">
-            <img class="bg" loading="lazy" src="${bgBaseUrl}msgbg${randBG}.jpg" ${(comment.hidden == 1) ? 'style="display: none;"' : ''}>
+            <img class="bg" loading="lazy" src="${msgBgInfo[randBG - 1].src}" ${(comment.hidden == 1) ? 'style="display: none;"' : ''}>
             <div class="bgcover"></div>
             <img class="avatar" loading="lazy" src="${isKami == true ? `https://kami.im/getavatar.php?uid=${comment.uid}` : User.convertAvatarPath(comment.avatar)}">
             <div class="sender" onclick="this.previousElementSibling.click()">
@@ -322,10 +324,10 @@ export function initCommentReplyQuote(el, id, params) {
             <div class="quote-content">
                 <div class="quote-head">
                     <img class="quote-avatar" src="${User.convertAvatarPath(comment.avatar)}">
-                    <div class="quote-sender">${comment.sender}</div>
+                    <div class="quote-sender">${htmlEscape(comment.sender)}</div>
                     <div class="quote-id">#${comment.id}</div>
                 </div>
-                <div class="quote-body">${comment.comment}</div>
+                <div class="quote-body">${htmlEscape(comment.comment)}</div>
             </div>
         `
         el.classList.add('comment-reply-quote')
@@ -446,6 +448,14 @@ export function getFirstVisibleComment() {
 //
 export const NewMessage = {
     show() {
+        if (!XHR.token) {
+            Popup.show('loginPopup')
+            FloatMsgs.show({
+                type: 'info',
+                msg: '<span class="ui zh">登录后即可留言、回复和上传图片</span><span class="ui en">Log in to post, reply and upload images</span>',
+            })
+            return
+        }
         commentDiv.scrollLeft = 0
         commentDiv.scrollTop = 0
 
@@ -461,7 +471,7 @@ export const NewMessage = {
                 <div class="sender" id="senderText" onclick="XHR.token && User.changeName()"></div>
                 <div class="id" onclick="Popup.show('loginPopup')"><span class="ui zh">注册/登录</span><span class="ui en">Login / Register</span></div>
                 <div class="comment">
-                    <div id="msgText" placeholder="圆神保佑~" contenteditable="true" onfocus="Comments.forceLowerPanelUp(); TouchKeyboardDetector.detect()" onblur="TouchKeyboardDetector.detect()"></div>
+                    <div id="msgText" placeholder="愿花与星辉伴你同行♪" contenteditable="true" onfocus="Comments.forceLowerPanelUp(); TouchKeyboardDetector.detect()" onblur="TouchKeyboardDetector.detect()"></div>
                     <div id="uploadImgList"></div>
                 </div>
                 <label>
@@ -491,7 +501,14 @@ export const NewMessage = {
             return;
         }
 
-        for (let i = 0; i < imgUploadInput.files.length; i++) {
+        const remaining = Math.max(0, 3 - document.getElementsByClassName('uploadImg').length)
+        if (remaining == 0) {
+            FloatMsgs.show({ type: 'warn', msg: '<span class="ui zh">每条留言最多上传 3 张图片</span><span class="ui en">Up to 3 images per message</span>' })
+            imgUploadInput.value = ''
+            return
+        }
+
+        for (let i = 0; i < Math.min(imgUploadInput.files.length, remaining); i++) {
             resizeImg(imgUploadInput.files[i], null, 2.1 * 1000 * 1000).then(i => {
                 document.getElementById('uploadImgList').appendChild(html2elmnt(/*html*/`
                     <div>
@@ -552,6 +569,10 @@ export const NewMessage = {
     },
 
     send() {
+        if (!XHR.token) {
+            Popup.show('loginPopup')
+            return
+        }
         let replyid = this.getReplyId()
         let msg = this.getNewMessage()
 
@@ -572,12 +593,12 @@ export const NewMessage = {
         document.getElementById('sendBtn').disabled = true;
         document.getElementById('sendBtn').innerHTML = '<span class="ui zh">正在发送…</span><span class="ui en">Sending…</span>'
 
-        XHR.post('comments/post', {
-            "sender": XHR.token ? undefined : '匿名用户',
+        Promise.all(imgList.map(image => XHR.post('uploads/image', { image })))
+        .then(results => XHR.post('comments/post', {
             "comment": msg,
-            'images': imgList,
+            imageKeys: results.map(result => result.data.imageId),
             replyid,
-        }).then(r => {
+        })).then(r => {
             console.log(r);
             document.getElementById('sendBtn').innerHTML = '<span class="ui zh">发送成功!</span><span class="ui en">Sent!</span>'
             setTimeout(() => {
@@ -585,7 +606,7 @@ export const NewMessage = {
                 loadComments()
             }, 1000);
         }).catch(() => {
-            window.alert('发送留言失败\n如果问题持续, 请发邮件到 3112611479@qq.com (或加此QQ)\n\nFailed to send message, if problem persists, please contact 3112611479@qq.com')
+            window.alert('发送留言失败，请确认本地后端仍在运行后重试。\n\nFailed to send the message. Please make sure the local backend is running and try again.')
             document.getElementById('sendBtn').disabled = false;
             document.getElementById('sendBtn').innerHTML = '<span class="ui zh">发送 ✔</span><span class="ui en">Send ✔</span>'
         })
@@ -644,36 +665,41 @@ export const Popup = {
             switch (popupID) {
                 case 'getImgPopup':
                     document.getElementById('getImgPopup').firstElementChild.lastElementChild.innerHTML = ''
-                    for (var key in Theme.themes) {
-                        var themeName = Theme.themes[key]
-                        try {
-                            for (let j = 0; j < document.getElementsByClassName(`${themeName}bg`).length; j++) {
-                                document.getElementById('getImgPopup').firstElementChild.lastElementChild.appendChild(html2elmnt(/*html*/`
-                                    <img loading="lazy" src="${bgBaseUrl}${themeName != 'default' ? themeName : ''}/mainbg${j + 1}.jpg" style="min-height: 40vh;" onload="this.style.removeProperty('min-height')">
-                                    <p>
-                                        ${document.getElementsByClassName(`${themeName}bg`)[j].children[1].innerHTML}
-                                        ${document.getElementsByClassName(`${themeName}bg`)[j].dataset.pixivid != null ? `
-                                            <a href="https://www.pixiv.net/artworks/${document.getElementsByClassName(`${themeName}bg`)[j].dataset.pixivid}" target="_blank">Pixiv↗</a>
-                                        ` : ''}
-                                    </p>
-                                    <br>
-                                `))
-                            }
-                        } catch (error) {
-                            console.log(error)
-                        }
-                    }
-                    for (let i = 0; i < msgBgCount; i++) {
+                    const downloadGroups = [
+                        { layout: 'landscape', zh: '横屏背景', en: 'Landscape backgrounds' },
+                        { layout: 'portrait', zh: '竖屏背景', en: 'Portrait backgrounds' },
+                    ]
+                    downloadGroups.forEach(group => {
+                        const backgrounds = document.querySelectorAll(`.mainbg[data-layout="${group.layout}"][data-src]`)
+                        if (!backgrounds.length) return
+
                         document.getElementById('getImgPopup').firstElementChild.lastElementChild.appendChild(html2elmnt(/*html*/`
-                            <img loading="lazy" src="${bgBaseUrl}msgbg${i + 1}.jpg" style="min-height: 40vh;" onload="this.style.removeProperty('min-height')">
-                            <p>
-                                ${msgBgInfo[i].description != null
-                                ? msgBgInfo[i].description
-                                : `Artwork by ${msgBgInfo[i].illustrator} <a href="https://www.pixiv.net/artworks/${msgBgInfo[i].pixivid}" target="_blank">Pixiv↗</a>`}
-                            </p>
-                            <br>
+                            <h3 class="backgroundGroupTitle">
+                                <span class="ui zh">${group.zh}</span><span class="ui en">${group.en}</span>
+                            </h3>
                         `))
-                    }
+
+                        backgrounds.forEach(background => {
+                            document.getElementById('getImgPopup').firstElementChild.lastElementChild.appendChild(html2elmnt(/*html*/`
+                                <img loading="lazy" decoding="async" src="${background.dataset.src}" style="min-height: 40vh;" onload="this.style.removeProperty('min-height')">
+                                <p>
+                                    ${background.dataset.creditUrl ? `
+                                        <span class="authorizedRepost"><span class="ui zh">经作者许可转载</span><span class="ui en">Reposted with permission</span> · </span>
+                                    ` : ''}
+                                    ${background.children[1].innerHTML}
+                                    ${background.dataset.creditUrl ? `
+                                        <a href="${background.dataset.creditUrl}" target="_blank" rel="noopener noreferrer">图源↗</a>
+                                    ` : ''}
+                                    ${background.dataset.original ? `
+                                        <a class="downloadOriginal" href="${background.dataset.original}" download>
+                                            <span class="ui zh">下载原图</span><span class="ui en">Download original</span> ↓
+                                        </a>
+                                    ` : ''}
+                                </p>
+                                <br>
+                            `))
+                        })
+                    })
                     break
 
                 case 'displaySettings':
@@ -734,34 +760,9 @@ export const User = {
     LoggedOnUserId: null,
 
     init() {
-        XHR.token = getConfig('token')
-
+        // The session token is an HttpOnly cookie and is never exposed to JS.
+        XHR.token = ''
         this.loadUserInfo()
-
-        if (getConfig('username')) {
-            if (XHR.token) {
-                setConfig('username', '')
-            } else {
-                setTimeout(() => {
-                    XHR.post('user/login', {
-                        name: getConfig('username')
-                    }).then(r => {
-                        if (r.code == 1) {
-                            XHR.token = r.data
-                            setConfig('token', r.data)
-                            setConfig('username', '')
-                            loadUserInfo()
-                            FloatMsgs.show({
-                                type: 'info', persist: true,
-                                msg: /*html*/`
-                                <span class="ui zh">账号系统已升级, 您现在可以设置邮箱/密码了</span>
-                                <span class="ui en">Account system has been upgraded, you can set email/password now.</span>
-                            `})
-                        }
-                    })
-                }, 0);
-            }
-        }
     },
 
     changeName() {
@@ -791,11 +792,10 @@ export const User = {
             {
                 title: '<span class="ui zh">修改邮箱</span><span class="ui en">Change email</span>',
                 subtitle: /*html*/`
-                    <span class="ui zh">设置邮箱后, <b>该账号仅能通过邮箱登录</b><br>如果这不是你的账号, 请不要修改, 请先创建一个自己的账号<br><br>输入新邮箱</span>
+                    <span class="ui zh">邮箱用于登录、密码找回和账号安全通知，不会公开展示。<br>请填写本人长期可用邮箱；填写错误将无法找回密码。<br><br>输入新邮箱</span>
                     <span class="ui en">
-                        <b>You can only log in with your email after setting it, </b>people who don't know your email won't be able to log in.<br>
-                        If this is not your account, please do not change anything. Log out and register your own one.<br><br>
-                        Enter your email
+                        Your email is used for login, password recovery and account security, and is never displayed publicly.<br><br>
+                        Enter a long-term email address
                     </span>
                     `,
                 text: r.email,
@@ -806,8 +806,8 @@ export const User = {
                             this.$emit('close')
                             FloatMsgs.show({
                                 type: 'success', persist: true, msg: /*html*/`
-                                <span class="ui zh">邮件发送成功! 请打开邮件中的链接, 以确认修改</span>
-                                <span class="ui en">Confirmation email sent, please check your inbox</span>`
+                                <span class="ui zh">邮箱修改成功，请确认新邮箱长期可用</span>
+                                <span class="ui en">Email updated successfully</span>`
                             })
                         }
                         this.disabled = false
@@ -836,7 +836,9 @@ export const User = {
     },
 
     convertAvatarPath(avatar) {
-        return avatar ? `${baseUrl}api/data/images/avatars/` + encodeURIComponent(avatar) : ''
+        return avatar
+            ? `${baseUrl}api/data/images/avatars/` + encodeURIComponent(avatar)
+            : `${baseUrl}res/favicon-320.png`
     },
 
     loadUserInfo() {
@@ -844,8 +846,8 @@ export const User = {
         var avatar = document.getElementById('userInfoAvatar')
         var name = document.getElementById('userInfoName')
 
-        if (XHR.token) {
-            User.getMe().then(r => {
+        User.getMe().then(r => {
+                XHR.token = 'session'
                 this.LoggedOnUserId = r.id
 
                 avatar.src = User.convertAvatarPath(r.avatar)
@@ -864,14 +866,10 @@ export const User = {
                 } catch (error) {
                     logErr(error, 'Failed to access popup instances')
                 }
-            }).catch(xhr => {
-                if (xhr.status == 401) this.loadUserInfo()
-            })
-
-            userInfo.onclick = () => this.showMe()
-            userInfo.classList.remove('nologin')
-
-        } else {
+                userInfo.onclick = () => this.showMe()
+                userInfo.classList.remove('nologin')
+            }).catch(() => {
+            XHR.token = ''
             this.LoggedOnUserId = null
 
             avatar.src = `${baseUrl}api/data/images/defaultAvatar.png`
@@ -883,24 +881,29 @@ export const User = {
 
             userInfo.onclick = () => Popup.show('loginPopup')
             userInfo.classList.add('nologin')
-        }
+        })
     },
 
     logout() {
-        setConfig('token', '')
-        XHR.token = ''
-        closePopup()
-        setTimeout(loadUserInfo, 0)
+        XHR.post('user/logout').finally(() => {
+            XHR.token = ''
+            closePopup()
+            setTimeout(loadUserInfo, 0)
+        })
     },
 
     resetToken() {
-        XHR.post('user/resettoken').then(r => r && this.logout())
+        XHR.post('user/resettoken').finally(() => {
+            XHR.token = ''
+            closePopup()
+            setTimeout(loadUserInfo, 0)
+        })
     }
 }
 
 export var loadUserInfo = User.loadUserInfo.bind(User)
 try {
-    User.init()
+    if (!STATIC_SHOWCASE_MODE) User.init()
 } catch (error) {
     logErr(error, 'failed to init user')
 }
@@ -1042,12 +1045,6 @@ export const Theme = {
 
     themes: {
         '#default-theme': 'default',
-        '#birthday': 'birthday',
-        '#christmas': 'christmas',
-        '#lunarNewYear': 'lunarNewYear',
-        '#qixi': 'qixi',
-        '#night': 'night',
-        '#kami': 'kami',
     },
 
     theme: '',
@@ -1055,6 +1052,7 @@ export const Theme = {
     currentCaption: -1,
 
     init() {
+        this.prepareVisitOrder()
         this.setTheme(this.themes[location.hash])
 
         setInterval(() => {
@@ -1072,29 +1070,49 @@ export const Theme = {
         })
     },
 
+    prepareVisitOrder() {
+        const useMobileBackgrounds = window.matchMedia('(max-width: 720px)').matches
+        const activeLayout = useMobileBackgrounds ? 'portrait' : 'landscape'
+        const allBackgrounds = Array.from(document.querySelectorAll('.mainbg.defaultbg'))
+        const backgrounds = allBackgrounds.filter(background => background.dataset.layout == activeLayout)
+        allBackgrounds
+            .filter(background => background.dataset.layout != activeLayout)
+            .forEach(background => background.classList.remove('defaultbg'))
+
+        shuffleArray(backgrounds)
+        backgrounds.forEach(background => {
+            background.dataset.activeSrc = background.dataset.src
+            this.elements.captionContainer.before(background)
+        })
+
+        const firstBackground = backgrounds[0]?.dataset.activeSrc
+        if (firstBackground) {
+            const preload = document.createElement('link')
+            preload.rel = 'preload'
+            preload.as = 'image'
+            preload.type = 'image/webp'
+            preload.href = firstBackground
+            preload.fetchPriority = 'high'
+            document.head.appendChild(preload)
+        }
+
+        const blocks = []
+        Array.from(document.getElementsByClassName('defaultCaption')).forEach(caption => {
+            const group = caption.dataset.sequenceGroup || ''
+            const lastBlock = blocks[blocks.length - 1]
+            if (group && lastBlock?.group == group) {
+                lastBlock.items.push(caption)
+            } else {
+                blocks.push({ group, items: [caption] })
+            }
+        })
+        shuffleArray(blocks)
+        blocks.flatMap(block => block.items).forEach(caption => {
+            this.elements.captionContainer.appendChild(caption)
+        })
+    },
+
     getAutoTheme() {
-        let d = new Date()
-        let y = d.getFullYear()
-        if (new Date(`Oct 3 ${y} 00:00`) < d && d < new Date(`Oct 4 ${y} 06:00`)) {
-            return 'birthday'
-        }
-        if (new Date(`Dec 25 ${y} 00:00`) < d && d < new Date(`Dec 26 ${y} 06:00`)) {
-            return 'christmas'
-        }
-        if (new Date(`Feb 17 2026 00:00`) < d && d < new Date(`Feb 20 2026 06:00`)) {
-            return 'lunarNewYear'
-        }
-        if (new Date(`Aug 10 2024 00:00`) < d && d < new Date(`Aug 11 2024 06:00`)) {
-            return 'qixi'
-        }
-        if (new Date(`Sep 17 2024 00:00`) < d && d < new Date(`Sep 20 2024 06:00`)) {
-            let video = document.querySelector('.walpurgispvbg iframe').contentWindow.video
-            // console.log(video.currentTime, video.duration)
-            if (!video || !video.duration || video.currentTime < video.duration) return 'walpurgispv'
-        }
-        if (d.getHours() >= 23 || d.getHours() <= 5) {
-            return 'night'
-        }
         return 'default'
     },
 
@@ -1191,16 +1209,7 @@ export const Theme = {
     },
 
     getThemeMusic() {
-        let music = {
-            birthday: 'また あした - 悠木碧',
-            night: 'Scaena felix - オルゴール ミドリ',
-            kami: 'never leave you alone - 梶浦由記',
-            walpurgispv: 'Nux Walpurgis - 梶浦由記',
-        }
-        return music[this.theme] ||
-            (Math.random() > 0.5
-                ? 'Sagitta luminis - オルゴール ミドリ'
-                : '君の銀の庭 - オルゴール ミドリ')
+        return 'Elysian Realm'
     },
 
     getCurrentBgs() {
@@ -1217,19 +1226,19 @@ export const Theme = {
         let next = this.currentBG + 1 < this.getCurrentBgCount() ? this.currentBG + 1 : 0
 
         let bgs = document.getElementsByClassName(`${this.theme}bg`)
-        let bgurl = this.theme == 'default' ? `${bgBaseUrl}` : `${bgBaseUrl}${this.theme}/`
-
         try {
             bgs[prev].classList.remove('visible')
             bgs[this.currentBG].classList.add('ready', 'animating', 'visible')
-            bgs[this.currentBG].firstElementChild.style.backgroundImage = `url("${bgurl}mainbg${this.currentBG + 1}.jpg")`
+            const currentSource = bgs[this.currentBG].dataset.activeSrc || bgs[this.currentBG].dataset.src || `${bgBaseUrl}mainbg${this.currentBG + 1}.jpg`
+            bgs[this.currentBG].firstElementChild.style.backgroundImage = `url("${currentSource}")`
             // for single-image theme, show only the first image and disable slideshow
             if (prev == this.currentBG) return
             this.timers.setTimeout(() => {
                 bgs[prev].classList.remove('ready', 'animating')
                 bgs[next].classList.add('ready')
                 bgs[next].classList.remove('bgzoom')
-                bgs[next].firstElementChild.style.backgroundImage = `url("${bgurl}mainbg${next + 1}.jpg")`
+                const nextSource = bgs[next].dataset.activeSrc || bgs[next].dataset.src || `${bgBaseUrl}mainbg${next + 1}.jpg`
+                bgs[next].firstElementChild.style.backgroundImage = `url("${nextSource}")`
             }, 2500);
         } catch (error) {
             logErr(error, 'failed to show next image')
@@ -1714,7 +1723,7 @@ document.querySelector('#mainTitle>a').href = location.origin + location.pathnam
 
 
 export var debug = false
-if (location.hash == '#debug') {
+if (!STATIC_SHOWCASE_MODE && location.hash == '#debug') {
     debug = true
     setTimeout(() => {
         Comments.forceLowerPanelUp()
@@ -1947,6 +1956,7 @@ export const Comments = {
     },
 
     init() {
+        setTodayCommentCount()
         loadComments()
 
         addPullDownRefresh(
@@ -2058,56 +2068,16 @@ export const Comments = {
 
 export var seekComment = Comments.seek.bind(Comments)
 try {
-    Comments.init()
+    if (!STATIC_SHOWCASE_MODE) Comments.init()
 } catch (error) {
     logErr(error, 'failed to init comments')
 }
 
-export const msgBgInfo = [
-    {
-        'description': 'Official Guidebook "You Are Not Alone"',
-    },
-    {
-        'illustrator': 'Nine',
-        'pixivid': '57114653',
-    },
-    {
-        'illustrator': '曼曼',
-        'pixivid': '91471007',
-    },
-    {
-        'illustrator': 'カラスBTK',
-        'pixivid': '99591809',
-    },
-    {
-        'illustrator': 'さんしょう',
-        'pixivid': '18530512',
-    },
-    {
-        'illustrator': 'STAR影法師',
-        'pixivid': '60649948',
-    },
-    {
-        'illustrator': 'Nardack',
-        'pixivid': '88198018',
-    },
-    {
-        'illustrator': 'Rella',
-        'pixivid': '29076044',
-    },
-    {
-        'illustrator': 'おれつ',
-        'pixivid': '57636925',
-    },
-    {
-        'illustrator': 'ChrisTy☆クリスティ',
-        'pixivid': '65489049',
-    },
-    {
-        'illustrator': 'ChrisTy☆クリスティ',
-        'pixivid': '63582832',
-    },
-]
+export const msgBgInfo = Array.from(
+    document.querySelectorAll('.mainbg[data-layout="portrait"][data-src]')
+).map(background => ({
+    src: background.dataset.src,
+}))
 export const msgBgCount = msgBgInfo.length
 export var lastBgImgs = []
 
@@ -2198,6 +2168,20 @@ export var closeImgViewer = ImgViewer.close.bind(ImgViewer)
 
 // music player
 //
+const DEFAULT_MUSIC = 'HOYO-MiX - Elysian Realm.mp3'
+const OFFICIAL_MUSIC = [
+    '黄龄 HOYO-MiX - TruE.mp3',
+    'HOYO-MiX - Conflict.mp3',
+    'HOYO-MiX - Elysia.mp3',
+    'HOYO-MiX - Elysian Realm.mp3',
+    'HOYO-MiX - Erupt.mp3',
+    'HOYO-MiX - ForEly.mp3',
+    'HOYO-MiX - Last Waltz.mp3',
+    'HOYO-MiX - Subtle.mp3',
+    'HOYO-MiX - Sweet Trap.mp3',
+    'HOYO-MiX - The Flawless Human.mp3',
+]
+
 export const MusicPlayer = {
     elements: {
         player: document.getElementById('musicAudio'),
@@ -2213,19 +2197,18 @@ export const MusicPlayer = {
     playList: [],
     playOrder: [],
     userPaused: true,
+    prefetchScheduled: false,
+    playbackStateKey: 'musicPlaybackStateV1',
+    lastPersistedSecond: -1,
 
     loadPlayList(dir) {
         this.elements.list.innerHTML = ''
-        getFileListAsync(dir).then(list => {
-            this.playList = list.filter(item => !(item.endsWith('.jpg') || item.endsWith('.disabled')))
-            this.playOrder = []
-            this.showPlayList(this.playList)
-            try {
-                this.setActiveSong(Theme.getThemeMusic())
-            } catch (error) {
-                this.setActiveSong(0)
-            }
-        })
+        const upcoming = OFFICIAL_MUSIC.filter(name => name != DEFAULT_MUSIC)
+        shuffleArray(upcoming)
+        this.playList = [DEFAULT_MUSIC, ...upcoming].map(name => `${dir}${encodeURIComponent(name)}`)
+        this.playOrder = []
+        this.showPlayList(this.playList)
+        this.setActiveSong(Theme.getThemeMusic())
     },
 
     showPlayList(list) {
@@ -2248,13 +2231,9 @@ export const MusicPlayer = {
         if (this.playList[index] == null) return
 
         this.elements.player.src = this.playList[index]
-        this.elements.playerImg.src = this.playList[index] + '.jpg'
-        this.elements.playerImg.onclick = function () { viewImg(this.src) }
-        this.elements.playerImg.onerror = function () {
-            this.onerror = null
-            this.onclick = null
-            this.src = `${baseUrl}res/music_note.svg`
-        }
+        this.elements.player.load()
+        this.elements.playerImg.onclick = null
+        this.elements.playerImg.src = `${baseUrl}res/music_note.svg`
         for (let i = 0; i < this.elements.titles.length; i++) {
             this.elements.titles[i].textContent = getFileNameWithoutExt(this.playList[index], true)
         }
@@ -2266,9 +2245,98 @@ export const MusicPlayer = {
         if (navigator.mediaSession) {
             navigator.mediaSession.metadata = new MediaMetadata({
                 title: getFileNameWithoutExt(this.playList[index], true),
-                artist: 'MadoHomu.love',
-                artwork: [{ src: this.playList[index] + '.jpg' }]
+                artist: 'elytrue.com',
             })
+        }
+    },
+
+    persistPlaybackState(force = false) {
+        const index = this.getPlayingIndex()
+        const url = this.playList[index]
+        if (!url || !this.elements.player.src) return
+
+        const currentTime = Number.isFinite(this.elements.player.currentTime)
+            ? this.elements.player.currentTime
+            : 0
+        const currentSecond = Math.floor(currentTime)
+        if (!force && Math.abs(currentSecond - this.lastPersistedSecond) < 2) return
+        this.lastPersistedSecond = currentSecond
+
+        setConfig(this.playbackStateKey, JSON.stringify({
+            song: decodeURIComponent(url.slice(url.lastIndexOf('/') + 1)),
+            currentTime,
+            paused: this.userPaused,
+        }))
+    },
+
+    restorePlaybackState() {
+        let state
+        try {
+            state = JSON.parse(getConfig(this.playbackStateKey))
+        } catch (error) {
+            return false
+        }
+        if (!state?.song || !Number.isFinite(state.currentTime)) return false
+
+        const index = this.playList.findIndex(url =>
+            decodeURIComponent(url.slice(url.lastIndexOf('/') + 1)) == state.song
+        )
+        if (index < 0) return false
+
+        this.setActiveSong(index)
+        this.userPaused = state.paused !== false
+        setConfig('mutebgm', this.userPaused)
+
+        const restore = () => {
+            const duration = this.elements.player.duration
+            const upperBound = Number.isFinite(duration) && duration > 0
+                ? Math.max(0, duration - 0.25)
+                : state.currentTime
+            this.elements.player.currentTime = Math.max(0, Math.min(state.currentTime, upperBound))
+            this.lastPersistedSecond = Math.floor(this.elements.player.currentTime)
+            if (!this.userPaused) this.play()
+        }
+
+        if (this.elements.player.readyState >= 1) {
+            restore()
+        } else {
+            this.elements.player.addEventListener('loadedmetadata', restore, { once: true })
+        }
+        return true
+    },
+
+    scheduleUpcomingPrefetch() {
+        if (this.prefetchScheduled) return
+        this.prefetchScheduled = true
+
+        const connection = navigator.connection || navigator.mozConnection || navigator.webkitConnection
+        if (connection?.saveData) return
+
+        const prefetch = () => {
+            const current = this.elements.player.currentSrc || this.elements.player.src
+            this.playList.filter(url => new URL(url, location.href).href != current).forEach(url => {
+                const link = document.createElement('link')
+                link.rel = 'prefetch'
+                link.as = 'audio'
+                link.href = url
+                link.fetchPriority = 'low'
+                link.dataset.elytruePrefetch = 'music'
+                document.head.appendChild(link)
+            })
+        }
+
+        const schedule = () => {
+            if ('requestIdleCallback' in window) {
+                window.requestIdleCallback(prefetch, { timeout: 8000 })
+            } else {
+                setTimeout(prefetch, 2500)
+            }
+        }
+
+        if (document.readyState == 'complete') {
+            setTimeout(schedule, 1200)
+        } else {
+            window.addEventListener('load', () => setTimeout(schedule, 1200), { once: true })
         }
     },
 
@@ -2293,9 +2361,11 @@ export const MusicPlayer = {
     play(index = null) {
         if (index == null && !this.elements.player.src) index = 0
         this.setActiveSong(index)
-        this.elements.player.play()
+        const playAttempt = this.elements.player.play()
+        if (playAttempt) playAttempt.catch(() => { })
         this.userPaused = false
         setConfig('mutebgm', false)
+        this.persistPlaybackState(true)
     },
 
     playNext() {
@@ -2312,6 +2382,7 @@ export const MusicPlayer = {
         this.userPaused = true
         setConfig('mutebgm', true)
         this.elements.player.pause()
+        this.persistPlaybackState(true)
     },
 
     setVolume(vol) {
@@ -2320,7 +2391,10 @@ export const MusicPlayer = {
 
     initPlayer(dir) {
         this.loadPlayList(dir)
-        if (getConfig('mutebgm') == 'true') {
+        this.scheduleUpcomingPrefetch()
+        if (this.restorePlaybackState()) {
+            // Song, position and play intent are restored after metadata loads.
+        } else if (getConfig('mutebgm') == 'true') {
             this.userPaused = true
         } else {
             this.play()
@@ -2362,15 +2436,19 @@ export const MusicPlayer = {
             for (let i = 0; i < this.elements.playingIndicators.length; i++) {
                 this.elements.playingIndicators[i].classList.add('playing');
             }
+            this.persistPlaybackState(true)
         }
         this.elements.player.onpause = () => {
             for (let i = 0; i < this.elements.playingIndicators.length; i++) {
                 this.elements.playingIndicators[i].classList.remove('playing');
             }
+            this.persistPlaybackState(true)
         }
+        this.elements.player.ontimeupdate = () => this.persistPlaybackState()
         this.elements.player.onended = () => {
             this.playNext()
         }
+        window.addEventListener('pagehide', () => this.persistPlaybackState(true))
         document.addEventListener('click', () => {
             if (!this.userPaused && this.elements.player.paused) this.play()
         })
@@ -2385,7 +2463,7 @@ export const MusicPlayer = {
 }
 
 try {
-    MusicPlayer.initPlayer(`${baseUrl}media/bgm/`)
+    MusicPlayer.initPlayer(`${baseUrl}assets/elytrue-20260724/bgm/`)
 } catch (error) {
     logErr(error, 'failed to init music player')
 }
@@ -2421,17 +2499,7 @@ if (window.location.hash == '#view-img' || window.location.hash == '#popup') {
     window.location.hash = ''
 }
 
-if (location.hash.startsWith('#confirmemail=')) {
-    let id = location.hash.replace('#confirmemail=', '')
-    XHR.post('action', { id }).then(r => {
-        if (r.code == 1) {
-            FloatMsgs.show({ type: 'success', msg: '<span class="ui zh">邮箱确认成功!</span><span class="ui en">Email confirmed successfully!</span>' })
-            location.hash = ''
-        }
-    })
-}
-
-if (location.hash.startsWith('#resetpassword=')) {
+if (!STATIC_SHOWCASE_MODE && location.hash.startsWith('#resetpassword=')) {
     let passwordResetToken = location.hash.replace('#resetpassword=', '')
     Popup.show('setPasswordPopup', { passwordResetToken })
 }

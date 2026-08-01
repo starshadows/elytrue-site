@@ -1,24 +1,31 @@
 {
-  "name": "madohomu.love",
+  "name": "elytrue.com",
   "private": true,
   "version": "1.0.0",
   "type": "module",
   "scripts": {
     "dev": "vite",
     "dev:host": "vite --host",
+    "dev:edgeone": "edgeone makers dev",
+    "check": "vue-tsc -b",
+    "check:assets": "node scripts/check-deploy-assets.mjs",
+    "test": "node --test tests/*.test.js",
+    "export:data": "node scripts/export-edgeone-data.mjs",
     "build": "vue-tsc -b && vite build",
-    "build:transform-api-endpoint": "npm run build && cd scripts && node transform_dist_api_endpoint.js",
-    "build:transform-api-endpoint-test": "npm run build && cd scripts && node transform_dist_api_endpoint.js http://haojiezhe12345.top:8001/",
+    "build:edgeone": "npm run check:assets && npm run build",
     "preview": "vite preview",
     "preview:host": "vite preview --host"
   },
   "dependencies": {
+    "@edgeone/pages-blob": "^0.0.15",
+    "image-size": "^2.0.2",
     "vue": "^3.5.13"
   },
   "devDependencies": {
     "@vitejs/plugin-legacy": "^6.1.1",
     "@vitejs/plugin-vue": "^5.2.3",
     "@vue/tsconfig": "^0.7.0",
+    "edgeone": "^1.6.19",
     "sass-embedded": "^1.89.2",
     "typescript": "~5.8.3",
     "vite": "^6.3.5",

@@ -30,6 +30,9 @@
                     <li onclick="User.resetToken()" style="color: red;"><span class="ui zh">退出登录 (所有设备)</span><span class="ui en">Log out (from all devices)</span></li>
                 </ul>
             </div>
+            <div v-if="user.role == 'admin'" onclick="Popup.show('adminPanel')">
+                <img :src="`${baseUrl}res/edit.svg`"><span class="ui zh">管理举报与留言</span><span class="ui en">Moderation</span>
+            </div>
         </div>
         <div v-for="(item, index) in comments" :key="item.source + item.id" class="userCommentItem">
             <p>{{ item.timeStr }}<span>#{{ item.id }}</span></p>

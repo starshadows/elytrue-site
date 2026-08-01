@@ -12,12 +12,6 @@ export default defineConfig({
     }),
   ],
   server: {
-    proxy: {
-      '^/(api|bg|media|res)': {
-        target: 'http://localhost:8001',
-        changeOrigin: true,
-      },
-    },
     allowedHosts: true,
   }
 })

@@ -13,6 +13,8 @@ interface XHRSettings {
 
 const XHR = {
     baseUrl: `${baseUrl}api/`,
+    // Kept as a lightweight UI signal for compatibility with the upstream
+    // components. Authentication itself lives only in the HttpOnly cookie.
     token: '',
 
     send(method: string, url: string, payload?: object, settings?: XHRSettings) {
@@ -29,13 +31,17 @@ const XHR = {
         return new Promise((resolve, reject) => {
             const xhr = new XMLHttpRequest()
             xhr.open(method, this.baseUrl + url)
-
-            if (this.token && settings.includeToken) {
-                xhr.setRequestHeader('Authorization', this.token)
-                xhr.setRequestHeader('token', this.token)
-            }
+            xhr.withCredentials = true
 
             xhr.setRequestHeader('Accept-Language', Settings.lang)
+            if (!['GET', 'HEAD', 'OPTIONS'].includes(method.toUpperCase())) {
+                const csrf = document.cookie
+                    .split(';')
+                    .map(item => item.trim())
+                    .find(item => item.startsWith('elytrue_csrf='))
+                    ?.slice('elytrue_csrf='.length)
+                if (csrf) xhr.setRequestHeader('X-CSRF-Token', decodeURIComponent(csrf))
+            }
 
             if (typeof payload == 'object') {
                 xhr.setRequestHeader("Content-Type", "application/json")
@@ -49,16 +55,21 @@ const XHR = {
                     try {
                         let r = JSON.parse(xhr.responseText)
                         r.code && r.code != 1 && FloatMsgs.show({ type: 'warn', msg: `${r.message} (${r.code})` })
-                        resolve(r)
+                        resolve(method.toUpperCase() == 'GET' && r?.code == 1 ? r.data : r)
                     } catch (error) {
                         resolve(xhr.responseText)
                     }
                 } else {
                     if (xhr.status == 401) this.token = ''
-                    FloatMsgs.show({ type: 'error', msg: `${xhr.responseText} (${xhr.status})` })
+                    let errorMessage = xhr.responseText
                     try {
-                        reject(JSON.parse(xhr.responseText))
+                        const error = JSON.parse(xhr.responseText)
+                        error.status = xhr.status
+                        errorMessage = error.message || errorMessage
+                        FloatMsgs.show({ type: 'error', msg: `${errorMessage} (${xhr.status})` })
+                        reject(error)
                     } catch (error) {
+                        FloatMsgs.show({ type: 'error', msg: `${errorMessage} (${xhr.status})` })
                         reject(xhr)
                     }
                 }

@@ -11,6 +11,19 @@ node_modules
 dist
 dist-ssr
 *.local
+.edgeone
+.env
+.env.*
+!.env.example
+data
+*.db
+*.db-shm
+*.db-wal
+*.sqlite
+*.sqlite3
+backups
+exports
+coverage
 
 # Editor directories and files
 .vscode
