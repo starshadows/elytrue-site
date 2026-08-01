@@ -8,7 +8,8 @@ console.log(`Base URL: "${baseUrl}"`)
 
 
 interface XHRSettings {
-    includeToken: boolean  // default is true
+    includeToken?: boolean  // default is true
+    silentStatuses?: number[]
 }
 
 const XHR = {
@@ -61,15 +62,20 @@ const XHR = {
                     }
                 } else {
                     if (xhr.status == 401) this.token = ''
+                    const shouldNotify = !settings.silentStatuses?.includes(xhr.status)
                     let errorMessage = xhr.responseText
                     try {
                         const error = JSON.parse(xhr.responseText)
                         error.status = xhr.status
                         errorMessage = error.message || errorMessage
-                        FloatMsgs.show({ type: 'error', msg: `${errorMessage} (${xhr.status})` })
+                        if (shouldNotify) {
+                            FloatMsgs.show({ type: 'error', msg: `${errorMessage} (${xhr.status})` })
+                        }
                         reject(error)
                     } catch (error) {
-                        FloatMsgs.show({ type: 'error', msg: `${errorMessage} (${xhr.status})` })
+                        if (shouldNotify) {
+                            FloatMsgs.show({ type: 'error', msg: `${errorMessage} (${xhr.status})` })
+                        }
                         reject(xhr)
                     }
                 }

@@ -19,6 +19,11 @@ import { GallerySwipeController } from "./components/controls/GallerySwiper"
 
 export const STATIC_SHOWCASE_MODE = false
 
+function finishCommentsLoading() {
+    document.getElementById('loadingIndicatorBefore')?.style.setProperty('display', 'none')
+    document.getElementById('loadingIndicator')?.style.setProperty('display', 'none')
+}
+
 export function loadComments(queryObj = {}, keepPosEl = undefined, noKami = false) {
     //if (from == null && time == null) setTodayCommentCount()
 
@@ -36,6 +41,11 @@ export function loadComments(queryObj = {}, keepPosEl = undefined, noKami = fals
 
         // handle empty response
         if (response.length == 0) {
+            if (document.getElementsByClassName('commentItem').length == 0) {
+                finishCommentsLoading()
+                Comments.upToDate = true
+                return
+            }
             if (isCommentsNewer) {
                 console.log('comments are up to date')
                 document.getElementById('loadingIndicatorBefore').style.display = 'none'
@@ -136,8 +146,8 @@ export function loadComments(queryObj = {}, keepPosEl = undefined, noKami = fals
 
         if (debug) console.log('maxID:', getMaxCommentID(), ' minID:', getMinCommentID())
 
-    }).catch(xhr => {
-        if (xhr.status == 401) loadComments()
+    }).catch(() => {
+        finishCommentsLoading()
     })
 }
 
@@ -828,7 +838,7 @@ export const User = {
     },
 
     getMe() {
-        return XHR.get('user/me')
+        return XHR.get('user/me', undefined, { silentStatuses: [401] })
     },
 
     showMe() {
@@ -872,10 +882,10 @@ export const User = {
             XHR.token = ''
             this.LoggedOnUserId = null
 
-            avatar.src = `${baseUrl}api/data/images/defaultAvatar.png`
+            avatar.src = User.convertAvatarPath('')
             name.innerHTML = '<span class="ui zh">访客</span><span class="ui en">Anonymous</span>'
             try {
-                document.getElementById('msgPopupAvatar').src = `${baseUrl}api/data/images/defaultAvatar.png`
+                document.getElementById('msgPopupAvatar').src = User.convertAvatarPath('')
                 document.getElementById('senderText').innerHTML = '<span class="ui zh">匿名用户</span><span class="ui en">Anonymous</span>'
             } catch (error) { }
 
@@ -1450,15 +1460,13 @@ export function setHoverCalendarActiveDay() {
 
 export function setTodayCommentCount() {
     var utc = parseInt(0 - new Date().getTimezoneOffset() / 60)
-    const xhr = new XMLHttpRequest();
-    xhr.open("GET", `${baseUrl}api/comments/count?utc=${utc}`);
-    xhr.onload = () => {
-        if (xhr.status == 200) {
-            document.getElementById('todayCommentCount').innerHTML = xhr.responseText
-            console.log('today comment count:', xhr.responseText)
-        }
-    }
-    xhr.send();
+    XHR.get('comments/count', { utc }).then(count => {
+        const value = Number(count)
+        document.getElementById('todayCommentCount').textContent = Number.isFinite(value) ? String(value) : '0'
+        console.log('today comment count:', value)
+    }).catch(() => {
+        document.getElementById('todayCommentCount').textContent = '0'
+    })
 }
 
 // toggles
