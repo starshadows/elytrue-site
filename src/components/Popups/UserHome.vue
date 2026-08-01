@@ -35,7 +35,7 @@
             </div>
         </div>
         <div v-for="(item, index) in comments" :key="item.source + item.id" class="userCommentItem">
-            <p>{{ item.timeStr }}<span>#{{ item.id }}</span></p>
+            <p>{{ item.timeStr }}<span>#{{ item.displayId ?? item.id }}</span></p>
             <p>
                 <span @click="gotoComment(index)">{{ item.comment }}</span>
                 <i></i>
