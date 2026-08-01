@@ -608,7 +608,7 @@ export const NewMessage = {
         document.getElementById('msgText')?.blur()
         editor.classList.add('closing')
         editor.addEventListener('animationend', finishDismissAnimation)
-        setTimeout(removeEditor, 800)
+        setTimeout(removeEditor, 1200)
 
         document.body.classList.remove('touchKeyboardShowing')
         Comments.forceLowerPanelDown()

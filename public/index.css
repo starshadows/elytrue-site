@@ -973,8 +973,8 @@ body:not(.fullscreen) #lowerPanel.animating:not(.lowerPanelUp) {
 #comments #newCommentBox.closing {
     pointer-events: none;
     animation:
-        newCommentBoxDismiss 0.3s cubic-bezier(0.4, 0, 1, 1) forwards,
-        newCommentBoxCollapse 0.52s cubic-bezier(0.16, 1, 0.3, 1) 0.12s forwards;
+        newCommentBoxDismiss 0.38s cubic-bezier(0.4, 0, 1, 1) forwards,
+        newCommentBoxCollapse 0.78s cubic-bezier(0.2, 0.72, 0.28, 1) 0.14s forwards;
 }
 
 @keyframes newCommentBoxScratch {
