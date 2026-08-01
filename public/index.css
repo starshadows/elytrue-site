@@ -1749,6 +1749,7 @@ body:not(.fullscreen) #lowerPanel.animating:not(.lowerPanelUp) {
 }
 
 .popupItem input[type=text],
+.popupItem input[type=email],
 .popupItem input[type=password] {
     display: block;
     box-sizing: border-box;
@@ -1765,12 +1766,14 @@ body:not(.fullscreen) #lowerPanel.animating:not(.lowerPanelUp) {
 }
 
 .popupItem input[type=text]:hover,
+.popupItem input[type=email]:hover,
 .popupItem input[type=password]:hover {
     background-color: rgba(0, 0, 0, 0.1);
     border-color: rgba(0, 0, 0, 0.4);
 }
 
 .popupItem input[type=text]:focus,
+.popupItem input[type=email]:focus,
 .popupItem input[type=password]:focus {
     outline: none;
     background-color: rgba(0, 0, 0, 0.12);

@@ -45,8 +45,8 @@
             <div class="inputHelperText"><span class="ui zh">邮箱</span><span class="ui en">Email</span></div>
             <input type="email" v-model.trim="regEmail" autocomplete="email">
             <div class="inputHelperText privacy-note">
-                <span class="ui zh">请填写本人长期可用邮箱。邮箱仅用于登录、密码找回和账号安全通知，不会公开展示；填写错误将无法找回密码。</span>
-                <span class="ui en">Use a long-term email address. It is used only for login, password recovery and account security, and is never displayed publicly.</span>
+                <span class="ui zh">请填写本人常用邮箱，仅用于登录和找回密码。</span>
+                <span class="ui en">Use your regular email for login and password recovery.</span>
             </div>
 
             <div class="inputHelperText"><span class="ui zh">密码（至少 8 个字符）</span><span class="ui en">Password (8 characters minimum)</span></div>
@@ -169,7 +169,7 @@ export default {
 
 <style scoped>
 .privacy-note {
-    margin-top: -0.65rem;
+    margin-top: -0.55rem;
     margin-bottom: 1rem;
     line-height: 1.45;
     opacity: 0.78;

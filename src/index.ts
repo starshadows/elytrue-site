@@ -848,7 +848,7 @@ export const User = {
     convertAvatarPath(avatar) {
         return avatar
             ? `${baseUrl}api/data/images/avatars/` + encodeURIComponent(avatar)
-            : `${baseUrl}res/favicon-320.png`
+            : `${baseUrl}res/defaultAvatar.png`
     },
 
     loadUserInfo() {
