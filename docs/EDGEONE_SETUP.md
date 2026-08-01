@@ -29,7 +29,7 @@
 - `elytrue-data`：用户、索引、会话、重置令牌、留言、点赞、举报和元数据。
 - `elytrue-uploads`：头像和留言图片。
 
-创建 KV 绑定，变量名必须为 `ELYTRUE_RATE_LIMIT_KV`。它只保存短期频率计数；未绑定时本地开发会退化为进程内限流，生产部署必须绑定。
+创建 KV 绑定，变量名必须为 `ELYTRUE_RATE_LIMIT_KV`。KV 目前只支持 Edge Functions，因此短期频率计数由根目录 `middleware.js` 在边缘节点执行；Node.js Cloud Functions 仍保留进程内二次限流。未绑定时本地开发会退化为后端进程内限流，生产部署必须绑定。
 
 上传累计值达到参考免费额度 80% 时后台会记录警告；达到 90% 时停止新图片上传，文字留言和读取仍继续。管理员可通过 `GET /api/admin/usage` 检查记录值，并结合 EdgeOne 控制台核对实际用量。
 
