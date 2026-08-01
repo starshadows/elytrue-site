@@ -18,6 +18,8 @@ import ProgressSlider from "./components/controls/ProgressSlider.vue"
 import { GallerySwipeController } from "./components/controls/GallerySwiper"
 
 export const STATIC_SHOWCASE_MODE = false
+const TIMELINE_START_DATE = new Date(2026, 7, 1)
+const TIMELINE_START_MS = TIMELINE_START_DATE.getTime()
 
 function finishCommentsLoading() {
     document.getElementById('loadingIndicatorBefore')?.style.setProperty('display', 'none')
@@ -34,7 +36,7 @@ export function loadComments(queryObj = {}, keepPosEl = undefined, noKami = fals
         ? (queryObj.from < getMinKamiID())
         : (queryObj.from < getMinCommentID())
 
-    XHR.get("comments", queryObj).then(response => {
+    return XHR.get("comments", queryObj).then(response => {
 
         if (debug) console.log(queryObj)
         if (debug) console.log('isNewer:', isCommentsNewer, ' isOlder:', isCommentsOlder, ' length:', response.length)
@@ -52,7 +54,7 @@ export function loadComments(queryObj = {}, keepPosEl = undefined, noKami = fals
                 Comments.upToDate = true
                 return
             }
-            if (isCommentsOlder && queryObj.db == 'kami') {
+            if (isCommentsOlder) {
                 console.log('reached the oldest comment')
                 document.getElementById('loadingIndicator').style.display = 'none'
                 return
@@ -144,6 +146,12 @@ export function loadComments(queryObj = {}, keepPosEl = undefined, noKami = fals
 
         setTimelineActiveMonth(true)
 
+        document.getElementById('loadingIndicatorBefore')?.style.setProperty('display', 'none')
+        const requestedCount = Math.min(100, Math.max(1, Math.abs(Number(queryObj.count ?? 30))))
+        if (!isCommentsNewer && response.length < requestedCount) {
+            document.getElementById('loadingIndicator')?.style.setProperty('display', 'none')
+        }
+
         if (debug) console.log('maxID:', getMaxCommentID(), ' minID:', getMinCommentID())
 
     }).catch(() => {
@@ -229,6 +237,7 @@ export function insertComment(comment, isKami = false) {
         commentExtra = '<br><div class="reply-quote"></div>' + commentExtra
     }
 
+    const displayId = isKami ? comment.id : (comment.displayId ?? comment.id)
     let commentEl = html2elmnt(/*html*/`
         <div class="commentBox commentItem${comment.hidden ? ' hidden' : ''}" ${isKami == true ? `data-kamiid="#${comment.id}"` : `id="#${comment.id}"`} data-timestamp="${comment.time}">
             <img class="bg" loading="lazy" src="${msgBgInfo[randBG - 1].src}" ${(comment.hidden == 1) ? 'style="display: none;"' : ''}>
@@ -237,7 +246,7 @@ export function insertComment(comment, isKami = false) {
             <div class="sender" onclick="this.previousElementSibling.click()">
                 ${comment.sender == '匿名用户' ? '<span class="ui zh">匿名用户</span><span class="ui en">Anonymous</span>' : htmlEscape(comment.sender)}
             </div>
-            <div class="id">#${comment.id}${isKami == true ? ' (kami.im)' : ''}</div>
+            <div class="id">#${displayId}${isKami == true ? ' (kami.im)' : ''}</div>
             <div class="comment">${htmlEscape(comment.comment)}${commentExtra}</div>
             <div class="time">${date + ' ' + hour}${(comment.hidden == 1) ? ' (hidden)' : ''}</div>
             <div class="action" ${isKami ? 'style="display: none"' : ''}>
@@ -335,7 +344,7 @@ export function initCommentReplyQuote(el, id, params) {
                 <div class="quote-head">
                     <img class="quote-avatar" src="${User.convertAvatarPath(comment.avatar)}">
                     <div class="quote-sender">${htmlEscape(comment.sender)}</div>
-                    <div class="quote-id">#${comment.id}</div>
+                    <div class="quote-id">#${comment.displayId ?? comment.id}</div>
                 </div>
                 <div class="quote-body">${htmlEscape(comment.comment)}</div>
             </div>
@@ -613,7 +622,7 @@ export const NewMessage = {
             document.getElementById('sendBtn').innerHTML = '<span class="ui zh">发送成功!</span><span class="ui en">Sent!</span>'
             setTimeout(() => {
                 clearComments()
-                loadComments()
+                loadComments().finally(finishCommentsLoading)
             }, 1000);
         }).catch(() => {
             window.alert('发送留言失败，请确认本地后端仍在运行后重试。\n\nFailed to send the message. Please make sure the local backend is running and try again.')
@@ -977,7 +986,7 @@ export function showUserComment(user, avatar, uid) {
 
                 userCommentEl.appendChild(html2elmnt(/*html*/`
                     <div class="userCommentItem">
-                        <p>${date + ' ' + hour}<span>#${comment.id}</span></p>
+                        <p>${date + ' ' + hour}<span>#${userCommentIsKami ? comment.id : (comment.displayId ?? comment.id)}</span></p>
                         <p>
                             <span onclick='clearComments(1); loadComments({ from: ${comment.id}${userCommentIsKami == true ? `, db: "kami"` : ``} }); closePopup()'
                                 >${htmlEscape(comment.comment)}</span>
@@ -1374,29 +1383,20 @@ export function loadTimeline(timeStamp) {
 
     var timelineEl = document.getElementById('timeline')
     timelineEl.innerHTML = ''
-    var date = new Date(timeStamp * 1000)
+    var date = new Date(Math.max(timeStamp * 1000, TIMELINE_START_MS))
     date.setDate(1)
+    date.setHours(0, 0, 0, 0)
 
-    while (date.getFullYear() >= 2019) {
-
+    while (date.getTime() >= TIMELINE_START_MS) {
         var yearEl = document.createElement('p')
-        yearEl.appendChild(html2elmnt(`<strong>${date.getFullYear()}</strong>`))
+        const year = date.getFullYear()
+        yearEl.appendChild(html2elmnt(`<strong>${year}</strong>`))
 
-        while (true) {
+        while (date.getFullYear() === year && date.getTime() >= TIMELINE_START_MS) {
             yearEl.appendChild(html2elmnt(`<span>${date.getMonth() + 1}</span>`))
-
-            if (date.getFullYear() == 2019 && date.getMonth() + 1 == 2) {
-                date.setFullYear(2011)
-                break
-            } else if (date.getMonth() == 0) {
-                break
-            } else {
-                date.setMonth(date.getMonth() - 1)
-            }
+            date.setMonth(date.getMonth() - 1)
         }
         timelineEl.appendChild(yearEl)
-
-        date.setMonth(date.getMonth() - 1)
     }
 }
 
@@ -2112,11 +2112,12 @@ document.getElementById('timelineContainer').addEventListener('click', (event) =
         if (event.target.classList[0] == 'month-active') return
         var year = parseInt(event.target.parentNode.firstElementChild.innerHTML)
         var month = parseInt(event.target.innerHTML)
-        var date = new Date(year, month - 1)
+        var date = new Date(year, month, 0, 23, 59, 59, 999)
     } else if (event.target.hasAttribute('data-time')) {
         var date = new Date(event.target.dataset.time)
+        date.setHours(23, 59, 59, 999)
     } else return
-    var timestamp = date.getTime() / 1000
+    var timestamp = Math.min(date.getTime(), maxTimelineTime * 1000) / 1000
     //console.log(timestamp)
     clearComments(1)
     if (timestamp <= 1684651800) {
@@ -2156,8 +2157,9 @@ document.getElementById('timelineContainer').addEventListener('mouseover', (even
         var month = parseInt(event.target.innerHTML)
         hoverCalendarEl.appendChild(html2elmnt(`<div>${year}-${('0' + month).slice(-2)}${(year <= 2022 || (year == 2023 && month <= 5)) ? ' (kami.im)' : ''}</div>`))
         for (let i = 1; i <= new Date(year, month, 0).getDate(); i++) {
-            if (new Date(year, month - 1, i).getTime() / 1000 < maxTimelineTime)
-                hoverCalendarEl.appendChild(html2elmnt(`<div data-time="${new Date(year, month - 1, i).toDateString()}">${i}</div>`))
+            const day = new Date(year, month - 1, i)
+            if (day.getTime() >= TIMELINE_START_MS && day.getTime() / 1000 < maxTimelineTime)
+                hoverCalendarEl.appendChild(html2elmnt(`<div data-time="${day.toDateString()}">${i}</div>`))
         }
         setHoverCalendarActiveDay()
     } else if (event.target.nodeName == 'STRONG') {

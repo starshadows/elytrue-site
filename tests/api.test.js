@@ -237,6 +237,7 @@ describe('EdgeOne comments, uploads and moderation API', () => {
     it('stores plain text, serves comment images and makes likes idempotent', async () => {
         const listed = await call(state, 'GET', `comments?from=${commentId}&count=1`)
         assert.equal(listed.payload.data[0].comment, '<b>愿花与星辉伴你同行</b>')
+        assert.equal(listed.payload.data[0].displayId, 1)
         assert.equal(listed.payload.data[0].likes, 0)
         const imageId = listed.payload.data[0].image
 
@@ -249,6 +250,11 @@ describe('EdgeOne comments, uploads and moderation API', () => {
         const liked = await call(state, 'GET', `comments?from=${commentId}&count=1`)
         assert.equal(liked.payload.data[0].likes, 1)
         assert.equal(liked.payload.data[0].liked, true)
+
+        const second = await call(state, 'POST', 'comments/post', { comment: '第二条留言' })
+        assert.equal(second.response.status, 201)
+        const newest = await call(state, 'GET', 'comments?count=2')
+        assert.deepEqual(newest.payload.data.map(comment => comment.displayId), [2, 1])
     })
 
     it('accepts reports and permanently closes the first-admin bootstrap', async () => {

@@ -62,13 +62,25 @@ async function decorateComment(data, comment, user) {
 
 export async function listComments(data, query, viewer) {
     const blobs = await listAll(data, 'comments/', 5000)
-    let comments = []
+    const allComments = []
     for (const blob of blobs) {
         const comment = await getJSON(data, blob.key)
         if (!comment) continue
-        if (comment.hidden && viewer?.role !== 'admin' && viewer?.id !== comment.uid) continue
-        comments.push(comment)
+        allComments.push(comment)
     }
+
+    const displayIds = new Map(
+        [...allComments]
+            .sort((a, b) =>
+                (a.createdAt || a.time * 1000) - (b.createdAt || b.time * 1000)
+                || a.id - b.id
+            )
+            .map((comment, index) => [comment.id, index + 1])
+    )
+
+    let comments = allComments.filter(
+        comment => !comment.hidden || viewer?.role === 'admin' || viewer?.id === comment.uid
+    )
     comments.sort((a, b) => b.id - a.id)
 
     const uid = query.get('uid')
@@ -96,7 +108,10 @@ export async function listComments(data, query, viewer) {
             comments = comments.slice(0, count)
         }
     }
-    return Promise.all(comments.map(comment => decorateComment(data, comment, viewer)))
+    return Promise.all(comments.map(comment => decorateComment(data, {
+        ...comment,
+        displayId: displayIds.get(comment.id),
+    }, viewer)))
 }
 
 export async function setLike(data, commentId, user, liked) {
