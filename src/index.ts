@@ -591,7 +591,25 @@ export const NewMessage = {
     },
 
     cancel() {
-        document.getElementById('newCommentBox')?.remove()
+        const editor = document.getElementById('newCommentBox')
+        if (!editor || editor.classList.contains('closing')) return
+
+        const removeEditor = () => {
+            if (!editor.isConnected) return
+            editor.remove()
+        }
+        const finishDismissAnimation = event => {
+            if (event.target !== editor || event.animationName !== 'newCommentBoxDismiss') return
+            editor.removeEventListener('animationend', finishDismissAnimation)
+            removeEditor()
+        }
+
+        editor.querySelectorAll('button').forEach(button => button.disabled = true)
+        document.getElementById('msgText')?.blur()
+        editor.classList.add('closing')
+        editor.addEventListener('animationend', finishDismissAnimation)
+        setTimeout(removeEditor, 500)
+
         document.body.classList.remove('touchKeyboardShowing')
         Comments.forceLowerPanelDown()
     },
