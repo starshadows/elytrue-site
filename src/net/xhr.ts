@@ -17,6 +17,7 @@ const XHR = {
     // Kept as a lightweight UI signal for compatibility with the upstream
     // components. Authentication itself lives only in the HttpOnly cookie.
     token: '',
+    csrfToken: '',
 
     send(method: string, url: string, payload?: object, settings?: XHRSettings) {
         settings = (() => {
@@ -36,12 +37,7 @@ const XHR = {
 
             xhr.setRequestHeader('Accept-Language', Settings.lang)
             if (!['GET', 'HEAD', 'OPTIONS'].includes(method.toUpperCase())) {
-                const csrf = document.cookie
-                    .split(';')
-                    .map(item => item.trim())
-                    .find(item => item.startsWith('elytrue_csrf='))
-                    ?.slice('elytrue_csrf='.length)
-                if (csrf) xhr.setRequestHeader('X-CSRF-Token', decodeURIComponent(csrf))
+                if (this.csrfToken) xhr.setRequestHeader('X-CSRF-Token', this.csrfToken)
             }
 
             if (typeof payload == 'object') {
@@ -55,13 +51,19 @@ const XHR = {
                 if (xhr.status < 400) {
                     try {
                         let r = JSON.parse(xhr.responseText)
+                        if (typeof r?.data?.csrfToken == 'string') {
+                            this.csrfToken = r.data.csrfToken
+                        }
                         r.code && r.code != 1 && FloatMsgs.show({ type: 'warn', msg: `${r.message} (${r.code})` })
                         resolve(method.toUpperCase() == 'GET' && r?.code == 1 ? r.data : r)
                     } catch (error) {
                         resolve(xhr.responseText)
                     }
                 } else {
-                    if (xhr.status == 401) this.token = ''
+                    if (xhr.status == 401) {
+                        this.token = ''
+                        this.csrfToken = ''
+                    }
                     const shouldNotify = !settings.silentStatuses?.includes(xhr.status)
                     let errorMessage = xhr.responseText
                     try {

@@ -772,6 +772,7 @@ export const User = {
     init() {
         // The session token is an HttpOnly cookie and is never exposed to JS.
         XHR.token = ''
+        XHR.csrfToken = ''
         this.loadUserInfo()
     },
 
@@ -856,7 +857,7 @@ export const User = {
         var avatar = document.getElementById('userInfoAvatar')
         var name = document.getElementById('userInfoName')
 
-        User.getMe().then(r => {
+        return User.getMe().then(r => {
                 XHR.token = 'session'
                 this.LoggedOnUserId = r.id
 
@@ -878,8 +879,10 @@ export const User = {
                 }
                 userInfo.onclick = () => this.showMe()
                 userInfo.classList.remove('nologin')
+                return true
             }).catch(() => {
             XHR.token = ''
+            XHR.csrfToken = ''
             this.LoggedOnUserId = null
 
             avatar.src = User.convertAvatarPath('')
@@ -891,12 +894,14 @@ export const User = {
 
             userInfo.onclick = () => Popup.show('loginPopup')
             userInfo.classList.add('nologin')
+            return false
         })
     },
 
     logout() {
         XHR.post('user/logout').finally(() => {
             XHR.token = ''
+            XHR.csrfToken = ''
             closePopup()
             setTimeout(loadUserInfo, 0)
         })
@@ -905,6 +910,7 @@ export const User = {
     resetToken() {
         XHR.post('user/resettoken').finally(() => {
             XHR.token = ''
+            XHR.csrfToken = ''
             closePopup()
             setTimeout(loadUserInfo, 0)
         })

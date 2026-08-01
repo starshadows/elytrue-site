@@ -101,10 +101,18 @@ export default {
 
     methods: {
         finish(message) {
-            XHR.token = 'session'
-            this.$emit('close')
-            loadUserInfo()
-            FloatMsgs.show({ type: 'success', msg: message })
+            return loadUserInfo().then(loggedIn => {
+                if (!loggedIn) {
+                    FloatMsgs.show({
+                        type: 'error',
+                        msg: '<span class="ui zh">登录状态未能保存，请重试</span><span class="ui en">The session could not be saved. Please try again.</span>',
+                    })
+                    return false
+                }
+                this.$emit('close')
+                FloatMsgs.show({ type: 'success', msg: message })
+                return true
+            })
         },
 
         login() {
@@ -115,7 +123,7 @@ export default {
                 password: this.loginPassword,
             }).then(r => {
                 if (r.code == 1) {
-                    this.finish('<span class="ui zh">登录成功</span><span class="ui en">Logged in</span>')
+                    return this.finish('<span class="ui zh">登录成功</span><span class="ui en">Logged in</span>')
                 }
             }).finally(() => {
                 this.busy = false
@@ -131,7 +139,7 @@ export default {
                 password: this.regPassword,
             }).then(r => {
                 if (r.code == 1) {
-                    this.finish('<span class="ui zh">注册成功，欢迎来到星花札记</span><span class="ui en">Registration successful</span>')
+                    return this.finish('<span class="ui zh">注册成功，欢迎来到星花札记</span><span class="ui en">Registration successful</span>')
                 }
             }).finally(() => {
                 this.busy = false

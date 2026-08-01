@@ -16,6 +16,7 @@ function createState(ip = '127.0.0.1') {
     return {
         ip,
         jar: new Map(),
+        csrfToken: '',
         stores: {
             data: new MemoryStore(),
             uploads: new MemoryStore(),
@@ -42,8 +43,8 @@ async function call(state, method, path, body, options = {}) {
     if (state.jar.size) {
         headers.set('Cookie', [...state.jar].map(([key, value]) => `${key}=${encodeURIComponent(value)}`).join('; '))
     }
-    if (!['GET', 'HEAD', 'OPTIONS'].includes(method) && state.jar.has('elytrue_csrf')) {
-        headers.set('X-CSRF-Token', state.jar.get('elytrue_csrf'))
+    if (!['GET', 'HEAD', 'OPTIONS'].includes(method) && state.csrfToken) {
+        headers.set('X-CSRF-Token', state.csrfToken)
     }
     let requestBody
     if (body !== undefined) {
@@ -64,6 +65,9 @@ async function call(state, method, path, body, options = {}) {
     const payload = response.headers.get('content-type')?.includes('application/json')
         ? await response.json()
         : null
+    if (typeof payload?.data?.csrfToken === 'string') {
+        state.csrfToken = payload.data.csrfToken
+    }
     return { response, payload }
 }
 
@@ -98,7 +102,9 @@ describe('EdgeOne account and session API', () => {
         assert.equal(payload.data.name, '星花旅人')
         assert.equal(payload.data.email, 'owner@example.com')
         assert.ok(state.jar.has('elytrue_session'))
-        assert.ok(state.jar.has('elytrue_csrf'))
+        assert.equal(state.jar.has('elytrue_csrf'), false)
+        assert.match(state.csrfToken, /^[a-zA-Z0-9_-]+$/u)
+        assert.equal(response.headers.getSetCookie().length, 1)
     })
 
     it('rejects duplicate usernames and emails case-insensitively', async () => {
@@ -145,10 +151,12 @@ describe('EdgeOne account and session API', () => {
     })
 
     it('keeps private profile behind the HttpOnly session cookie', async () => {
+        state.csrfToken = ''
         const me = await call(state, 'GET', 'user/me')
         assert.equal(me.response.status, 200)
         assert.equal(me.payload.data.email, 'owner@example.com')
         assert.equal(me.payload.data.hasEmail, true)
+        assert.match(state.csrfToken, /^[a-zA-Z0-9_-]+$/u)
     })
 
     it('sends a one-time reset link and revokes old sessions after use', async () => {
@@ -276,7 +284,7 @@ describe('EdgeOne comments, uploads and moderation API', () => {
             Origin: 'https://evil.example',
             'Content-Type': 'application/json',
             Cookie: [...state.jar].map(([key, value]) => `${key}=${encodeURIComponent(value)}`).join('; '),
-            'X-CSRF-Token': state.jar.get('elytrue_csrf'),
+            'X-CSRF-Token': state.csrfToken,
         })
         const response = await handleApiRequest({
             request: new Request(`${origin}/api/comments/post`, {

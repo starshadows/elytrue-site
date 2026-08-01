@@ -47,6 +47,7 @@ export default {
                     if (r.code == 1) {
                         this.$emit('close')
                         XHR.token = ''
+                        XHR.csrfToken = ''
                         loadUserInfo()
                         FloatMsgs.show({ type: 'success', msg: '<span class="ui zh">密码修改成功，请重新登录</span><span class="ui en">Password updated. Please log in again.</span>' })
                     }

@@ -51,6 +51,13 @@ function envFor(context) {
     return context.env || process.env
 }
 
+function authenticatedProfile(user, env, session) {
+    return {
+        ...privateProfile(user, env),
+        csrfToken: session.csrfToken,
+    }
+}
+
 function clientIdentity(context, suffix = '') {
     const ip = context.clientIp
         || context.request.headers.get('cf-connecting-ip')
@@ -122,8 +129,8 @@ async function register(context, stores) {
         email: body.email,
         password: body.password,
     })
-    const { cookies } = await createSession(stores.data, user, context.request)
-    return apiResponse(privateProfile(user, envFor(context)), {
+    const { session, cookies } = await createSession(stores.data, user, context.request)
+    return apiResponse(authenticatedProfile(user, envFor(context), session), {
         status: 201,
         message: '注册成功',
         cookies,
@@ -136,8 +143,8 @@ async function login(context, stores) {
     const identifier = body.identifier || body.email || body.name || ''
     await enforceRateLimit('login', clientIdentity(context, String(identifier).toLowerCase()))
     const user = await authenticateUser(stores.data, envFor(context), identifier, body.password || '')
-    const { cookies } = await createSession(stores.data, user, context.request)
-    return apiResponse(privateProfile(user, envFor(context)), {
+    const { session, cookies } = await createSession(stores.data, user, context.request)
+    return apiResponse(authenticatedProfile(user, envFor(context), session), {
         message: '登录成功',
         cookies,
     })
@@ -153,7 +160,7 @@ async function logout(context, stores, allDevices = false) {
 
 async function getMe(context, stores) {
     const auth = await requireSession(stores.data, context.request, { csrf: false })
-    return apiResponse(privateProfile(auth.user, envFor(context)), {
+    return apiResponse(authenticatedProfile(auth.user, envFor(context), auth.session), {
         cookies: auth.refreshCookies,
     })
 }

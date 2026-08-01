@@ -121,6 +121,7 @@ export async function createSession(data, user, request) {
     const session = {
         userId: user.id,
         tokenHash,
+        csrfToken: csrf,
         csrfHash: sha256(csrf),
         version: user.sessionVersion,
         createdAt: now,
@@ -133,7 +134,6 @@ export async function createSession(data, user, request) {
         session,
         cookies: [
             cookie('elytrue_session', token, { maxAge: SESSION_SECONDS, secure }),
-            cookie('elytrue_csrf', csrf, { maxAge: SESSION_SECONDS, secure, httpOnly: false }),
         ],
     }
 }
@@ -154,21 +154,27 @@ export async function getSession(data, request, { slide = true } = {}) {
         return null
     }
 
+    let shouldPersist = false
+    if (!session.csrfToken || sha256(session.csrfToken) !== session.csrfHash) {
+        const legacyCsrf = cookies.elytrue_csrf || ''
+        session.csrfToken = legacyCsrf && sha256(legacyCsrf) === session.csrfHash
+            ? legacyCsrf
+            : randomToken(24)
+        session.csrfHash = sha256(session.csrfToken)
+        shouldPersist = true
+    }
+
     let refreshCookies = []
     if (slide && Date.now() - session.lastSeenAt > 24 * 60 * 60 * 1000) {
         session.lastSeenAt = Date.now()
         session.expiresAt = Date.now() + SESSION_SECONDS * 1000
-        await data.setJSON(`sessions/${tokenHash}.json`, session)
+        shouldPersist = true
         const secure = new URL(request.url).protocol === 'https:'
         refreshCookies = [
             cookie('elytrue_session', token, { maxAge: SESSION_SECONDS, secure }),
-            cookie('elytrue_csrf', cookies.elytrue_csrf || '', {
-                maxAge: SESSION_SECONDS,
-                secure,
-                httpOnly: false,
-            }),
         ]
     }
+    if (shouldPersist) await data.setJSON(`sessions/${tokenHash}.json`, session)
     return { session, user, tokenHash, cookies, refreshCookies }
 }
 
@@ -177,8 +183,11 @@ export async function requireSession(data, request, { csrf = true } = {}) {
     if (!auth) throw httpError(401, '请先登录')
     if (csrf) {
         const csrfHeader = request.headers.get('x-csrf-token') || ''
-        const csrfCookie = auth.cookies.elytrue_csrf || ''
-        if (!csrfHeader || !csrfCookie || sha256(csrfHeader) !== auth.session.csrfHash || csrfHeader !== csrfCookie) {
+        if (
+            !csrfHeader
+            || csrfHeader !== auth.session.csrfToken
+            || sha256(csrfHeader) !== auth.session.csrfHash
+        ) {
             throw httpError(403, '安全校验失败，请刷新页面后重试')
         }
     }
@@ -190,7 +199,6 @@ export async function destroySession(data, request, auth) {
     const secure = new URL(request.url).protocol === 'https:'
     return [
         cookie('elytrue_session', '', { maxAge: 0, secure }),
-        cookie('elytrue_csrf', '', { maxAge: 0, secure, httpOnly: false }),
     ]
 }
 
