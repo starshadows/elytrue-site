@@ -1,24 +1,16 @@
 import { getConfig, setConfig } from "./config"
 import { lang, changeLang } from "./lang"
-import { html2elmnt, logErr, loadComments, clearComments } from ".."
-
-declare const Comments: typeof import('..').Comments
+import { html2elmnt, logErr } from ".."
 
 
 const Settings = {
-    elements: {
-        showKami: document.getElementById('showKami') as HTMLInputElement,
-    },
+    elements: {},
 
     init() {
         this.load()
-
-        this.elements.showKami.onchange = () => this.showKami = this.elements.showKami.checked
     },
 
     load() {
-        if (getConfig('showKami') == 'true') this.showKami = true
-
         changeLang(getConfig('lang'))
 
         if (Settings.graphicsMode != 'high') {
@@ -35,17 +27,10 @@ const Settings = {
     },
 
     get showKami() {
-        return this.elements.showKami.checked
+        return false
     },
-    set showKami(value) {
-        this.elements.showKami.checked = value
-        setConfig('showKami', value)
-        setTimeout(() => {
-            if (Comments.hasItem()) {
-                clearComments()
-                loadComments()
-            }
-        }, 0);
+    set showKami(_value) {
+        setConfig('showKami', false)
     },
 
     get showHidden() {

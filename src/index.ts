@@ -497,7 +497,10 @@ export const NewMessage = {
                     <input id="uploadImgPicker" type="file" accept="image/*" onchange="previewLocalImgs()" multiple style="display: none;" />
                     <span><span class="ui zh">+ 添加图片</span><span class="ui en">+ Add images</span></span>
                 </label>
-                <button id="sendBtn" onclick="sendMessage()"><span class="ui zh">发送 ✔</span><span class="ui en">Send ✔</span></button>
+                <div class="messageActions">
+                    <button id="cancelSendBtn" onclick="cancelMessage()"><span class="ui zh">取消发送</span><span class="ui en">Cancel</span></button>
+                    <button id="sendBtn" onclick="sendMessage()"><span class="ui zh">发送 ✔</span><span class="ui en">Send ✔</span></button>
+                </div>
             </div>
         `), commentDiv.firstElementChild)
 
@@ -587,6 +590,12 @@ export const NewMessage = {
         return message
     },
 
+    cancel() {
+        document.getElementById('newCommentBox')?.remove()
+        document.body.classList.remove('touchKeyboardShowing')
+        Comments.forceLowerPanelDown()
+    },
+
     send() {
         if (!XHR.token) {
             Popup.show('loginPopup')
@@ -633,6 +642,7 @@ export const NewMessage = {
 }
 
 export var newComment = NewMessage.show.bind(NewMessage)
+export var cancelMessage = NewMessage.cancel.bind(NewMessage)
 export var sendMessage = NewMessage.send.bind(NewMessage)
 export var previewLocalImgs = NewMessage.previewLocalImgs.bind(NewMessage)
 
@@ -1194,15 +1204,6 @@ export const Theme = {
 
             if (theme == 'kami') {
                 printParaCharOneByOne(document.getElementsByClassName('kamiCaption')[0], 750)
-                if (!Settings.showKami) {
-                    Settings.elements.showKami.checked = true
-                    setTimeout(() => {
-                        if (Comments.hasItem()) {
-                            clearComments()
-                            loadComments()
-                        }
-                    }, 0);
-                }
             }
         } catch (error) {
             logErr(error, 'failed to init theme-specific options')
