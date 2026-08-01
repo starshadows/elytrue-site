@@ -972,7 +972,9 @@ body:not(.fullscreen) #lowerPanel.animating:not(.lowerPanelUp) {
 
 #comments #newCommentBox.closing {
     pointer-events: none;
-    animation: newCommentBoxDismiss 0.36s cubic-bezier(0.4, 0, 1, 1) forwards;
+    animation:
+        newCommentBoxDismiss 0.3s cubic-bezier(0.4, 0, 1, 1) forwards,
+        newCommentBoxCollapse 0.52s cubic-bezier(0.16, 1, 0.3, 1) 0.12s forwards;
 }
 
 @keyframes newCommentBoxScratch {
@@ -1007,6 +1009,14 @@ body:not(.fullscreen) #lowerPanel.animating:not(.lowerPanelUp) {
     to {
         opacity: 0;
         transform: translateY(0.75rem) scale(0.9);
+    }
+}
+
+@keyframes newCommentBoxCollapse {
+    to {
+        width: 0;
+        max-width: 0;
+        margin-right: 0;
     }
 }
 

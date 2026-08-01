@@ -599,7 +599,7 @@ export const NewMessage = {
             editor.remove()
         }
         const finishDismissAnimation = event => {
-            if (event.target !== editor || event.animationName !== 'newCommentBoxDismiss') return
+            if (event.target !== editor || event.animationName !== 'newCommentBoxCollapse') return
             editor.removeEventListener('animationend', finishDismissAnimation)
             removeEditor()
         }
@@ -608,7 +608,7 @@ export const NewMessage = {
         document.getElementById('msgText')?.blur()
         editor.classList.add('closing')
         editor.addEventListener('animationend', finishDismissAnimation)
-        setTimeout(removeEditor, 500)
+        setTimeout(removeEditor, 800)
 
         document.body.classList.remove('touchKeyboardShowing')
         Comments.forceLowerPanelDown()
