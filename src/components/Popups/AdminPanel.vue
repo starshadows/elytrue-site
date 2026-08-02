@@ -13,7 +13,7 @@
 
         <article v-for="report in reports" :key="report.id || `${report.commentId}-${report.userId}`">
             <header>
-                <b>#{{ report.commentId }}</b>
+                <b>#{{ report.displayId ?? report.commentId }}</b>
                 <time>{{ new Date(report.createdAt).toLocaleString() }}</time>
             </header>
             <p>{{ report.reason }}</p>

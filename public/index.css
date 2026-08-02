@@ -946,6 +946,21 @@ body:not(.fullscreen) #lowerPanel.animating:not(.lowerPanelUp) {
     animation: showFavoriteHeart 0.3s;
 }
 
+#comments .commentBox .action .btn.busy {
+    pointer-events: none;
+    opacity: 0.55;
+}
+
+#comments .commentBox .action .btn.report {
+    color: #8d6e83;
+    font-size: 0.8em;
+    align-items: center;
+}
+
+#comments .commentBox .action .btn.report:hover {
+    color: #a5163a;
+}
+
 @keyframes showFavoriteHeart {
     0% {
         opacity: 0;

@@ -238,6 +238,7 @@ export function insertComment(comment, isKami = false) {
     }
 
     const displayId = isKami ? comment.id : (comment.displayId ?? comment.id)
+    const canReport = !isKami && User.LoggedOnUserId != null && User.LoggedOnUserId != comment.uid
     let commentEl = html2elmnt(/*html*/`
         <div class="commentBox commentItem${comment.hidden ? ' hidden' : ''}" ${isKami == true ? `data-kamiid="#${comment.id}"` : `id="#${comment.id}"`} data-timestamp="${comment.time}">
             <img class="bg" loading="lazy" src="${msgBgInfo[randBG - 1].src}" ${(comment.hidden == 1) ? 'style="display: none;"' : ''}>
@@ -254,6 +255,7 @@ export function insertComment(comment, isKami = false) {
                     <span class="like-count"></span>
                 </span>
                 <img class="btn reply" src="${baseUrl}res/reply.svg">
+                ${canReport ? '<span class="btn report"><span class="ui zh">举报</span><span class="ui en">Report</span></span>' : ''}
             </div>
         </div>
     `)
@@ -281,6 +283,11 @@ export function insertComment(comment, isKami = false) {
         /** @type {HTMLDivElement} */
         replyQuote: commentEl.querySelector('.reply-quote'),
 
+        likeBusy: false,
+        /** 点击时的服务端快照,失败时回滚用 */
+        lastKnownLiked: comment.liked,
+        lastKnownLikes: comment.likes,
+
         get liked() { return this.likeBtn.classList.contains('liked') },
         set liked(value) {
             value
@@ -298,20 +305,70 @@ export function insertComment(comment, isKami = false) {
             this.liked = comment.liked
             this.likes = comment.likes
 
-            this.likeBtn.onclick = () => {
-                (this.liked
-                    ? XHR.delete(`comments/like?commentId=${comment.id}`)
-                    : XHR.post(`comments/like?commentId=${comment.id}`)
-                ).then(() => {
-                    XHR.get('comments', { from: comment.id, count: 1 }).then(r => {
+            this.likeBtn.onclick = async () => {
+                if (this.likeBusy) return
+                if (!await User.ensureLoggedIn()) return
+                this.likeBusy = true
+                this.likeBtn.classList.add('busy')
+                this.lastKnownLiked = this.liked
+                this.lastKnownLikes = this.likes
+
+                try {
+                    await (this.liked
+                        ? XHR.delete(`comments/like?commentId=${comment.id}`)
+                        : XHR.post(`comments/like?commentId=${comment.id}`)
+                    )
+                    const r = await XHR.get('comments', { from: comment.id, count: 1 })
+                    if (r[0]) {
+                        // 以服务器返回状态为准
                         this.liked = r[0].liked
                         this.likes = r[0].likes
-                    })
-                })
+                    }
+                } catch (error) {
+                    // 失败时回滚到点击前状态
+                    this.liked = this.lastKnownLiked
+                    this.likes = this.lastKnownLikes
+                } finally {
+                    this.likeBusy = false
+                    this.likeBtn.classList.remove('busy')
+                }
             }
 
-            this.replyBtn.onclick = () => {
-                NewMessage.reply(comment.id)
+            this.replyBtn.onclick = async () => {
+                if (!await User.ensureLoggedIn()) return
+                NewMessage.reply(comment.number ?? comment.id)
+            }
+
+            const reportBtn = commentEl.querySelector('.btn.report')
+            if (reportBtn) {
+                reportBtn.onclick = async () => {
+                    if (!await User.ensureLoggedIn()) return
+                    Popup.show('promptInputPopup', {
+                        title: /*html*/`
+                            <span class="ui zh">举报留言 #${displayId}</span>
+                            <span class="ui en">Report message #${displayId}</span>
+                        `,
+                        subtitle: /*html*/`
+                            <span class="ui zh">请简要描述举报原因,管理员核实后会处理。</span>
+                            <span class="ui en">Please describe the reason briefly. Moderators will review it.</span>
+                        `,
+                        action(reason) {
+                            this.disabled = true
+                            XHR.post('comments/report', { commentId: comment.id, reason }).then(r => {
+                                if (r.code == 1) {
+                                    this.$emit('close')
+                                    FloatMsgs.show({
+                                        type: 'success', persist: true, msg: /*html*/`
+                                        <span class="ui zh">举报已提交,感谢反馈</span>
+                                        <span class="ui en">Report submitted. Thank you.</span>`
+                                    })
+                                }
+                            }).finally(() => {
+                                this.disabled = false
+                            })
+                        },
+                    })
+                }
             }
 
             if (comment.replyid) {
@@ -356,7 +413,7 @@ export function initCommentReplyQuote(el, id, params) {
             el.classList.add('clickable')
             el.onclick = () => {
                 clearComments(1)
-                loadComments({ from: comment.id })
+                loadComments({ number: comment.number ?? comment.id })
             }
         }
 
@@ -614,11 +671,8 @@ export const NewMessage = {
         Comments.forceLowerPanelDown()
     },
 
-    send() {
-        if (!XHR.token) {
-            Popup.show('loginPopup')
-            return
-        }
+    async send() {
+        if (!await User.ensureLoggedIn()) return
         let replyid = this.getReplyId()
         let msg = this.getNewMessage()
 
@@ -639,23 +693,36 @@ export const NewMessage = {
         document.getElementById('sendBtn').disabled = true;
         document.getElementById('sendBtn').innerHTML = '<span class="ui zh">正在发送…</span><span class="ui en">Sending…</span>'
 
-        Promise.all(imgList.map(image => XHR.post('uploads/image', { image })))
-        .then(results => XHR.post('comments/post', {
-            "comment": msg,
-            imageKeys: results.map(result => result.data.imageId),
-            replyid,
-        })).then(r => {
-            console.log(r);
-            document.getElementById('sendBtn').innerHTML = '<span class="ui zh">发送成功!</span><span class="ui en">Sent!</span>'
-            setTimeout(() => {
-                clearComments()
-                loadComments().finally(finishCommentsLoading)
-            }, 1000);
-        }).catch(() => {
+        // 逐张上传;任一张失败时清理本次已上传的临时图片
+        const uploaded = []
+        try {
+            for (const image of imgList) {
+                const result = await XHR.post('uploads/image', { image })
+                uploaded.push(result.data.imageId)
+            }
+            await XHR.post('comments/post', {
+                "comment": msg,
+                imageKeys: uploaded,
+                replyid,
+            })
+        } catch (error) {
+            if (uploaded.length > 0) {
+                Promise.allSettled(uploaded.map(imageId =>
+                    XHR.delete(`uploads/image?imageId=${imageId}`, undefined, { silentStatuses: [404, 409] })
+                ))
+            }
             window.alert('发送留言失败，请确认本地后端仍在运行后重试。\n\nFailed to send the message. Please make sure the local backend is running and try again.')
             document.getElementById('sendBtn').disabled = false;
             document.getElementById('sendBtn').innerHTML = '<span class="ui zh">发送 ✔</span><span class="ui en">Send ✔</span>'
-        })
+            return
+        }
+
+        console.log('comment posted');
+        document.getElementById('sendBtn').innerHTML = '<span class="ui zh">发送成功!</span><span class="ui en">Sent!</span>'
+        setTimeout(() => {
+            clearComments()
+            loadComments().finally(finishCommentsLoading)
+        }, 1000);
     },
 }
 
@@ -806,11 +873,34 @@ try {
 export const User = {
     LoggedOnUserId: null,
 
+    /** 'loading' | 'authenticated' | 'unauthenticated' */
+    loginState: 'loading',
+
+    _initPromise: null,
+
     init() {
         // The session token is an HttpOnly cookie and is never exposed to JS.
         XHR.token = ''
         XHR.csrfToken = ''
         this.loadUserInfo()
+    },
+
+    /**
+     * 登录状态初始化完成前的等待点。
+     * 单飞:多次调用复用同一个 /user/me 请求。
+     */
+    ready() {
+        if (!this._initPromise) this._initPromise = this.loadUserInfo()
+        return this._initPromise
+    },
+
+    async ensureLoggedIn() {
+        if (this.loginState === 'loading') await this.ready()
+        if (!this.LoggedOnUserId) {
+            Popup.show('loginPopup')
+            return false
+        }
+        return true
     },
 
     changeName() {
@@ -897,6 +987,7 @@ export const User = {
         return User.getMe().then(r => {
                 XHR.token = 'session'
                 this.LoggedOnUserId = r.id
+                this.loginState = 'authenticated'
 
                 avatar.src = User.convertAvatarPath(r.avatar)
                 name.textContent = r.name
@@ -921,6 +1012,7 @@ export const User = {
             XHR.token = ''
             XHR.csrfToken = ''
             this.LoggedOnUserId = null
+            this.loginState = 'unauthenticated'
 
             avatar.src = User.convertAvatarPath('')
             name.innerHTML = '<span class="ui zh">访客</span><span class="ui en">Anonymous</span>'
@@ -1016,7 +1108,7 @@ export function showUserComment(user, avatar, uid) {
                     <div class="userCommentItem">
                         <p>${date + ' ' + hour}<span>#${userCommentIsKami ? comment.id : (comment.displayId ?? comment.id)}</span></p>
                         <p>
-                            <span onclick='clearComments(1); loadComments({ from: ${comment.id}${userCommentIsKami == true ? `, db: "kami"` : ``} }); closePopup()'
+                            <span onclick='clearComments(1); loadComments({ number: ${comment.number ?? comment.id}${userCommentIsKami == true ? `, db: "kami"` : ``} }); closePopup()'
                                 >${htmlEscape(comment.comment)}</span>
                             ${imgsDOM}
                         </p>
@@ -1108,6 +1200,16 @@ export const Theme = {
         this.prepareVisitOrder()
         this.setTheme(this.themes[location.hash])
 
+        // 横竖屏/窗口宽度跨过 720px 断点时重新选择背景布局
+        const layoutQuery = window.matchMedia('(max-width: 720px)')
+        const relayout = () => {
+            this.prepareVisitOrder()
+            this.setTheme()
+        }
+        layoutQuery.addEventListener
+            ? layoutQuery.addEventListener('change', relayout)
+            : layoutQuery.addListener(relayout)
+
         setInterval(() => {
             let newAutoTheme = this.getAutoTheme()
             //console.log(this.lastAutoTheme, newAutoTheme)
@@ -1124,6 +1226,11 @@ export const Theme = {
     },
 
     prepareVisitOrder() {
+        // 恢复全部背景的候选状态,便于横竖屏切换后重新布局
+        Array.from(document.querySelectorAll('.mainbg[data-layout]')).forEach(background => {
+            background.classList.add('defaultbg')
+        })
+
         const useMobileBackgrounds = window.matchMedia('(max-width: 720px)').matches
         const activeLayout = useMobileBackgrounds ? 'portrait' : 'landscape'
         const allBackgrounds = Array.from(document.querySelectorAll('.mainbg.defaultbg'))
@@ -1484,8 +1591,8 @@ export function setHoverCalendarActiveDay() {
 }
 
 export function setTodayCommentCount() {
-    var utc = parseInt(0 - new Date().getTimezoneOffset() / 60)
-    XHR.get('comments/count', { utc }).then(count => {
+    // 后端按 Asia/Shanghai 自然日统计,不需要浏览器时区参数
+    XHR.get('comments/count').then(count => {
         const value = Number(count)
         document.getElementById('todayCommentCount').textContent = Number.isFinite(value) ? String(value) : '0'
         console.log('today comment count:', value)
@@ -2190,7 +2297,7 @@ document.getElementById('goto').addEventListener("keypress", function (event) {
     if (event.key === "Enter") {
         event.preventDefault();
         clearComments(1);
-        loadComments({ 'from': document.getElementById('goto').value })
+        loadComments({ 'number': document.getElementById('goto').value })
     }
 })
 

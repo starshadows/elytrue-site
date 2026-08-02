@@ -16,7 +16,9 @@
 
 - `ELYTRUE_APP_SECRET`：至少 32 个随机字符，用于邮箱加密和索引摘要。
 - `RESEND_API_KEY`：Resend API Key。
-- `PUBLIC_SITE_URL`：预览阶段填预览域名，正式切流后填 `https://elytrue.com`。
+- `RESEND_FROM_EMAIL`：重置邮件发件地址（默认 `noreply@mail.elytrue.com`，需在 Resend 验证该域）。
+- `RESEND_FROM_NAME`：重置邮件发件人名称（默认 `星花札记`）。
+- `PUBLIC_SITE_URL`：预览阶段填预览域名，正式切流后填 `https://elytrue.com`。密码重置链接以此为准生成。
 - `ADMIN_BOOTSTRAP_SECRET`：首次管理员初始化的一次性高强度随机值。
 - `ALLOWED_ORIGINS`：预览与正式站点允许的来源，逗号分隔。
 
@@ -68,3 +70,43 @@ npm run export:data
 ```
 
 导出文件写入被 Git 忽略的 `exports/`。任务结束后立即清除本地环境变量和不再使用的 Token。
+
+## 8. 数据迁移脚本
+
+以下脚本需要临时设置 `EDGEONE_PROJECT_ID`、`EDGEONE_API_TOKEN`（参考 export:data），运行前建议先 `npm run export:data` 备份。
+
+### 8.1 重复用户名检查与修复
+
+```bash
+node scripts/check-duplicate-users.mjs          # 报告模式:扫描并输出重复组,不修改数据
+node scripts/check-duplicate-users.mjs --fix    # 修复:保留最早账号,其余改名 原名_2/_3
+```
+
+修复只改 `users/{id}.json` 的 `name` 与用户名索引，不触碰邮箱、留言、头像与会话。修复前打印计划、修复后自动校验。退出码 1 表示仍存在重复或环境变量缺失。
+
+### 8.2 留言编号/日期/用户索引迁移
+
+稳定公开编号（`indexes/comments/number/`）、自然日计数（`dates/`）与用户留言索引（`indexes/comments/by-user/`）需要为旧留言回填：
+
+```bash
+node scripts/rebuild-comment-indexes.mjs          # 报告:统计缺口
+node scripts/rebuild-comment-indexes.mjs --fix    # 按 createdAt 为旧留言分配编号并回填索引
+```
+
+幂等可重跑。回滚：删除上述三个前缀的 key 即可，`comments/` 本体不变。
+
+## 9. 部署版本确认与邮件日志
+
+- `GET /api/health` 返回 `version`（构建时注入的 git 短提交）与 `buildTime`，用于确认 EdgeOne 实际部署的提交。
+- 密码重置邮件结果以结构化日志输出到 Cloud Functions 日志：`{"event":"password_reset_email","success":false,"userId":"...","provider":"resend","status":403,"error":"domain is not verified"}`。发送成功时含 `emailId`。日志不包含重置 token、密码或完整 API Key。邮件未收到时按此排查：`RESEND_API_KEY` 是否配置、发件域是否在 Resend 验证（SPF/DKIM）、是否触发限流或退信。
+- 上传的临时图片（超过 24 小时未被留言引用）会在下次上传时自动清理，事件为 `pending_image_cleanup`。
+
+## 10. 集成测试（可选）
+
+连接真实 EdgeOne Blob 验证 `onlyIfNew`、强一致读取与并发行为（默认跳过）：
+
+```bash
+EDGEONE_TEST_PROJECT_ID=<测试项目ID> EDGEONE_TEST_TOKEN=<API Token> node --test tests/integration.test.js
+```
+
+使用独立 `integration-test/` 前缀并自动清理，不访问生产数据；可用 `EDGEONE_TEST_STORE` 覆盖目标 Store（默认 `elytrue-data`）。

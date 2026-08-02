@@ -35,7 +35,7 @@
             </div>
         </div>
         <div v-for="(item, index) in comments" :key="item.source + item.id" class="userCommentItem">
-            <p>{{ item.timeStr }}<span>#{{ item.displayId ?? item.id }}</span></p>
+            <p>{{ item.timeStr }}<span>#{{ item.number ?? item.displayId ?? item.id }}</span></p>
             <p>
                 <span @click="gotoComment(index)">{{ item.comment }}</span>
                 <i></i>
@@ -64,6 +64,7 @@ export default {
         comments: [],
         scrollPaused: false,
         toEnd: false,
+        nextCursor: null,
     }),
 
     methods: {
@@ -89,11 +90,11 @@ export default {
 
             XHR.get('comments', {
                 uid: this.user.id,
-                from: this.comments.length,
                 count: 50,
+                cursor: this.nextCursor || undefined,
             }).then(r => {
-
-                r.forEach(comment => {
+                const result = Array.isArray(r) ? { items: r, hasMore: false } : r
+                result.items.forEach(comment => {
                     let time = new Date(comment.time * 1000)
                     comment.timeStr = time.toLocaleDateString() + ' ' + time.toLocaleTimeString()
                     if (typeof comment.image == typeof '' && comment.image) {
@@ -104,10 +105,12 @@ export default {
                     this.comments.push(comment)
                 })
 
-                if (r.length < 10) {
-                    this.toEnd = true
-                } else {
+                if (result.hasMore && result.items.length > 0) {
+                    this.nextCursor = result.items[result.items.length - 1].id
                     this.scrollPaused = false
+                } else {
+                    this.toEnd = true
+                    this.nextCursor = null
                 }
             }).catch(() => {
                 this.scrollPaused = false
@@ -122,8 +125,10 @@ export default {
         },
 
         gotoComment(i) {
+            const comment = this.comments[i]
+            if (!comment) return
             clearComments(1);
-            loadComments({ from: this.comments[i].id });
+            loadComments({ number: comment.number ?? comment.id });
             closePopup()
         },
     },

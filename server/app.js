@@ -16,6 +16,7 @@ import {
 import {
     createComment,
     createReport,
+    countComments,
     listComments,
     listReports,
     moderateComment,
@@ -23,6 +24,7 @@ import {
 } from './comments.js'
 import { sha256, randomToken, hashPassword, decryptEmail } from './crypto.js'
 import { sendPasswordResetEmail } from './email.js'
+import { BUILD_VERSION, BUILD_TIME } from './build-info.js'
 import {
     apiResponse,
     binaryResponse,
@@ -93,6 +95,7 @@ async function saveImage({ data, uploads }, user, base64, kind) {
         width: image.width,
         height: image.height,
         size: buffer.length,
+        status: kind === 'avatar' ? 'active' : 'pending',
         createdAt: Date.now(),
     }, { onlyIfNew: true })
 
@@ -225,15 +228,21 @@ async function requestPasswordReset(context, stores) {
             expiresAt: Date.now() + 30 * 60 * 1000,
             createdAt: Date.now(),
         }, { onlyIfNew: true })
-        try {
-            await sendPasswordResetEmail(envFor(context), {
-                email: decryptEmail(getAppSecret(envFor(context)), user.emailCipher),
-                username: user.name,
-                token,
-            })
-        } catch (error) {
-            console.error('Password reset email unavailable', error?.message)
+        const result = await sendPasswordResetEmail(envFor(context), {
+            email: decryptEmail(getAppSecret(envFor(context)), user.emailCipher),
+            username: user.name,
+            token,
+        })
+        const logEntry = {
+            event: 'password_reset_email',
+            success: result.ok,
+            userId: user.id,
+            provider: 'resend',
         }
+        if (result.emailId) logEntry.emailId = result.emailId
+        if (result.status !== undefined) logEntry.status = result.status
+        if (result.error) logEntry.error = String(result.error).slice(0, 500)
+        console[result.ok ? 'log' : 'error'](JSON.stringify(logEntry))
     }
     return apiResponse(null, {
         message: '如果账号存在，重置邮件会发送到注册邮箱',
@@ -266,7 +275,53 @@ async function uploadCommentImage(context, stores) {
     await enforceRateLimit('upload', clientIdentity(context, auth.user.id))
     const body = await readJSON(context.request, 3 * 1024 * 1024)
     const saved = await saveImage(stores, auth.user, body.image, 'comment')
+    await cleanupStalePendingImages(stores, auth.user)
     return apiResponse({ imageId: saved.imageId }, { status: 201, message: '图片已上传' })
+}
+
+async function deleteUploadedImage(context, stores) {
+    await ensureWriteOrigin(context)
+    const auth = await requireSession(stores.data, context.request)
+    await enforceRateLimit('upload', clientIdentity(context, auth.user.id))
+    const imageId = String(new URL(context.request.url).searchParams.get('imageId') || '')
+    if (!/^[a-f0-9-]{36}$/iu.test(imageId)) throw httpError(400, '图片编号无效')
+    const aliasKey = `uploads/aliases/comments/${imageId}.json`
+    const alias = await getJSON(stores.data, aliasKey)
+    if (!alias || alias.userId !== auth.user.id) throw httpError(404, '图片不存在')
+    if (alias.status === 'active') throw httpError(409, '图片已关联留言，无法删除')
+    await stores.uploads.delete(alias.blobKey).catch(() => {})
+    await stores.data.delete(aliasKey).catch(() => {})
+    return apiResponse(null, { message: '图片已删除' })
+}
+
+/** 清理本人超过 24 小时仍未关联留言的 pending 图片;失败只记日志,不抛错 */
+async function cleanupStalePendingImages(stores, user) {
+    const STALE_MS = 24 * 60 * 60 * 1000
+    const cutoff = Date.now() - STALE_MS
+    const blobs = await listAll(stores.data, 'uploads/aliases/comments/').catch(() => [])
+    for (const blob of blobs) {
+        const alias = await getJSON(stores.data, blob.key).catch(() => null)
+        if (!alias || alias.userId !== user.id || alias.status !== 'pending') continue
+        if (Number(alias.createdAt || 0) > cutoff) continue
+        try {
+            await stores.uploads.delete(alias.blobKey)
+            await stores.data.delete(blob.key)
+            console.log(JSON.stringify({
+                event: 'pending_image_cleanup',
+                success: true,
+                userId: user.id,
+                imageId: alias.imageId,
+            }))
+        } catch (error) {
+            console.error(JSON.stringify({
+                event: 'pending_image_cleanup',
+                success: false,
+                userId: user.id,
+                imageId: alias.imageId,
+                error: String(error?.message || error).slice(0, 300),
+            }))
+        }
+    }
 }
 
 async function postComment(context, stores) {
@@ -286,12 +341,9 @@ async function getComments(context, stores) {
 }
 
 async function commentsCount(context, stores) {
-    const auth = await getSession(stores.data, context.request)
     const url = new URL(context.request.url)
-    const query = new URLSearchParams(url.searchParams)
-    query.set('count', '100')
-    const comments = await listComments(stores.data, query, auth?.user)
-    return apiResponse(comments.length)
+    const count = await countComments(stores.data, url.searchParams)
+    return apiResponse(count)
 }
 
 async function likeComment(context, stores, liked) {
@@ -375,7 +427,12 @@ export async function handleApiRequest(context, injectedStores) {
     try {
         if (method === 'OPTIONS') return new Response(null, { status: 204 })
         if (method === 'GET' && (path === '' || path === 'health')) {
-            return apiResponse({ service: 'elytrue-edgeone', status: 'ok' })
+            return apiResponse({
+                service: 'elytrue-edgeone',
+                status: 'ok',
+                version: BUILD_VERSION,
+                buildTime: BUILD_TIME,
+            })
         }
 
         if (method === 'POST' && path === 'user/register') return await register(context, stores)
@@ -389,6 +446,7 @@ export async function handleApiRequest(context, injectedStores) {
         if (method === 'POST' && path === 'action') return await completePasswordReset(context, stores)
 
         if (method === 'POST' && path === 'uploads/image') return await uploadCommentImage(context, stores)
+        if (method === 'DELETE' && path === 'uploads/image') return await deleteUploadedImage(context, stores)
         if (method === 'GET' && path === 'data/images/defaultAvatar.png') {
             return Response.redirect(new URL('/res/favicon-320.png', request.url), 302)
         }
