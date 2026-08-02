@@ -1,10 +1,11 @@
 import { createServer } from 'node:http'
 import { readFile, stat } from 'node:fs/promises'
 import { extname, join, normalize } from 'node:path'
+import { fileURLToPath } from 'node:url'
 import { handleApiRequest } from '../server/app.js'
 import { MemoryStore } from '../server/storage.js'
 
-const ROOT = new URL('../dist/', import.meta.url)
+const ROOT = fileURLToPath(new URL('../dist/', import.meta.url))
 const PORT = Number(process.env.PORT || 4173)
 const SITE_ORIGIN = 'http://127.0.0.1:4173'
 
@@ -45,8 +46,8 @@ const MIME = {
 
 async function resolveStaticFile(pathname) {
     const path = normalize(pathname).replace(/^[/\\]+/u, '')
-    const filePath = join(ROOT.pathname, path)
-    if (!filePath.startsWith(ROOT.pathname)) return null
+    const filePath = join(ROOT, path)
+    if (!filePath.startsWith(ROOT)) return null
     try {
         const info = await stat(filePath)
         if (info.isFile()) return filePath
@@ -115,6 +116,14 @@ async function handleApi(req, res) {
 const server = createServer(async (req, res) => {
     const url = new URL(req.url, `http://${req.headers.host || '127.0.0.1'}`)
 
+    if (url.pathname === '/__test/reset' && req.method === 'POST') {
+        stores.data.values.clear()
+        stores.uploads.values.clear()
+        res.statusCode = 204
+        res.end()
+        return
+    }
+
     if (url.pathname.startsWith('/api/')) {
         await handleApi(req, res)
         return
@@ -123,14 +132,14 @@ const server = createServer(async (req, res) => {
     try {
         let filePath = await resolveStaticFile(url.pathname)
         if (!filePath && url.pathname !== '/') {
-            const dirPath = join(ROOT.pathname, normalize(url.pathname).replace(/^[/\\]+/u, ''))
+            const dirPath = join(ROOT, normalize(url.pathname).replace(/^[/\\]+/u, ''))
             const dirInfo = await stat(dirPath).catch(() => null)
             if (dirInfo?.isDirectory()) {
                 filePath = await resolveStaticFile(url.pathname + '/index.html')
             }
         }
         if (!filePath) {
-            filePath = join(ROOT.pathname, 'index.html')
+            filePath = join(ROOT, 'index.html')
         }
         const content = await readFile(filePath)
         const contentType = MIME[extname(filePath).toLowerCase()] || 'application/octet-stream'
@@ -147,6 +156,6 @@ const server = createServer(async (req, res) => {
 
 server.listen(PORT, '127.0.0.1', () => {
     console.log(`[mock-server] elytrue 本地测试服务器已启动: http://127.0.0.1:${PORT}`)
-    console.log(`[mock-server] 静态目录: ${ROOT.pathname}(SPA fallback 到 index.html)`)
+    console.log(`[mock-server] 静态目录: ${ROOT}(SPA fallback 到 index.html)`)
     console.log(`[mock-server] /api/* 由 server/app.js handleApiRequest 处理(内存 MemoryStore)`)
 })

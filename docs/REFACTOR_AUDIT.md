@@ -1,0 +1,151 @@
+# 现代化重构审计
+
+基线提交：`3b3b69d02869abcbfd20074e1d311e9af2517537`
+
+## 基线验证
+
+| 命令 | 原始结果 |
+| --- | --- |
+| `npm ci` | 成功；安装 931 个包，完整审计报告 35 个漏洞 |
+| `npm run check` | 成功 |
+| `npm test` | 93 项：87 通过、6 项真实 EdgeOne 集成测试因无凭据跳过 |
+| `npm run build:edgeone` | 成功；70 个文件、89,414,081 bytes，JS 458,005 bytes |
+| `npm run test:e2e` | 原始失败：Mock Server 在 Windows 将 `file:` URL pathname 与 `path.join` 混用，产生 `C:\C:\...\dist\index.html` |
+
+E2E 原始失败是测试服务器的跨平台路径错误，不是本次重构引入的页面回归。第一阶段仅修复测试工具并重新采集应用未改动时的视觉基线。
+
+## 运行环境边界
+
+```text
+构建与前端工具链：Node 22.17.1
+EdgeOne Cloud Functions：平台管理的 Node 20.x
+middleware.js：Edge Runtime / Web APIs / ES2023+
+```
+
+- Node 22.17.1 用于安装、Vite、Vue 类型检查、Lint、构建和 E2E。
+- `cloud-functions/api/[[default]].js` 由 EdgeOne Cloud Functions 的 Node 20.x 执行，入口保持不变。
+- `middleware.js` 在 Edge Runtime 执行，只能使用 Web API；当前实现使用 `Request`、`Response`、`URL`、`context.env` 和普通 ES 数据结构，没有 Node 导入。
+
+## 当前目录与职责
+
+| 目录/文件 | 当前职责与问题 |
+| --- | --- |
+| `index.html` | 650 行页面、弹窗、背景、文案和大量内联事件 |
+| `src/index.ts` | 2,778 行命令式入口；留言、用户、主题、音乐、时间轴、手势和工具函数混杂，并使用 `@ts-nocheck` |
+| `src/main.ts` | 将入口和组件批量暴露到 `window`，挂载空壳 `App.vue` |
+| `src/components/` | 多个独立 Vue app 分别挂载，部分组件仍使用内联事件和 `@ts-nocheck` |
+| `src/net/` | XHR 客户端；依赖 `window.baseUrl/bgBaseUrl` |
+| `server/app.js` | API 路由、上传、用量、认证编排和管理逻辑集中在单文件 |
+| `server/*.js` | 认证、留言、存储、图片、邮件、HTTP 和限流逻辑 |
+| `cloud-functions/api/[[default]].js` | 稳定的 EdgeOne Cloud Functions `/api/*` 入口 |
+| `middleware.js` | 主域名重定向及 KV 边缘限流 |
+| `scripts/` | Mock、构建信息、导出、重复用户、索引和用量维护 |
+| `tests/` | Node 原生单元/集成测试与 Playwright E2E |
+| `public/` | 主 CSS、PWA、16 张 WebP、16 张原图、10 首音乐、图标、字体及旧上游内容 |
+
+## 前端全局、内联事件和职责拆分
+
+`src/main.ts` 当前执行两次 `Object.assign(window, ...)`。`src/index.ts` 导出约 50 个函数、状态对象和 DOM 引用，其中页面依赖的主要全局包括：
+
+- 留言：`loadComments`、`clearComments`、`seekComment`、`newComment`、`sendMessage`、`Comments`。
+- 用户：`User`、`loadUserInfo`、`showUserComment`。
+- 弹窗/图片：`Popup`、`showPopup`、`closePopup`、`viewImg`。
+- 主题/音乐：`Theme`、`MusicPlayer`、`Settings`。
+- 显示/时间轴：`toggleFullscreen`、`toggleTimeline`、`toggleTopComment`。
+
+`index.html` 与运行时生成的 HTML 含 `onclick`、`onchange`、`onfocus`、`onblur` 和 `javascript:`。最终按 feature 拆分为 auth、comments、gallery、music、theme、settings、timeline、admin；DOM 操作收敛为 Vue 模板事件、composable 和少量明确的 DOM controller。
+
+## 当前生产 API
+
+所有路径位于同源 `/api/*`，响应 envelope 保持 `{ code, message, data }`：
+
+- 健康：`GET /api`、`GET /api/health`。
+- 账号：`POST user/register|login|logout|resettoken|resetpassword`、`GET user/me|find`、`PUT user/update`、`POST action`。
+- 上传：`POST|DELETE uploads/image`；头像、留言图和默认头像 GET 路径。
+- 留言：`GET comments|comments/count`、`POST comments/post|comments/like|comments/report`、`DELETE comments/like`。
+- 管理：`POST admin/bootstrap|admin/comments/moderate`、`GET admin/reports|admin/usage`。
+
+客户端继续使用 HttpOnly Cookie；非安全方法携带 `X-CSRF-Token`，响应 `data.csrfToken` 更新客户端 token。
+
+## Blob Store 与 key 结构
+
+Store 名称保持：
+
+- `elytrue-data`
+- `elytrue-uploads`
+
+主要 key：
+
+- `users/{userId}.json`
+- `indexes/users/name/{sha256}.json`
+- `indexes/users/email/{keyedDigest}.json`
+- `sessions/{tokenHash}.json`
+- `password-resets/{tokenHash}.json` 及 `.claimed`
+- `comments/{16位内部ID}.json`
+- `indexes/comments/number/{公开编号}.json`
+- `indexes/comments/by-user/{uid}/{16位内部ID}.json`
+- `dates/{YYYY-MM-DD}/{16位内部ID}.json`
+- `likes/{commentId}/{userId}.json`
+- `reports/{commentId}/{userId}.json`
+- `uploads/aliases/avatars|comments/{imageId}.json`
+- `usage/uploads.json`
+- `repairs/comment-delete/{commentId}.json`
+
+编号占位的 `onlyIfNew`、墓碑空号、日期“曾发布”口径、用户索引、图片 pending/active、强一致读取、补偿回滚和 repair marker 必须保持。
+
+## 依赖基线
+
+直接生产依赖：
+
+- `@edgeone/pages-blob`：Blob Store SDK，生产需要。
+- `image-size`：上传图片尺寸校验，生产需要。
+- `vue`：前端运行时。
+
+直接开发依赖：
+
+- Vite、plugin-vue、Vue TypeScript 配置、TypeScript、vue-tsc。
+- Playwright。
+- EdgeOne CLI，仅本地 Makers 调试，不应进入前端 bundle 或 Cloud Function 生产导入图。
+- `sass-embedded`，当前 4 个 SFC 使用 SCSS，不能删除。
+- legacy 插件当前生成约 291 KiB 未压缩的额外 JS；目标浏览器不需要 Chrome 49，待构建和视觉验证后删除。
+
+当前 `npm audit --omit=dev` 为零漏洞。完整审计的 35 个告警主要来自 EdgeOne CLI 的 COS/npm/esbuild/undici 传递依赖、legacy Babel 链、旧 Vite/Rollup 和 Sass 传递依赖。第二阶段将验证兼容升级；无法由项目安全修复的 CLI-only 告警会逐项隔离说明，不使用强制修复。
+
+## 静态素材
+
+明确保留：
+
+- 7 张横屏 WebP、9 张竖屏 WebP。
+- 与之对应的 16 张原图。
+- 10 首 HOYO-MiX/官方音乐，默认 `HOYO-MiX - Elysian Realm.mp3`。
+- favicon、社交分享图、字体、默认头像和当前 UI 引用的 SVG。
+- `ASSETS.md`、`NOTICE.md` 及页面中的作者、来源和权利说明。
+
+待可达性核查：
+
+- `public/yumeniwa/` 可由直接 URL 访问，但依赖旧外部服务器；在无法证明用户不依赖前不删除。
+- `index.hlsvideo.html`、Walpurgis、kami、圆诞/圣诞/新年/七夕、隐藏小游戏 DOM/CSS 均包含旧路径或缺失素材；需以入口、hash、配置、测试和文件存在性共同确认。
+- CSS 引用的 `res/xh_mdk0.png`、`res/xh_mdk1.png` 和小游戏 `res/mello/*` 当前不存在。
+
+## EdgeOne 与平台约束
+
+- 构建输出 `dist`，构建 Node 由顶层 `nodeVersion` 控制。
+- Cloud Functions Node 20.x，默认 30 秒；不在 `cloudFunctions.nodejs` 中声明运行时版本。
+- Blob 单次强一致读与 `onlyIfNew` 可用，但批量业务事务需应用层补偿。
+- KV 限流是读改写，跨边缘并发不能保证原子计数；Cloud Function 进程内限流仅是单实例二次保护。
+- `usage/uploads.json` 的跨实例增减可能偏差，继续保留 `rebuild-usage.mjs`。
+- SPA fallback 是 EdgeOne 识别的精确 `/* -> /index.html` 配置，平台先匹配静态资源与 Functions。
+
+## 风险与回滚
+
+- 前端视觉风险：保留 class/ID/CSS，分阶段迁移，以固定数据的桌面/移动截图阻断回归。
+- API 风险：新增路由与 key 快照，旧测试持续覆盖；任何字段或状态差异均回滚相应提交。
+- 存储风险：不运行迁移、不访问生产；repository 重构前后共享现有 MemoryStore/真实集成测试。
+- 依赖风险：每次只升级一组兼容依赖；Vite 8 无法通过 EdgeOne 构建时回退最近的兼容稳定线。
+- 部署风险：只做本地提交，不推送或部署；每个阶段可用独立提交回退。
+
+## CSP 计划
+
+严格 CSP 只在所有内联脚本和事件删除后启用。最终脚本、连接、图片、媒体、字体、object、base 和 frame 均限制为计划中的同源策略。
+
+现有页面仍大量使用静态 `style` 属性、CSS 自定义属性和 `element.style` 驱动背景焦点、缩放、弹窗来源动画及播放器进度，因此首轮需保留 `style-src 'self' 'unsafe-inline'`。移除条件是把所有静态 style 迁移为样式表、把运行时样式迁移为受控 class/CSS 变量，并通过全部视觉回归。
