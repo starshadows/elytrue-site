@@ -161,6 +161,14 @@ Store 名称保持：
 - `usage/uploads.json` 的跨实例增减可能偏差，继续保留 `rebuild-usage.mjs`。
 - SPA fallback 是 EdgeOne 识别的精确 `/* -> /index.html` 配置，平台先匹配静态资源与 Functions。
 
+### 第五阶段服务端边界结果
+
+- `server/routes/registry.js` 是声明式 API 合同，逐项记录 method、path/prefix、鉴权、CSRF 和管理员要求；`server/app.js` 只按该表分发，未知 method/path 仍返回原 404 envelope。
+- `server/domain/blob-keys.js` 集中构造生产 Blob key。构造器保留原前缀、16 位内部 ID 补零、`.json` 后缀、编号座位、墓碑、repair marker 和图片别名字符串；已有数据无需迁移。
+- `server/middleware/` 只处理请求来源、环境和客户端标识，`server/services/` 暴露认证/留言用例，`server/repositories/` 固化强一致读取和 `onlyIfNew`，`server/storage.js` 继续持有唯一的 Store 名称与 MemoryStore 注入点，`server/lib/` 保存无业务状态的路由解析。
+- `cloud-functions/api/[[default]].js` 入口及默认导出未改；生产代码未引入 Vue、Vite、Playwright、浏览器全局或 Node 22 独占 API。
+- 本阶段 `check:server`、运行时边界检查和全部服务端测试通过；另以 Node 20.19.5 执行服务端测试，87 项通过，真实 EdgeOne 凭据测试未进入该离线命令。
+
 ## 风险与回滚
 
 - 前端视觉风险：保留 class/ID/CSS，分阶段迁移，以固定数据的桌面/移动截图阻断回归。

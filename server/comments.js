@@ -1,25 +1,8 @@
 import { randomUUID } from 'node:crypto'
 import { httpError } from './http.js'
 import { getJSON, listAll, isPreconditionFailure } from './storage.js'
+import { blobKeys, blobPrefixes } from './domain/blob-keys.js'
 import { sanitizePlainText, validateComment } from '../shared/validation.js'
-
-function commentKey(id) {
-    return `comments/${String(id).padStart(16, '0')}.json`
-}
-
-function commentNumberKey(number) {
-    return `indexes/comments/number/${Number(number)}.json`
-}
-
-function userCommentsKey(uid, id) {
-    return `indexes/comments/by-user/${uid}/${String(id).padStart(16, '0')}.json`
-}
-
-function dateCommentsKey(date, id) {
-    return `dates/${date}/${String(id).padStart(16, '0')}.json`
-}
-
-const NUMBER_HINT_KEY = 'meta/comments-number-hint.json'
 const INTERNAL_ID_THRESHOLD = 1e12
 
 export function newCommentId() {
@@ -35,10 +18,10 @@ export async function resolveCommentId(data, value) {
     const raw = Number(value)
     if (!Number.isSafeInteger(raw) || raw <= 0) return null
     if (raw >= INTERNAL_ID_THRESHOLD) return raw
-    const seat = await getJSON(data, commentNumberKey(raw))
+    const seat = await getJSON(data, blobKeys.commentNumber(raw))
     if (!seat || seat.tombstone) return null
     if (seat?.commentId) return Number(seat.commentId)
-    const legacy = await getJSON(data, commentKey(raw))
+    const legacy = await getJSON(data, blobKeys.comment(raw))
     return legacy ? raw : null
 }
 
@@ -54,16 +37,18 @@ export function shanghaiDateString(ms) {
 
 /** 原子认领下一个稳定公开编号(onlyIfNew 占位,并发安全,允许空洞) */
 async function claimCommentNumber(data, commentId, reservationId) {
-    const hint = Number((await getJSON(data, NUMBER_HINT_KEY))?.value || 0)
+    const hint = Number((await getJSON(data, blobKeys.commentNumberHint))?.value || 0)
     let number = hint + 1
     for (let attempt = 0; attempt < 2000; attempt += 1) {
         try {
-            await data.setJSON(commentNumberKey(number), {
+            await data.setJSON(blobKeys.commentNumber(number), {
                 commentId,
                 reservationId,
                 createdAt: Date.now(),
             }, { onlyIfNew: true })
-            await data.setJSON(NUMBER_HINT_KEY, { value: number, updatedAt: Date.now() }).catch(() => {})
+            await data
+                .setJSON(blobKeys.commentNumberHint, { value: number, updatedAt: Date.now() })
+                .catch(() => {})
             return number
         } catch (error) {
             if (!isPreconditionFailure(error)) throw error
@@ -85,9 +70,11 @@ async function claimCommentNumber(data, commentId, reservationId) {
 async function rollbackCommentResources(data, commentId, { reservationId, number, uid, date }) {
     const failures = []
     if (number) {
-        const seat = await getJSON(data, commentNumberKey(number)).catch(() => null)
+        const seat = await getJSON(data, blobKeys.commentNumber(number)).catch(() => null)
         if (seat?.reservationId === reservationId) {
-            await data.delete(commentNumberKey(number)).catch(error => failures.push(`seat:${error?.message || error}`))
+            await data
+                .delete(blobKeys.commentNumber(number))
+                .catch(error => failures.push(`seat:${error?.message || error}`))
         } else if (seat && seat.commentId !== commentId) {
             // 占位不属于本次操作:绝不删除,仅记录
             console.error(JSON.stringify({
@@ -98,12 +85,18 @@ async function rollbackCommentResources(data, commentId, { reservationId, number
             }))
         }
     }
-    await data.delete(commentKey(commentId)).catch(error => failures.push(`comment:${error?.message || error}`))
+    await data
+        .delete(blobKeys.comment(commentId))
+        .catch(error => failures.push(`comment:${error?.message || error}`))
     if (uid) {
-        await data.delete(userCommentsKey(uid, commentId)).catch(error => failures.push(`userIndex:${error?.message || error}`))
+        await data
+            .delete(blobKeys.commentByUser(uid, commentId))
+            .catch(error => failures.push(`userIndex:${error?.message || error}`))
     }
     if (date) {
-        await data.delete(dateCommentsKey(date, commentId)).catch(error => failures.push(`dateIndex:${error?.message || error}`))
+        await data
+            .delete(blobKeys.commentByDate(date, commentId))
+            .catch(error => failures.push(`dateIndex:${error?.message || error}`))
     }
     if (failures.length > 0) {
         console.error(JSON.stringify({
@@ -131,7 +124,7 @@ export async function createComment(data, user, body, { idFactory = newCommentId
 
     const aliases = []
     for (const imageId of imageIds) {
-        const alias = await getJSON(data, `uploads/aliases/comments/${imageId}.json`)
+        const alias = await getJSON(data, blobKeys.imageAlias('comments', imageId))
         if (!alias || alias.userId !== user.id) throw httpError(400, '留言图片无效')
         aliases.push({ imageId, alias })
     }
@@ -139,7 +132,7 @@ export async function createComment(data, user, body, { idFactory = newCommentId
     let replyid = null
     if (body.replyid !== undefined && body.replyid !== null && body.replyid !== '') {
         const targetId = await resolveCommentId(data, body.replyid)
-        const reply = targetId ? await getJSON(data, commentKey(targetId)) : null
+        const reply = targetId ? await getJSON(data, blobKeys.comment(targetId)) : null
         if (!reply) throw httpError(404, '回复的留言不存在')
         replyid = targetId
     }
@@ -179,7 +172,7 @@ export async function createComment(data, user, body, { idFactory = newCommentId
             time: Math.floor(createdAt / 1000),
         }
         try {
-            await data.setJSON(commentKey(id), comment, { onlyIfNew: true })
+            await data.setJSON(blobKeys.comment(id), comment, { onlyIfNew: true })
             persisted = true
         } catch (error) {
             if (!isPreconditionFailure(error)) throw error
@@ -211,9 +204,15 @@ export async function createComment(data, user, body, { idFactory = newCommentId
 
     // 3. 回写编号 + 用户索引 + 日期索引;任一失败则回滚全部并返回 500
     try {
-        await data.setJSON(commentKey(comment.id), comment)
-        await data.setJSON(userCommentsKey(user.id, comment.id), { commentId: comment.id, createdAt })
-        await data.setJSON(dateCommentsKey(date, comment.id), { commentId: comment.id, createdAt })
+        await data.setJSON(blobKeys.comment(comment.id), comment)
+        await data.setJSON(blobKeys.commentByUser(user.id, comment.id), {
+            commentId: comment.id,
+            createdAt,
+        })
+        await data.setJSON(blobKeys.commentByDate(date, comment.id), {
+            commentId: comment.id,
+            createdAt,
+        })
     } catch (error) {
         await rollbackCommentResources(data, comment.id, { reservationId, number, uid: user.id, date })
         console.error(JSON.stringify({
@@ -232,7 +231,7 @@ export async function createComment(data, user, body, { idFactory = newCommentId
         for (const { imageId, alias } of aliases) {
             if (alias.status !== 'active') {
                 alias.status = 'active'
-                await data.setJSON(`uploads/aliases/comments/${imageId}.json`, alias)
+                await data.setJSON(blobKeys.imageAlias('comments', imageId), alias)
                 activated.push({ imageId, alias })
             }
         }
@@ -240,7 +239,7 @@ export async function createComment(data, user, body, { idFactory = newCommentId
         await rollbackCommentResources(data, comment.id, { reservationId, number, uid: user.id, date })
         for (const { imageId, alias } of activated) {
             alias.status = 'pending'
-            await data.setJSON(`uploads/aliases/comments/${imageId}.json`, alias).catch(rollbackError => {
+            await data.setJSON(blobKeys.imageAlias('comments', imageId), alias).catch(rollbackError => {
                 console.error(JSON.stringify({
                     event: 'comment_alias_revert_failed',
                     imageId,
@@ -261,9 +260,9 @@ export async function createComment(data, user, body, { idFactory = newCommentId
 
 /** 读取单条留言,附加展示编号与点赞状态 */
 export async function getCommentDetail(data, comment, viewer) {
-    const likes = await listAll(data, `likes/${comment.id}/`, Infinity)
+    const likes = await listAll(data, blobKeys.commentLikePrefix(comment.id), Infinity)
     const liked = viewer
-        ? Boolean(await getJSON(data, `likes/${comment.id}/${viewer.id}.json`))
+        ? Boolean(await getJSON(data, blobKeys.commentLike(comment.id, viewer.id)))
         : false
     return {
         ...comment,
@@ -274,7 +273,7 @@ export async function getCommentDetail(data, comment, viewer) {
 }
 
 async function listAllCommentKeys(data) {
-    const blobs = await listAll(data, 'comments/', Infinity)
+    const blobs = await listAll(data, blobPrefixes.comments, Infinity)
     return blobs.map(blob => blob.key)
 }
 
@@ -331,7 +330,7 @@ async function collectVisibleComments(data, ids, {
     const comments = []
     const scanCap = Math.max(200, count * 20 + 200)
     for (let i = 0; i < selected.length && comments.length < count && i < scanCap; i += 1) {
-        const comment = await getJSON(data, commentKey(selected[i]))
+        const comment = await getJSON(data, blobKeys.comment(selected[i]))
         if (!comment) continue
         if (beforeTime) {
             // 有 createdAt 时按毫秒精确过滤;旧数据缺 createdAt 时回落 time 比较
@@ -358,10 +357,10 @@ export async function listComments(data, query, viewer) {
     // 按公开编号跳转:number=N 返回该条留言(硬删除 tombstone 返回 404)
     const numberParam = query.get('number')
     if (numberParam) {
-        const seat = await getJSON(data, commentNumberKey(Number(numberParam)))
+        const seat = await getJSON(data, blobKeys.commentNumber(Number(numberParam)))
         if (!seat || seat.tombstone) throw httpError(404, '留言不存在')
         const comment = seat?.commentId
-            ? await getJSON(data, commentKey(Number(seat.commentId)))
+            ? await getJSON(data, blobKeys.comment(Number(seat.commentId)))
             : null
         if (!comment) throw httpError(404, '留言不存在')
         if (comment.hidden && viewer?.role !== 'admin' && viewer?.id !== comment.uid) {
@@ -401,7 +400,7 @@ async function listUserComments(data, query, viewer, uid) {
     const cursor = Number(query.get('cursor') || 0)
     const count = Math.min(100, Math.max(1, Number(query.get('count') || 50)))
 
-    const blobs = await listAll(data, `indexes/comments/by-user/${uid}/`, Infinity)
+    const blobs = await listAll(data, blobKeys.commentsByUserPrefix(uid), Infinity)
     const ids = blobs.map(blob => keyToId(blob.key.replace(/^indexes\/comments\/by-user\/[^/]+\//u, 'comments/')))
         .filter(Boolean)
         .sort((a, b) => b - a)
@@ -417,7 +416,7 @@ async function listUserComments(data, query, viewer, uid) {
     let skippedOffset = offset
     let index = 0
     for (; index < pageWindow.length && items.length < count && index < scanCap; index += 1) {
-        const comment = await getJSON(data, commentKey(pageWindow[index]))
+        const comment = await getJSON(data, blobKeys.comment(pageWindow[index]))
         if (!comment) continue
         if (!isVisibleFor(comment, viewer)) continue
         if (skippedOffset > 0) {
@@ -447,14 +446,14 @@ export async function countComments(data, query) {
     const month = Number(match[2])
     const day = Number(match[3])
     if (!isValidCalendarDate(year, month, day)) throw httpError(400, '日期格式不正确')
-    const blobs = await listAll(data, `dates/${date}/`, Infinity)
+    const blobs = await listAll(data, blobKeys.commentsByDatePrefix(date), Infinity)
     return blobs.length
 }
 
 export async function setLike(data, commentId, user, liked) {
-    const comment = await getJSON(data, commentKey(commentId))
+    const comment = await getJSON(data, blobKeys.comment(commentId))
     if (!comment || comment.hidden) throw httpError(404, '留言不存在')
-    const key = `likes/${commentId}/${user.id}.json`
+    const key = blobKeys.commentLike(commentId, user.id)
     if (liked) {
         await data.setJSON(key, { userId: user.id, createdAt: Date.now() }, { onlyIfNew: true }).catch(error => {
             if (!isPreconditionFailure(error)) throw error
@@ -465,11 +464,11 @@ export async function setLike(data, commentId, user, liked) {
 }
 
 export async function createReport(data, commentId, user, reason) {
-    const comment = await getJSON(data, commentKey(commentId))
+    const comment = await getJSON(data, blobKeys.comment(commentId))
     if (!comment) throw httpError(404, '留言不存在')
     if (comment.uid === user.id) throw httpError(403, '不能举报自己的留言')
     const cleanReason = sanitizePlainText(reason || '用户举报').slice(0, 500)
-    const key = `reports/${commentId}/${user.id}.json`
+    const key = blobKeys.commentReport(commentId, user.id)
     try {
         await data.setJSON(key, {
             id: randomUUID(),
@@ -486,12 +485,12 @@ export async function createReport(data, commentId, user, reason) {
 }
 
 export async function listReports(data) {
-    const blobs = await listAll(data, 'reports/', Infinity)
+    const blobs = await listAll(data, blobPrefixes.reports, Infinity)
     const reports = []
     for (const blob of blobs) {
         const report = await getJSON(data, blob.key)
         if (!report) continue
-        const comment = await getJSON(data, commentKey(report.commentId)).catch(() => null)
+        const comment = await getJSON(data, blobKeys.comment(report.commentId)).catch(() => null)
         reports.push({
             ...report,
             displayId: comment?.number ?? report.commentId,
@@ -501,7 +500,7 @@ export async function listReports(data) {
 }
 
 export async function moderateComment(data, commentId, action) {
-    const key = commentKey(commentId)
+    const key = blobKeys.comment(commentId)
     const comment = await getJSON(data, key)
     if (!comment) throw httpError(404, '留言不存在')
     if (action === 'delete') {
@@ -509,7 +508,7 @@ export async function moderateComment(data, commentId, action) {
         // 用户索引删除失败:写 repair marker(repairs/comment-delete/{id}.json)供迁移/修复任务处理,
         // 不能无标记返回成功。
         if (comment.number) {
-            const seatKey = commentNumberKey(comment.number)
+            const seatKey = blobKeys.commentNumber(comment.number)
             const seat = await getJSON(data, seatKey)
             if (seat) {
                 try {
@@ -535,9 +534,9 @@ export async function moderateComment(data, commentId, action) {
         // likes/reports 保留:作为审计记录,不做清理
         await data.delete(key)
         try {
-            await data.delete(userCommentsKey(comment.uid, commentId))
+            await data.delete(blobKeys.commentByUser(comment.uid, commentId))
         } catch (error) {
-            await data.setJSON(`repairs/comment-delete/${commentId}.json`, {
+            await data.setJSON(blobKeys.commentDeleteRepair(commentId), {
                 commentId,
                 number: comment.number ?? null,
                 uid: comment.uid,

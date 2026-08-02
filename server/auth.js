@@ -10,6 +10,7 @@ import {
 } from './crypto.js'
 import { cookie, httpError, parseCookies, publicUser } from './http.js'
 import { getJSON, isPreconditionFailure } from './storage.js'
+import { blobKeys } from './domain/blob-keys.js'
 import {
     normalizeEmail,
     normalizeUsername,
@@ -29,11 +30,11 @@ export function getAppSecret(env) {
 }
 
 function usernameIndexKey(name) {
-    return `indexes/users/name/${sha256(normalizeUsername(name))}.json`
+    return blobKeys.userNameIndex(sha256(normalizeUsername(name)))
 }
 
 function emailIndexKey(secret, email) {
-    return `indexes/users/email/${keyedDigest(secret, normalizeEmail(email), 'email-index')}.json`
+    return blobKeys.userEmailIndex(keyedDigest(secret, normalizeEmail(email), 'email-index'))
 }
 
 export async function findUserByIdentifier(data, env, identifier) {
@@ -45,12 +46,12 @@ export async function findUserByIdentifier(data, env, identifier) {
         : usernameIndexKey(normalized)
     const index = await getJSON(data, indexKey)
     if (!index?.userId) return null
-    return getJSON(data, `users/${index.userId}.json`)
+    return getJSON(data, blobKeys.user(index.userId))
 }
 
 export async function findUserById(data, userId) {
     if (!/^[a-f0-9-]{36}$/iu.test(String(userId || ''))) return null
-    return getJSON(data, `users/${userId}.json`)
+    return getJSON(data, blobKeys.user(userId))
 }
 
 export async function registerUser(data, env, { name, email, password }) {
@@ -89,7 +90,7 @@ export async function registerUser(data, env, { name, email, password }) {
             createdAt: now,
             updatedAt: now,
         }
-        await data.setJSON(`users/${userId}.json`, user, { onlyIfNew: true })
+        await data.setJSON(blobKeys.user(userId), user, { onlyIfNew: true })
         return user
     } catch (error) {
         const conflictMessage = !nameReserved
@@ -128,7 +129,7 @@ export async function createSession(data, user, request) {
         lastSeenAt: now,
         expiresAt: now + SESSION_SECONDS * 1000,
     }
-    await data.setJSON(`sessions/${tokenHash}.json`, session, { onlyIfNew: true })
+    await data.setJSON(blobKeys.session(tokenHash), session, { onlyIfNew: true })
     const secure = new URL(request.url).protocol === 'https:'
     return {
         session,
@@ -143,14 +144,14 @@ export async function getSession(data, request, { slide = true } = {}) {
     const token = cookies.elytrue_session
     if (!token) return null
     const tokenHash = sha256(token)
-    const session = await getJSON(data, `sessions/${tokenHash}.json`)
+    const session = await getJSON(data, blobKeys.session(tokenHash))
     if (!session || session.expiresAt <= Date.now()) {
-        if (session) await data.delete(`sessions/${tokenHash}.json`).catch(() => {})
+        if (session) await data.delete(blobKeys.session(tokenHash)).catch(() => {})
         return null
     }
     const user = await findUserById(data, session.userId)
     if (!user || user.sessionVersion !== session.version) {
-        await data.delete(`sessions/${tokenHash}.json`).catch(() => {})
+        await data.delete(blobKeys.session(tokenHash)).catch(() => {})
         return null
     }
 
@@ -174,7 +175,7 @@ export async function getSession(data, request, { slide = true } = {}) {
             cookie('elytrue_session', token, { maxAge: SESSION_SECONDS, secure }),
         ]
     }
-    if (shouldPersist) await data.setJSON(`sessions/${tokenHash}.json`, session)
+    if (shouldPersist) await data.setJSON(blobKeys.session(tokenHash), session)
     return { session, user, tokenHash, cookies, refreshCookies }
 }
 
@@ -195,7 +196,7 @@ export async function requireSession(data, request, { csrf = true } = {}) {
 }
 
 export async function destroySession(data, request, auth) {
-    if (auth?.tokenHash) await data.delete(`sessions/${auth.tokenHash}.json`).catch(() => {})
+    if (auth?.tokenHash) await data.delete(blobKeys.session(auth.tokenHash)).catch(() => {})
     const secure = new URL(request.url).protocol === 'https:'
     return [
         cookie('elytrue_session', '', { maxAge: 0, secure }),
@@ -205,7 +206,7 @@ export async function destroySession(data, request, auth) {
 export async function revokeAllSessions(data, user) {
     user.sessionVersion = Number(user.sessionVersion || 0) + 1
     user.updatedAt = Date.now()
-    await data.setJSON(`users/${user.id}.json`, user)
+    await data.setJSON(blobKeys.user(user.id), user)
     return user
 }
 
@@ -259,7 +260,7 @@ export async function updateUser(data, uploads, env, user, updates, deps = {}) {
         if (next.emailHash !== user.emailHash) {
             next.emailChanged = true
             next.emailIndexKey = emailIndexKey(secret, next.email)
-            oldIndexes.push({ type: 'email', key: `indexes/users/email/${user.emailHash}.json` })
+            oldIndexes.push({ type: 'email', key: blobKeys.userEmailIndex(user.emailHash) })
         }
     }
 
@@ -304,7 +305,7 @@ export async function updateUser(data, uploads, env, user, updates, deps = {}) {
     user.updatedAt = Date.now()
 
     try {
-        await data.setJSON(`users/${user.id}.json`, user)
+        await data.setJSON(blobKeys.user(user.id), user)
     } catch (error) {
         await rollback()
         throw error
