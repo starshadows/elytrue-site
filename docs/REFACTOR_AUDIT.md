@@ -146,11 +146,16 @@ Store 名称保持：
 - favicon、社交分享图、字体、默认头像和当前 UI 引用的 SVG。
 - `ASSETS.md`、`NOTICE.md` 及页面中的作者、来源和权利说明。
 
-待可达性核查：
+直接访问保护：
 
 - `public/yumeniwa/` 可由直接 URL 访问，但依赖旧外部服务器；在无法证明用户不依赖前不删除。
-- `index.hlsvideo.html`、Walpurgis、kami、圆诞/圣诞/新年/七夕、隐藏小游戏 DOM/CSS 均包含旧路径或缺失素材；需以入口、hash、配置、测试和文件存在性共同确认。
-- CSS 引用的 `res/xh_mdk0.png`、`res/xh_mdk1.png` 和小游戏 `res/mello/*` 当前不存在。
+
+### 第六阶段素材审计结果
+
+- 完整清单见 `docs/ASSET_INVENTORY.md`。当前部署素材为 63 个文件、84.72 MiB；16 张 WebP、16 张原图、10 首音乐和 16 个当前 `res` 文件均由静态引用或类型化配置覆盖。
+- 删除 Vercel 配置、旧 API 产物转换器、HLS 辅助页、已关闭主题/旧文案/kami 合并逻辑及隐藏小游戏；同时移除缺失 `xh_mdk` 路径，Vite 不再产生这两项未解析素材警告。
+- `/yumeniwa/` 仍可直接访问且无法证明无历史用户，因此保留其 3 个文件并从主应用 import graph 隔离。
+- `scripts/audit-assets.mjs` 检查缺失、孤立、动态路径、大小写、25 MiB、SHA-256 重复文件及重复音乐；当前通过，无重复音乐或超限文件。
 
 ## EdgeOne 与平台约束
 

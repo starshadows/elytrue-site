@@ -39,13 +39,6 @@ function userAction(
   auth.runProfileAction(action)
 }
 
-function hideBanner(event: MouseEvent): void {
-  const banner = (event.currentTarget as HTMLElement).parentElement
-  if (!banner) return
-  banner.style.display = 'none'
-  requireController().setConfig('hiddenBanner', banner.classList[0] ?? '')
-}
-
 function hidePinnedNotice(): void {
   const controller = requireController()
   controller.hideTopCommentElmnt?.click()
@@ -139,38 +132,18 @@ function adjustZoom(delta: number): void {
   updateZoom(value)
 }
 
-function toggleGame(event: Event): void {
-  const input = event.currentTarget as HTMLInputElement
-  input.parentElement?.classList.toggle('active', input.checked)
-}
-
-function showFixtureComment(event: MouseEvent): void {
-  const number = (event.currentTarget as HTMLElement)
-    .closest('.userCommentItem')
-    ?.querySelector('p > span')
-    ?.textContent?.replace('#', '')
-  if (!number) return
-  const controller = requireController()
-  controller.clearComments(1)
-  void controller.loadComments({ from: number })
-  controller.closePopup()
-}
-
 defineExpose({
   adjustZoom,
   changeZoom,
   gotoComment,
-  hideBanner,
   hidePinnedNotice,
   installPwa,
   newComment,
   refreshComments,
   seekComment,
   setLanguage,
-  showFixtureComment,
   showPopup,
   toggleFullscreen,
-  toggleGame,
   toggleHidden,
   toggleTimeline,
   toggleTopComment,

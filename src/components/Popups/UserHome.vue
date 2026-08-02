@@ -16,8 +16,7 @@
     </div>
     <div v-if="showAction" class="useraction">
       <div>
-        <img :src="`${baseUrl}res/edit.svg`" /><span class="ui zh"
-          >编辑资料</span
+        <img src="/res/edit.svg" /><span class="ui zh">编辑资料</span
         ><span class="ui en">Edit profile</span>
         <ul>
           <li @click="userAction('changeName')">
@@ -39,8 +38,7 @@
         </ul>
       </div>
       <div>
-        <img :src="`${baseUrl}res/logout.svg`" /><span class="ui zh"
-          >退出登录</span
+        <img src="/res/logout.svg" /><span class="ui zh">退出登录</span
         ><span class="ui en">Log out</span>
         <ul>
           <li @click="userAction('logout')">
@@ -54,8 +52,7 @@
         </ul>
       </div>
       <div v-if="user.role === 'admin'" @click="openAdmin">
-        <img :src="`${baseUrl}res/edit.svg`" /><span class="ui zh"
-          >管理举报与留言</span
+        <img src="/res/edit.svg" /><span class="ui zh">管理举报与留言</span
         ><span class="ui en">Moderation</span>
       </div>
     </div>
@@ -74,9 +71,9 @@
         <img
           v-for="image in item.images"
           :key="image"
-          :src="`${baseUrl}api/data/images/posts/${image}.jpg`"
+          :src="`/api/data/images/posts/${image}.jpg`"
           loading="lazy"
-          @click="viewImageUrl(`${baseUrl}api/data/images/posts/${image}.jpg`)"
+          @click="viewImageUrl(`/api/data/images/posts/${image}.jpg`)"
         />
       </p>
     </div>
@@ -91,7 +88,6 @@
 import { onMounted, ref } from 'vue'
 import { requireController, viewImage } from '../../app/controller'
 import XHR from '../../net/xhr'
-import { baseUrl } from '../../net'
 import FloatMsgs from '../FloatMsgs'
 
 interface UserProfile {

@@ -1,5 +1,4 @@
-import XHR, { baseUrl } from './net/xhr'
-import { bgBaseUrl } from './net'
+import XHR from './net/xhr'
 import Settings from './settings'
 import { getCookie, setCookie, getConfig, setConfig } from './settings/config'
 import { changeLang } from './settings/lang'
@@ -29,15 +28,9 @@ function finishCommentsLoading() {
     .getElementById('loadingIndicator')
     ?.style.setProperty('display', 'none')
 }
-function loadComments(queryObj = {}, keepPosEl = void 0, noKami = false) {
-  var isCommentsNewer =
-    queryObj.db == 'kami'
-      ? queryObj.from > getMaxKamiID()
-      : queryObj.from > getMaxCommentID()
-  var isCommentsOlder =
-    queryObj.db == 'kami'
-      ? queryObj.from < getMinKamiID()
-      : queryObj.from < getMinCommentID()
+function loadComments(queryObj = {}, keepPosEl = void 0) {
+  var isCommentsNewer = queryObj.from > getMaxCommentID()
+  var isCommentsOlder = queryObj.from < getMinCommentID()
   return XHR.get('comments', queryObj)
     .then((response) => {
       const truncated = !Array.isArray(response) && response?.hasMore === true
@@ -80,18 +73,7 @@ function loadComments(queryObj = {}, keepPosEl = void 0, noKami = false) {
       }
       var prevCommentTop = keepPosEl.getBoundingClientRect().top
       var prevCommentLeft = keepPosEl.getBoundingClientRect().left
-      var prevMaxCommentTime = getMaxCommentTime()
-      var prevMinCommentTime = getMinCommentTime()
-      for (let comment of items) {
-        if (
-          queryObj.db == 'kami' &&
-          comment.id >= 35668 &&
-          getMaxCommentTime() <= 1684651800
-        ) {
-          continue
-        }
-        insertComment(comment, queryObj.db == 'kami' ? true : false)
-      }
+      for (let comment of items) insertComment(comment)
       if (keepPos && document.getElementById('topComment') == null) {
         if (isFullscreen) {
           var newCommentTop = keepPosEl.getBoundingClientRect().top
@@ -99,36 +81,6 @@ function loadComments(queryObj = {}, keepPosEl = void 0, noKami = false) {
         } else {
           var newCommentLeft = keepPosEl.getBoundingClientRect().left
           commentDiv.scrollLeft += newCommentLeft - prevCommentLeft
-        }
-      }
-      if (Settings.showKami && queryObj.db == null && noKami == false) {
-        if (isCommentsOlder) {
-          loadComments({
-            timeMin: items[items.length - 1].time,
-            timeMax: prevMinCommentTime,
-            db: 'kami',
-          })
-        } else if (isCommentsNewer) {
-          loadComments(
-            {
-              timeMin: prevMaxCommentTime,
-              timeMax: items[0].time,
-              db: 'kami',
-            },
-            keepPosEl,
-          )
-        } else if (queryObj.time != null || queryObj.from != null) {
-          loadComments({
-            timeMin: items[items.length - 1].time,
-            timeMax: items[0].time,
-            db: 'kami',
-          })
-        } else if (queryObj.timeMin == null && queryObj.timeMax == null) {
-          loadComments({
-            timeMin: items[items.length - 1].time,
-            timeMax: parseInt(Date.now() / 1e3),
-            db: 'kami',
-          })
         }
       }
       setTimelineActiveMonth(true)
@@ -149,16 +101,14 @@ function loadComments(queryObj = {}, keepPosEl = void 0, noKami = false) {
       finishCommentsLoading()
     })
 }
-function insertComment(comment, isKami = false) {
+function insertComment(comment) {
   var insertBeforeEl = null
   function compareCommentAt(i) {
     return compareArr(
       [comment.time, comment.id],
       [
         parseInt(commentList[i].dataset.timestamp),
-        commentList[i].id == ''
-          ? parseInt(commentList[i].dataset.kamiid.replace('#', ''))
-          : parseInt(commentList[i].id.replace('#', '')),
+        parseInt(commentList[i].id.replace('#', '')),
       ],
     )
   }
@@ -196,19 +146,13 @@ function insertComment(comment, isKami = false) {
   if (lastBgImgs.length > 5) {
     lastBgImgs.splice(0, 1)
   }
-  if (isKami == true) {
-    comment.comment = comment.comment.replace(
-      'This message is sent using a proxy. If it is dirty, please click here to delete it.',
-      '',
-    )
-  }
   let commentExtra = ''
   try {
     if (comment.image != '') {
       for (let i of comment.image.split(',')) {
         commentExtra +=
           /*html*/
-          `<img loading="lazy" src="${baseUrl}api/data/images/posts/${i}.jpg" data-action="view-image" data-lift-panel="true">`
+          `<img loading="lazy" src="/api/data/images/posts/${i}.jpg" data-action="view-image" data-lift-panel="true">`
       }
     }
   } catch (error) {
@@ -218,41 +162,39 @@ function insertComment(comment, isKami = false) {
   if (comment.replyid) {
     commentExtra = '<br><div class="reply-quote"></div>' + commentExtra
   }
-  const displayId = isKami ? comment.id : (comment.displayId ?? comment.id)
+  const displayId = comment.displayId ?? comment.id
   const canReport =
-    !isKami && User.LoggedOnUserId != null && User.LoggedOnUserId != comment.uid
+    User.LoggedOnUserId != null && User.LoggedOnUserId != comment.uid
   let commentEl = html2elmnt(
     /*html*/
     `
-        <div class="commentBox commentItem${comment.hidden ? ' hidden' : ''}" ${isKami == true ? `data-kamiid="#${comment.id}"` : `id="#${comment.id}" data-uid="${htmlEscape(comment.uid)}" data-number="${displayId}"`} data-timestamp="${comment.time}">
+        <div class="commentBox commentItem${comment.hidden ? ' hidden' : ''}" id="#${comment.id}" data-uid="${htmlEscape(comment.uid)}" data-number="${displayId}" data-timestamp="${comment.time}">
             <img class="bg" loading="lazy" src="${msgBgInfo[randBG - 1].src}" ${comment.hidden == 1 ? 'style="display: none;"' : ''}>
             <div class="bgcover"></div>
-            <img class="avatar" loading="lazy" src="${isKami == true ? `https://kami.im/getavatar.php?uid=${comment.uid}` : User.convertAvatarPath(comment.avatar)}">
+            <img class="avatar" loading="lazy" src="${User.convertAvatarPath(comment.avatar)}">
             <div class="sender" data-action="click-previous">
                 ${comment.sender == '\u533F\u540D\u7528\u6237' ? '<span class="ui zh">\u533F\u540D\u7528\u6237</span><span class="ui en">Anonymous</span>' : htmlEscape(comment.sender)}
             </div>
-            <div class="id">#${displayId}${isKami == true ? ' (kami.im)' : ''}</div>
+            <div class="id">#${displayId}</div>
             <div class="comment">${htmlEscape(comment.comment)}${commentExtra}</div>
             <div class="time">${date + ' ' + hour}${comment.hidden == 1 ? ' (hidden)' : ''}</div>
-            <div class="action" ${isKami ? 'style="display: none"' : ''}>
+            <div class="action">
                 <span class="btn like">
                     <span class="like-count"></span>
                 </span>
-                <img class="btn reply" src="${baseUrl}res/reply.svg">
+                <img class="btn reply" src="/res/reply.svg">
                 ${canReport ? '<span class="btn report"><span class="ui zh">\u4E3E\u62A5</span><span class="ui en">Report</span></span>' : ''}
             </div>
         </div>
     `,
   )
   commentEl.querySelector('.avatar').onclick = function () {
-    if (comment.uid != null && !isKami) {
+    if (comment.uid != null) {
       Popup.show('userHome', {
         id: comment.uid,
         name: comment.sender,
         avatar: comment.avatar,
       })
-    } else {
-      showUserComment(comment.sender, this.src, comment.uid)
     }
     Comments.forceLowerPanelUp()
   }
@@ -371,7 +313,6 @@ function bindReportButton(reportBtn, comment, displayId) {
 }
 function refreshCommentActions() {
   Array.from(document.getElementsByClassName('commentItem')).forEach((el) => {
-    if (el.hasAttribute('data-kamiid')) return
     const commentId = Number(String(el.id).replace(/^#/, ''))
     const uid = el.dataset.uid
     const displayId = Number(el.dataset.number || commentId)
@@ -402,7 +343,7 @@ function initCommentReplyQuote(el, id, params) {
     el.innerHTML =
       /*html*/
       `
-            <img class="reply-icon" src="${baseUrl}res/reply.svg">
+            <img class="reply-icon" src="/res/reply.svg">
             <div class="quote-content">
                 <div class="quote-head">
                     <img class="quote-avatar" src="${User.convertAvatarPath(comment.avatar)}">
@@ -437,13 +378,7 @@ function clearComments(clearTop) {
   document.body.classList.remove('touchKeyboardShowing')
 }
 function loadOlderComments() {
-  if (getMinCommentID() == null || getMinCommentID() <= 1) {
-    if (getMinKamiID() == null) {
-      loadComments({ from: 35662, db: 'kami' })
-    } else {
-      loadComments({ from: getMinKamiID() - 1, db: 'kami' })
-    }
-  } else {
+  if (getMinCommentID() != null && getMinCommentID() > 1) {
     loadComments({ from: getMinCommentID() - 1 })
   }
 }
@@ -463,21 +398,10 @@ function loadNewerComments() {
     }
     commentDiv.scrollTop = 0
   }
-  if (getMaxKamiID() == null || getMaxKamiID() >= 35662) {
-    if (getMaxCommentID() == null) {
-      if (getMaxKamiID() == 35662)
-        loadComments({ time: getMaxCommentTime() }, getFirstVisibleComment())
-      if (getMaxKamiID() != 35662)
-        loadComments(
-          { timeMin: getMinCommentTime(), timeMax: getMaxCommentTime() },
-          getFirstVisibleComment(),
-          true,
-        )
-    } else {
-      loadComments({ from: getMaxCommentID() + 1, count: 0 - count })
-    }
+  if (getMaxCommentID() == null) {
+    loadComments({ time: getMaxCommentTime() }, getFirstVisibleComment())
   } else {
-    loadComments({ from: getMaxKamiID() + 1, count: 0 - count, db: 'kami' })
+    loadComments({ from: getMaxCommentID() + 1, count: 0 - count })
   }
 }
 function getMaxCommentID() {
@@ -489,18 +413,6 @@ function getMinCommentID() {
   var commentList = document.querySelectorAll('.commentItem[id^="#"]')
   if (commentList.length > 0)
     return parseInt(commentList[commentList.length - 1].id.replace('#', ''))
-}
-function getMaxKamiID() {
-  var commentList = document.querySelectorAll('.commentItem[data-kamiid^="#"]')
-  if (commentList.length > 0)
-    return parseInt(commentList[0].dataset.kamiid.replace('#', ''))
-}
-function getMinKamiID() {
-  var commentList = document.querySelectorAll('.commentItem[data-kamiid^="#"]')
-  if (commentList.length > 0)
-    return parseInt(
-      commentList[commentList.length - 1].dataset.kamiid.replace('#', ''),
-    )
 }
 function getMaxCommentTime() {
   var commentList = document.querySelectorAll('.commentItem')
@@ -972,8 +884,8 @@ const User = {
   },
   convertAvatarPath(avatar) {
     return avatar
-      ? `${baseUrl}api/data/images/avatars/` + encodeURIComponent(avatar)
-      : `${baseUrl}res/defaultAvatar.png`
+      ? `/api/data/images/avatars/` + encodeURIComponent(avatar)
+      : `/res/defaultAvatar.png`
   },
   loadUserInfo() {
     var userInfo = document.getElementById('userInfo')
@@ -1051,118 +963,6 @@ try {
   if (!STATIC_SHOWCASE_MODE) User.init()
 } catch (error) {
   logErr(error, 'failed to init user')
-}
-function showUserComment(user, avatar, uid) {
-  if ((user == null && userCommentUser == '') || user == '') {
-    return
-  }
-  userCommentEl.removeEventListener('scroll', userCommentScroll)
-  if (user != null) {
-    userCommentEl.innerHTML =
-      /*html*/
-      `
-        <h2>
-            <img src="${avatar}" data-action="view-image">
-            <span>${user == '\u533F\u540D\u7528\u6237' ? '<span class="ui zh">\u533F\u540D\u7528\u6237</span><span class="ui en">Anonymous</span>' : htmlEscape(user)}${uid ? `<span class='kamiuid'>${uid}</span>` : ''}</span>
-        </h2>
-        `
-    showPopup('showUserCommentPopup')
-    userCommentUser = user
-    userCommentOffset = 0
-    userCommentIsKami = false
-  }
-  const xhr = new XMLHttpRequest()
-  if (user != null) {
-    xhr.open(
-      'GET',
-      `${baseUrl}api/comments` + obj2queryString({ user, count: 50 }),
-    )
-  } else {
-    xhr.open(
-      'GET',
-      `${baseUrl}api/comments` +
-        obj2queryString({
-          user: userCommentUser,
-          from: userCommentOffset,
-          count: 50,
-          db: userCommentIsKami == true ? 'kami' : null,
-        }),
-    )
-  }
-  xhr.responseType = 'json'
-  xhr.onload = () => {
-    if (xhr.status == 200) {
-      for (var comment of xhr.response) {
-        var time = new Date(comment.time * 1e3)
-        var date = time.toLocaleDateString()
-        var hour = time.toLocaleTimeString()
-        var imgsDOM = '<i></i>'
-        try {
-          if (comment.image != '') {
-            for (var i of comment.image.split(',')) {
-              imgsDOM +=
-                /*html*/
-                `<img loading="lazy" src="${baseUrl}api/data/images/posts/${i}.jpg" data-action="view-image">`
-            }
-          }
-        } catch (error) {
-          void error
-        }
-        userCommentEl.appendChild(
-          html2elmnt(
-            /*html*/
-            `
-                    <div class="userCommentItem">
-                        <p>${date + ' ' + hour}<span>#${userCommentIsKami ? comment.id : (comment.displayId ?? comment.id)}</span></p>
-                        <p>
-                            <span data-action="goto-user-comment" data-number="${comment.number ?? comment.id}"
-                                >${htmlEscape(comment.comment)}</span>
-                            ${imgsDOM}
-                        </p>
-                    </div>
-                `,
-          ),
-        )
-        userCommentOffset++
-      }
-      if (userCommentIsKami == true && xhr.response.length < 10) {
-        userCommentUser = ''
-        userCommentEl.appendChild(
-          html2elmnt(
-            /*html*/
-            `
-                    <h4>
-                        <span class="ui zh">- \u5171 ${document.getElementById('userComment').getElementsByTagName('div').length} \u6761\u7559\u8A00 -</span>
-                        <span class="ui en">- Total ${document.getElementById('userComment').getElementsByTagName('div').length} messages -</span>
-                    </h4>
-                `,
-          ),
-        )
-      }
-      if (userCommentIsKami == false && xhr.response.length < 10) {
-        userCommentOffset = 0
-        userCommentIsKami = true
-        setTimeout(showUserComment)
-      }
-      userCommentEl.addEventListener('scroll', userCommentScroll)
-    }
-  }
-  xhr.onerror = () => {
-    setTimeout(() => {
-      userCommentEl.addEventListener('scroll', userCommentScroll)
-      userCommentScroll()
-    }, 1e3)
-  }
-  xhr.send()
-}
-function userCommentScroll() {
-  var toBottom =
-    userCommentEl.scrollHeight -
-    userCommentEl.clientHeight -
-    userCommentEl.scrollTop
-  if (toBottom < 100 && Popup.isOpen()) {
-    showUserComment()
-  }
 }
 const Theme = {
   elements: {
@@ -1294,48 +1094,6 @@ const Theme = {
     } catch (error) {
       logErr(error, 'theme indicator text not defined')
     }
-    try {
-      if (theme == 'birthday') {
-        let d = /* @__PURE__ */ new Date()
-        let yearsOld = d.getFullYear() - 2011
-        document.getElementById('birthdayDate').innerHTML =
-          `10/3/${d.getFullYear()} - Madoka's ${yearsOld}th birthday`
-      }
-      if (theme == 'lunarNewYear') {
-        document.getElementsByClassName('fireworks')[0].classList.add('visible')
-      } else {
-        document
-          .getElementsByClassName('fireworks')[0]
-          .classList.remove('visible')
-      }
-      if (theme == 'walpurgispv') {
-        let bg = document.querySelector('.walpurgispvbg')
-        let iframe = document.querySelector('.walpurgispvbg iframe')
-        if (iframe.contentWindow.video) iframe.contentWindow.location.reload()
-        else
-          iframe.src = `index.hlsvideo.html#${baseUrl}media/walpurgis2_full.m3u`
-        bg.onclick = () =>
-          iframe.contentWindow.video && iframe.contentWindow.video.click()
-        setTimeout(() => {
-          MusicPlayer.elements.player.muted = true
-        }, 0)
-      } else {
-        let video = document.querySelector('.walpurgispvbg iframe')
-          .contentWindow.video
-        if (video) video.pause()
-        setTimeout(() => {
-          MusicPlayer.elements.player.muted = false
-        }, 0)
-      }
-      if (theme == 'kami') {
-        printParaCharOneByOne(
-          document.getElementsByClassName('kamiCaption')[0],
-          750,
-        )
-      }
-    } catch (error) {
-      logErr(error, 'failed to init theme-specific options')
-    }
     this.timers.clear()
     this.theme = theme
     this.currentBG = this.getCurrentBgCount() - 1
@@ -1380,9 +1138,7 @@ const Theme = {
       bgs[prev].classList.remove('visible')
       bgs[this.currentBG].classList.add('ready', 'animating', 'visible')
       const currentSource =
-        bgs[this.currentBG].dataset.activeSrc ||
-        bgs[this.currentBG].dataset.src ||
-        `${bgBaseUrl}mainbg${this.currentBG + 1}.jpg`
+        bgs[this.currentBG].dataset.activeSrc || bgs[this.currentBG].dataset.src
       bgs[this.currentBG].firstElementChild.style.backgroundImage =
         `url("${currentSource}")`
       if (prev == this.currentBG) return
@@ -1390,10 +1146,7 @@ const Theme = {
         bgs[prev].classList.remove('ready', 'animating')
         bgs[next].classList.add('ready')
         bgs[next].classList.remove('bgzoom')
-        const nextSource =
-          bgs[next].dataset.activeSrc ||
-          bgs[next].dataset.src ||
-          `${bgBaseUrl}mainbg${next + 1}.jpg`
+        const nextSource = bgs[next].dataset.activeSrc || bgs[next].dataset.src
         bgs[next].firstElementChild.style.backgroundImage =
           `url("${nextSource}")`
       }, 2500)
@@ -1436,59 +1189,6 @@ try {
   Theme.init()
 } catch (error) {
   logErr(error, 'failed to init theme')
-}
-function printParaCharOneByOne(divEl, delay = 0) {
-  const paras = []
-  for (let i = 0; i < divEl.children.length; i++) {
-    const paraEl = divEl.children[i]
-    paras.push(paraEl.innerHTML)
-    paraEl.innerHTML = ''
-  }
-  let paraIndex = 0
-  let charIndex = 0
-  const pauseChars = [',', '.']
-  const pauseMultiplier = 6
-  let pauseCount = 0
-  setTimeout(() => {
-    let printInterval = setInterval(() => {
-      if (paraIndex < paras.length) {
-        if (charIndex < paras[paraIndex].length) {
-          const char = paras[paraIndex][charIndex]
-          if (pauseChars.includes(char)) {
-            if (pauseCount == 0) {
-              divEl.children[paraIndex].innerHTML += char
-            }
-            if (pauseCount < pauseMultiplier) {
-              pauseCount++
-              return
-            } else {
-              pauseCount = 0
-            }
-          } else {
-            divEl.children[paraIndex].innerHTML += char
-          }
-          charIndex++
-        } else {
-          charIndex = 0
-          paraIndex++
-        }
-      } else {
-        clearInterval(printInterval)
-      }
-    }, 50)
-  }, delay)
-}
-function playWalpurgis(time_ms2) {
-  document.getElementById('videoBgBox').style.opacity = 1
-  document.getElementById('videoBgBox').style.display = 'block'
-  document.getElementById('mainVideo').src = `${baseUrl}media/walpurgis1.1.mp4`
-  document.getElementById('mainVideo').play()
-  setTimeout(() => {
-    document.getElementById('videoBgBox').style.opacity = 0
-    setTimeout(() => {
-      document.getElementById('videoBgBox').style.display = 'none'
-    }, 1e3)
-  }, time_ms2)
 }
 function getFullscreenHorizonalCommentCount() {
   if (!isFullscreen) return null
@@ -1824,13 +1524,9 @@ function isEmail(s) {
   return /^\S+@\S+\.\S+$/.test(s)
 }
 var maxTimelineTime = 0
-var userCommentUser = ''
-var userCommentOffset = 0
-var userCommentIsKami = false
 const bgContainer = document.getElementById('bgContainer')
 const lowerPanel = document.getElementById('lowerPanel')
 var commentDiv = document.getElementById('comments')
-var userCommentEl = document.getElementById('userComment')
 var hoverCalendarEl = document.getElementById('hoverCalendar')
 var hideTopCommentElmnt = document.getElementById('hideTopComment')
 var showTimelineElmnt = document.getElementById('showTimeline')
@@ -1863,55 +1559,12 @@ if (getConfig('hideTopComment') == 'true') {
   document.getElementById('topComment').style.display = 'none'
   topComment = document.getElementById('topComment').outerHTML
 }
-if (
-  getConfig('hiddenBanner') != document.getElementById('banner').classList[0]
-) {
-}
 if (getConfig('showTimeline') == 'false') {
   showTimelineElmnt.checked = false
   toggleTimeline()
 }
 function playBG() {}
-if (location.hash == '#video') {
-  time_ms = 5e3
-  playWalpurgis(time_ms)
-  document.getElementsByClassName('walpurgisbg')[0].style.opacity = 1
-  document.getElementsByClassName('walpurgisbg')[0].style.display = 'block'
-  document.getElementsByClassName(
-    'walpurgisbg',
-  )[0].firstElementChild.style.backgroundImage =
-    `url("${bgBaseUrl}walpurgis/mainbg1.jpg")`
-  document.getElementsByClassName(
-    'walpurgisbg',
-  )[0].firstElementChild.style.animationName = 'bgzoom'
-  document.getElementsByClassName(
-    'walpurgisbg',
-  )[0].firstElementChild.style.animationDuration = '1.5s'
-  var unmuteBGM = false
-  if (bgmElmnt.muted == false) {
-    bgmElmnt.muted = true
-    unmuteBGM = true
-  }
-  setTimeout(() => {
-    document
-      .getElementsByClassName('walpurgisbg')[0]
-      .firstElementChild.style.removeProperty('animation-name')
-    document
-      .getElementsByClassName('walpurgisbg')[0]
-      .firstElementChild.style.removeProperty('animation-duration')
-    setTimeout(() => {
-      document.getElementsByClassName('walpurgisbg')[0].style.opacity = 0
-      playBG()
-      setTimeout(() => {
-        if (unmuteBGM) {
-          bgmElmnt.muted = false
-        }
-      }, 2e3)
-    }, 8e3)
-  }, time_ms)
-} else {
-  playBG()
-}
+playBG()
 const Comments = {
   elements: {
     container: document.getElementById('comments'),
@@ -2205,11 +1858,7 @@ document
     } else return
     var timestamp = Math.min(date.getTime(), maxTimelineTime * 1e3) / 1e3
     clearComments(1)
-    if (timestamp <= 1684651800) {
-      loadComments({ time: timestamp, db: 'kami' })
-    } else {
-      loadComments({ time: timestamp })
-    }
+    loadComments({ time: timestamp })
   })
 document
   .getElementById('timelineContainer')
@@ -2250,9 +1899,7 @@ document
       var year = parseInt(event.target.parentNode.firstElementChild.innerHTML)
       var month = parseInt(event.target.innerHTML)
       hoverCalendarEl.appendChild(
-        html2elmnt(
-          `<div>${year}-${('0' + month).slice(-2)}${year <= 2022 || (year == 2023 && month <= 5) ? ' (kami.im)' : ''}</div>`,
-        ),
+        html2elmnt(`<div>${year}-${('0' + month).slice(-2)}</div>`),
       )
       for (let i = 1; i <= new Date(year, month, 0).getDate(); i++) {
         const day = new Date(year, month - 1, i)
@@ -2328,7 +1975,7 @@ const MusicPlayer = {
     this.elements.player.src = this.playList[index]
     this.elements.player.load()
     this.elements.playerImg.onclick = null
-    this.elements.playerImg.src = `${baseUrl}res/music_note.svg`
+    this.elements.playerImg.src = '/res/music_note.svg'
     for (let i = 0; i < this.elements.titles.length; i++) {
       this.elements.titles[i].textContent = getFileNameWithoutExt(
         this.playList[index],
@@ -2557,7 +2204,7 @@ const MusicPlayer = {
   },
 }
 try {
-  MusicPlayer.initPlayer(`${baseUrl}${MUSIC_ROOT.replace(/^\//, '')}`)
+  MusicPlayer.initPlayer(MUSIC_ROOT)
 } catch (error) {
   logErr(error, 'failed to init music player')
 }
@@ -2664,8 +2311,6 @@ export {
   TouchKeyboardDetector,
   User,
   XHR,
-  baseUrl,
-  bgBaseUrl,
   bgContainer,
   bindReportButton,
   cancelMessage,
@@ -2687,10 +2332,8 @@ export {
   getFullscreenHorizonalCommentCount,
   getMaxCommentID,
   getMaxCommentTime,
-  getMaxKamiID,
   getMinCommentID,
   getMinCommentTime,
-  getMinKamiID,
   getRandomIntInclusive,
   hideTopCommentElmnt,
   hoverCalendarEl,
@@ -2719,9 +2362,7 @@ export {
   newComment,
   obj2queryString,
   playBG,
-  playWalpurgis,
   previewLocalImgs,
-  printParaCharOneByOne,
   readFile,
   refreshCommentActions,
   resizeImg,
@@ -2735,16 +2376,10 @@ export {
   setTodayCommentCount,
   showPopup,
   showTimelineElmnt,
-  showUserComment,
   shuffleArray,
   toggleFullscreen,
   toggleTimeline,
   toggleTopComment,
   topComment,
-  userCommentEl,
-  userCommentIsKami,
-  userCommentOffset,
-  userCommentScroll,
-  userCommentUser,
   viewImg,
 }

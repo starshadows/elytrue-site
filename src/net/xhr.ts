@@ -2,9 +2,6 @@ import FloatMsgs from '../components/FloatMsgs'
 import { ApiClient, ApiError, type ApiEnvelope } from '../lib/api-client'
 import { toQueryString } from '../lib/query'
 import Settings from '../settings'
-import { baseUrl } from '.'
-
-export { baseUrl }
 
 interface XHRSettings {
   includeToken?: boolean
@@ -16,13 +13,12 @@ interface XHRSettings {
 type Payload = BodyInit | Record<string, unknown>
 
 const XHR = {
-  baseUrl: `${baseUrl}api/`,
   token: '',
   csrfToken: '',
   client: undefined as ApiClient | undefined,
 
   getClient(): ApiClient {
-    this.client ??= new ApiClient(`/${this.baseUrl}`, {
+    this.client ??= new ApiClient('/api/', {
       getCsrfToken: () => this.csrfToken,
       setCsrfToken: (token) => {
         this.csrfToken = token

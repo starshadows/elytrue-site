@@ -26,13 +26,6 @@ const Settings = {
     document.documentElement.style.fontSize = `${16 * scale}px`
   },
 
-  get showKami() {
-    return false
-  },
-  set showKami(_value) {
-    setConfig('showKami', false)
-  },
-
   get showHidden() {
     let el = document.getElementById('showHiddenCSS')
     return el ? Boolean(el.innerHTML) : false
