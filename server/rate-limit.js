@@ -3,6 +3,10 @@ import { httpError } from './http.js'
 
 const memoryBuckets = new Map()
 
+export function resetMemoryRateLimitsForTests() {
+    memoryBuckets.clear()
+}
+
 const POLICIES = {
     register: [5, 60 * 60],
     login: [12, 15 * 60],

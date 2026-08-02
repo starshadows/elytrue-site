@@ -29,7 +29,7 @@ function background(
     original: `${ASSET_ROOT}/originals/${layout}${number}.${extension}`,
     focus,
     credit: artist
-      ? { zh: `画师：${artist}`, en: `Illustrator: ${artist}` }
+      ? { zh: `画师: ${artist}`, en: `Illustrator: ${artist}` }
       : { zh: '官方美术', en: 'Official art' },
     ...(creditUrl ? { creditUrl } : {}),
   }

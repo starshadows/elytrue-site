@@ -174,6 +174,15 @@ Store 名称保持：
 - `cloud-functions/api/[[default]].js` 入口及默认导出未改；生产代码未引入 Vue、Vite、Playwright、浏览器全局或 Node 22 独占 API。
 - 本阶段 `check:server`、运行时边界检查和全部服务端测试通过；另以 Node 20.19.5 执行服务端测试，87 项通过，真实 EdgeOne 凭据测试未进入该离线命令。
 
+### 第七阶段行为与视觉回归结果
+
+- `tests/frontend/api-client.test.ts` 使用 Node 原生测试运行器和 `tsx` 覆盖同源 `/api/*`、`credentials: "include"`、JSON/CSRF、token 刷新、安全方法、401 清理、30 秒默认超时和调用方取消；不引入 Vitest/Jest。
+- `tests/contracts.test.js` 固定历史 Blob key 的完整字符串、API 路由唯一性和 `cloud-functions/api/[[default]].js` 稳定入口；`tests/build/output.test.js` 检查 SPA 壳、哈希资源以及部署产物不含服务端、测试、EdgeOne CLI 或 Node 专属模块。
+- 新增 SPA fallback 与 `/api/*` 优先级、PWA manifest、16 张背景及焦点、2 个主题、10 首音乐和中英文配置的浏览器契约测试。为使深层 SPA URL 能加载应用，Vite 资源基准由文档相对路径改为站点根路径 `/`；API 路由仍由 Mock/EdgeOne Functions 优先处理。
+- 桌面 1440×900 与移动 390×844 截图直接和第一阶段“应用代码未修改”时的 PNG 基线比较，关闭动画并允许最多 0.3% 像素抗锯齿差异，不接受布局、尺寸、颜色或背景焦点变化。视觉测试发现并修复了背景元数据晚于旧启动逻辑应用导致的焦点/顺序回归。
+- Mock 的 `POST /__test/reset` 仅在本地测试服务器存在，并同时清理 MemoryStore、上传 Store 和进程内限流 bucket，保证账号、留言和视觉种子不会跨用例泄漏；生产 API 不暴露此入口。
+- 阶段结果：5 项 API 客户端测试、2 项构建产物测试、现有服务端/存储/认证/留言/middleware/迁移测试和 22 项 Playwright 测试全部通过；1 项人工基线采集用例按设计跳过。
+
 ## 风险与回滚
 
 - 前端视觉风险：保留 class/ID/CSS，分阶段迁移，以固定数据的桌面/移动截图阻断回归。

@@ -1,0 +1,56 @@
+import { expect, test } from '@playwright/test'
+
+async function expectBaseline(page, name) {
+  await expect(page).toHaveScreenshot(`${name}.png`, {
+    animations: 'disabled',
+    caret: 'hide',
+    maxDiffPixelRatio: 0.003,
+  })
+}
+
+test.beforeEach(async ({ page, context }) => {
+  await page.request.post('/__test/reset')
+  await context.clearCookies()
+  await page.addInitScript(() => {
+    Math.random = () => 0
+  })
+})
+
+test('desktop home matches the pre-refactor visual baseline', async ({
+  page,
+}) => {
+  await page.setViewportSize({ width: 1440, height: 900 })
+  await page.goto('/')
+  await expect(page.locator('#userInfoName')).toHaveText(/访客/)
+  await page.evaluate(() => document.fonts.ready)
+  await expectBaseline(page, 'desktop-home')
+})
+
+test('mobile home matches the pre-refactor visual baseline', async ({
+  page,
+}) => {
+  const register = await page.request.post('/api/user/register', {
+    data: {
+      name: '视觉基线用户',
+      email: 'visual-baseline@example.com',
+      password: 'visual-baseline-password-123',
+    },
+    headers: { origin: 'http://127.0.0.1:4173' },
+  })
+  expect(register.status()).toBe(201)
+  const registered = await register.json()
+  const posted = await page.request.post('/api/comments/post', {
+    data: { comment: '愿花与星辉伴你同行♪', image: [] },
+    headers: {
+      origin: 'http://127.0.0.1:4173',
+      'x-csrf-token': registered.data.csrfToken,
+    },
+  })
+  expect(posted.status()).toBe(201)
+  await page.context().clearCookies()
+  await page.setViewportSize({ width: 390, height: 844 })
+  await page.goto('/')
+  await expect(page.locator('#userInfoName')).toHaveText(/访客/)
+  await page.evaluate(() => document.fonts.ready)
+  await expectBaseline(page, 'mobile-home')
+})

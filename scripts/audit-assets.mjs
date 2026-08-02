@@ -153,7 +153,7 @@ for (const dynamic of dynamicReferences) {
     /^\$\{(?:msgBgInfo\[|User\.convertAvatarPath|i2\}|background\.(?:preview|creditUrl|original)\}|currentSource\}|nextSource\})/u.test(
       dynamic,
     ) ||
-    (dynamic.includes('location.origin') && dynamic.includes('this.baseUrl'))
+    (dynamic.startsWith('path, new URL(') && dynamic.includes('this.baseUrl'))
   ) {
     notices.push(`recognized dynamic path: ${dynamic}`)
   } else {

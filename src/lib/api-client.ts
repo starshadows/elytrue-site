@@ -39,6 +39,11 @@ export interface ApiClientHooks {
   readonly onUnauthorized?: () => void
 }
 
+export interface ApiClientOptions extends ApiClientHooks {
+  readonly origin?: string
+  readonly timeoutMs?: number
+}
+
 const SAFE_METHODS = new Set(['GET', 'HEAD', 'OPTIONS'])
 
 function isEnvelope(value: unknown): value is ApiEnvelope<unknown> {
@@ -53,17 +58,20 @@ function isEnvelope(value: unknown): value is ApiEnvelope<unknown> {
 
 export class ApiClient {
   readonly baseUrl: string
+  readonly origin: string
   readonly timeoutMs: number
   readonly hooks: ApiClientHooks
 
   constructor(
     baseUrl = '/api/',
     {
+      origin = globalThis.location?.origin ?? 'http://localhost',
       timeoutMs = 30_000,
       ...hooks
-    }: ApiClientHooks & { timeoutMs?: number } = {},
+    }: ApiClientOptions = {},
   ) {
     this.baseUrl = baseUrl.endsWith('/') ? baseUrl : `${baseUrl}/`
+    this.origin = origin
     this.timeoutMs = timeoutMs
     this.hooks = hooks
   }
@@ -79,7 +87,7 @@ export class ApiClient {
     }: ApiRequestOptions = {},
   ): Promise<ApiEnvelope<T>> {
     const timeoutController = new AbortController()
-    const timeout = window.setTimeout(
+    const timeout = globalThis.setTimeout(
       () =>
         timeoutController.abort(
           new DOMException('Request timed out', 'TimeoutError'),
@@ -115,7 +123,7 @@ export class ApiClient {
 
     try {
       const response = await fetch(
-        new URL(path, `${location.origin}${this.baseUrl}`),
+        new URL(path, new URL(this.baseUrl, `${this.origin}/`)),
         {
           method,
           headers,
@@ -160,7 +168,7 @@ export class ApiClient {
       if (csrf) this.hooks.setCsrfToken?.(csrf)
       return parsed as ApiEnvelope<T>
     } finally {
-      window.clearTimeout(timeout)
+      globalThis.clearTimeout(timeout)
     }
   }
 }

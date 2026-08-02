@@ -3,6 +3,7 @@ import { readFile, stat } from 'node:fs/promises'
 import { extname, join, normalize } from 'node:path'
 import { fileURLToPath } from 'node:url'
 import { handleApiRequest } from '../server/app.js'
+import { resetMemoryRateLimitsForTests } from '../server/rate-limit.js'
 import { MemoryStore } from '../server/storage.js'
 
 const ROOT = fileURLToPath(new URL('../dist/', import.meta.url))
@@ -119,6 +120,7 @@ const server = createServer(async (req, res) => {
     if (url.pathname === '/__test/reset' && req.method === 'POST') {
         stores.data.values.clear()
         stores.uploads.values.clear()
+        resetMemoryRateLimitsForTests()
         res.statusCode = 204
         res.end()
         return

@@ -18,10 +18,10 @@ const comments = useComments()
 const siteSettings = useSiteSettings()
 
 onMounted(async () => {
+  applyBackgroundMetadata()
   const controller = await import('../index')
   registerController(controller)
   bindControllerEvents()
-  applyBackgroundMetadata()
   await import('../components')
   document.documentElement.dataset.appReady = 'true'
 })
