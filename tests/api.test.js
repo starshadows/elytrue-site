@@ -383,6 +383,27 @@ describe('EdgeOne comments, uploads and moderation API', () => {
             action: 'hide',
         })
         assert.equal(hidden.response.status, 200)
+
+        // 模拟修复前已经存在的举报记录：它没有新写入的 commentNumber 字段。
+        const reportBlobs = await state.stores.data.list({
+            prefix: `reports/${commentId}/`,
+        })
+        const reportKey = reportBlobs.blobs[0].key
+        const legacyReport = await state.stores.data.get(reportKey, { type: 'json' })
+        delete legacyReport.commentNumber
+        await state.stores.data.setJSON(reportKey, legacyReport)
+
+        const removed = await call(state, 'POST', 'admin/comments/moderate', {
+            commentId,
+            action: 'delete',
+        })
+        assert.equal(removed.response.status, 200)
+
+        const deletedReports = await call(state, 'GET', 'admin/reports')
+        assert.equal(deletedReports.response.status, 200)
+        assert.equal(deletedReports.payload.data[0].displayId, 1)
+        assert.equal(deletedReports.payload.data[0].deleted, true)
+        assert.notEqual(deletedReports.payload.data[0].displayId, commentId)
     })
 
     it('rejects forged cross-origin writes', async () => {

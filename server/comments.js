@@ -484,6 +484,7 @@ export async function createReport(data, commentId, user, reason) {
         await data.setJSON(key, {
             id: randomUUID(),
             commentId,
+            commentNumber: validPublicNumber(comment.number),
             userId: user.id,
             reason: cleanReason,
             createdAt: Date.now(),
@@ -495,17 +496,61 @@ export async function createReport(data, commentId, user, reason) {
     }
 }
 
+function validPublicNumber(value) {
+    const number = Number(value)
+    return Number.isSafeInteger(number) && number > 0 && number < INTERNAL_ID_THRESHOLD
+        ? number
+        : null
+}
+
+async function findTombstoneNumbers(data, commentIds) {
+    const unresolved = new Set(commentIds)
+    const result = new Map()
+    if (unresolved.size === 0) return result
+
+    const seats = await listAll(data, blobPrefixes.commentNumbers, Infinity)
+    for (const blob of seats) {
+        const seat = await getJSON(data, blob.key).catch(() => null)
+        const commentId = Number(seat?.commentId)
+        if (!seat?.tombstone || !unresolved.has(commentId)) continue
+
+        const keyNumber = Number(blob.key.slice(blobPrefixes.commentNumbers.length, -5))
+        const number = validPublicNumber(seat.number) ?? validPublicNumber(keyNumber)
+        if (!number) continue
+        result.set(commentId, number)
+        unresolved.delete(commentId)
+        if (unresolved.size === 0) break
+    }
+    return result
+}
+
 export async function listReports(data) {
     const blobs = await listAll(data, blobPrefixes.reports, Infinity)
     const reports = []
+    const unresolvedDeletedIds = new Set()
     for (const blob of blobs) {
         const report = await getJSON(data, blob.key)
         if (!report) continue
         const comment = await getJSON(data, blobKeys.comment(report.commentId)).catch(() => null)
+        const displayId =
+            validPublicNumber(comment?.number) ??
+            validPublicNumber(report.commentNumber)
+        const internalId = Number(report.commentId)
+        if (!comment && !displayId && Number.isSafeInteger(internalId)) {
+            unresolvedDeletedIds.add(internalId)
+        }
         reports.push({
             ...report,
-            displayId: comment?.number ?? report.commentId,
+            displayId,
+            deleted: !comment,
         })
+    }
+
+    const tombstoneNumbers = await findTombstoneNumbers(data, unresolvedDeletedIds)
+    for (const report of reports) {
+        if (!report.displayId && report.deleted) {
+            report.displayId = tombstoneNumbers.get(Number(report.commentId)) ?? null
+        }
     }
     return reports.sort((a, b) => b.createdAt - a.createdAt)
 }

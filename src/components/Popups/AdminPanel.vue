@@ -4,6 +4,16 @@
       <span class="ui zh">留言管理</span><span class="ui en">Moderation</span>
     </h2>
 
+    <p class="numbering-note">
+      <span class="ui zh"
+        >公开编号用于回复和跳转；删除后保留编号，避免旧链接指向其他留言。</span
+      >
+      <span class="ui en"
+        >Public numbers remain reserved after deletion so old links cannot point
+        to another message.</span
+      >
+    </p>
+
     <p class="usage" v-if="usage">
       <span class="ui zh">图片累计记录：</span
       ><span class="ui en">Recorded uploads: </span>
@@ -26,21 +36,41 @@
       :key="report.id || `${report.commentId}-${report.userId}`"
     >
       <header>
-        <b>#{{ report.displayId ?? report.commentId }}</b>
+        <b v-if="report.displayId">
+          #{{ report.displayId }}
+          <small v-if="report.deleted">
+            <span class="ui zh">（已删除，编号保留）</span
+            ><span class="ui en"> (deleted, number reserved)</span>
+          </small>
+        </b>
+        <b v-else>
+          <span class="ui zh">{{
+            report.deleted ? '已删除留言' : '旧版留言'
+          }}</span>
+          <span class="ui en">{{
+            report.deleted ? 'Deleted message' : 'Legacy message'
+          }}</span>
+        </b>
         <time>{{ new Date(report.createdAt).toLocaleString() }}</time>
       </header>
       <p>{{ report.reason }}</p>
-      <div>
-        <button @click="moderate(report.commentId, 'hide')">
+      <div v-if="!report.deleted">
+        <button @click="moderate(report, 'hide')">
           <span class="ui zh">隐藏</span><span class="ui en">Hide</span>
         </button>
-        <button @click="moderate(report.commentId, 'restore')">
+        <button @click="moderate(report, 'restore')">
           <span class="ui zh">恢复</span><span class="ui en">Restore</span>
         </button>
-        <button class="danger" @click="moderate(report.commentId, 'delete')">
+        <button class="danger" @click="moderate(report, 'delete')">
           <span class="ui zh">删除</span><span class="ui en">Delete</span>
         </button>
       </div>
+      <p v-else class="deleted-note">
+        <span class="ui zh">留言正文已删除；举报记录保留用于审计。</span>
+        <span class="ui en"
+          >The message was deleted; its report remains for audit history.</span
+        >
+      </p>
     </article>
   </div>
 </template>
@@ -53,7 +83,8 @@ interface Report {
   id?: string
   commentId: number
   userId: string
-  displayId?: number
+  displayId?: number | null
+  deleted?: boolean
   createdAt: number
   reason: string
 }
@@ -91,10 +122,14 @@ export default {
         })
     },
 
-    moderate(commentId: number, action: 'hide' | 'restore' | 'delete') {
-      if (action == 'delete' && !window.confirm(`确定删除留言 #${commentId}？`))
+    moderate(report: Report, action: 'hide' | 'restore' | 'delete') {
+      const label = report.displayId ? `#${report.displayId}` : '该留言'
+      if (action == 'delete' && !window.confirm(`确定删除留言 ${label}？`))
         return
-      XHR.post('admin/comments/moderate', { commentId, action }).then((r) => {
+      XHR.post('admin/comments/moderate', {
+        commentId: report.commentId,
+        action,
+      }).then((r) => {
         if (r.code == 1) {
           FloatMsgs.show({
             type: 'success',
@@ -120,8 +155,15 @@ export default {
 }
 
 .usage,
+.numbering-note,
 .empty {
   text-align: center;
+}
+
+.numbering-note,
+.deleted-note {
+  opacity: 0.72;
+  font-size: 0.85em;
 }
 
 article {
@@ -140,6 +182,10 @@ article > div {
 
 article time {
   opacity: 0.65;
+}
+
+article small {
+  font-weight: normal;
 }
 
 article button {
