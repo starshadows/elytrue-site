@@ -516,8 +516,15 @@ describe('visible-comment pagination', () => {
         viewer.stores = state.stores
         await register(viewer, '分页丙', 'page-c@example.com')
         const posts = []
-        for (let i = 1; i <= 6; i += 1) {
-            posts.push(await postComment(state, `留言${i}`))
+        const realNow = Date.now
+        const baseTime = realNow() - 1000
+        try {
+            for (let i = 1; i <= 6; i += 1) {
+                Date.now = () => baseTime + i * 10
+                posts.push(await postComment(state, `留言${i}`))
+            }
+        } finally {
+            Date.now = realNow
         }
         // 隐藏第 2、4 条
         await call(state, 'POST', 'admin/bootstrap', undefined, {

@@ -454,7 +454,7 @@ const NewMessage = {
                 <div class="sender" id="senderText" data-action="user-change-name"></div>
                 <div class="id" data-action="show-login"><span class="ui zh">\u6CE8\u518C/\u767B\u5F55</span><span class="ui en">Login / Register</span></div>
                 <div class="comment">
-                    <div id="msgText" placeholder="\u613F\u82B1\u4E0E\u661F\u8F89\u4F34\u4F60\u540C\u884C\u266A" contenteditable="true" onfocus="Comments.forceLowerPanelUp(); TouchKeyboardDetector.detect()" onblur="TouchKeyboardDetector.detect()"></div>
+                    <div id="msgText" placeholder="\u613F\u82B1\u4E0E\u661F\u8F89\u4F34\u4F60\u540C\u884C\u266A" contenteditable="true"></div>
                     <div id="uploadImgList"></div>
                 </div>
                 <label>
@@ -470,7 +470,13 @@ const NewMessage = {
       ),
       commentDiv.firstElementChild,
     )
-    document.getElementById('msgText').focus({ preventScroll: true })
+    const editor = document.getElementById('msgText')
+    editor.addEventListener('focus', () => {
+      Comments.forceLowerPanelUp()
+      TouchKeyboardDetector.detect()
+    })
+    editor.addEventListener('blur', () => TouchKeyboardDetector.detect())
+    editor.focus({ preventScroll: true })
   },
   previewLocalImgs() {
     var imgUploadInput = document.getElementById('uploadImgPicker')

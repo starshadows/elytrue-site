@@ -9,6 +9,14 @@ import { MemoryStore } from '../server/storage.js'
 const ROOT = fileURLToPath(new URL('../dist/', import.meta.url))
 const PORT = Number(process.env.PORT || 4173)
 const SITE_ORIGIN = 'http://127.0.0.1:4173'
+const edgeoneConfig = JSON.parse(
+    await readFile(new URL('../edgeone.json', import.meta.url), 'utf8'),
+)
+const globalResponseHeaders = Object.fromEntries(
+    edgeoneConfig.headers
+        .find(rule => rule.source === '/*')
+        .headers.map(header => [header.key, header.value]),
+)
 
 const env = {
     ELYTRUE_APP_SECRET: process.env.ELYTRUE_APP_SECRET
@@ -116,6 +124,9 @@ async function handleApi(req, res) {
 
 const server = createServer(async (req, res) => {
     const url = new URL(req.url, `http://${req.headers.host || '127.0.0.1'}`)
+    for (const [key, value] of Object.entries(globalResponseHeaders)) {
+        res.setHeader(key, value)
+    }
 
     if (url.pathname === '/__test/reset' && req.method === 'POST') {
         stores.data.values.clear()

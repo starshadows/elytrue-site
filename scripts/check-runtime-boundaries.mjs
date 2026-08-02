@@ -77,6 +77,10 @@ const MIDDLEWARE_CHECKS = [
     'middleware must not use Node globals',
   ],
   [/\bprocess\.env\b/, 'middleware configuration must come from context.env'],
+  [
+    /\bglobalThis\.ELYTRUE_/,
+    'middleware bindings must come from context.env, not injected globals',
+  ],
 ]
 
 async function collectFiles(directory) {

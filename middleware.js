@@ -36,7 +36,7 @@ async function enforceEdgeRateLimit(context, pathname) {
         return null
     }
 
-    const kv = context.env?.ELYTRUE_RATE_LIMIT_KV ?? globalThis.ELYTRUE_RATE_LIMIT_KV
+    const kv = context.env?.ELYTRUE_RATE_LIMIT_KV
     if (!kv?.get || !kv?.put) return null
 
     const [action, limit, windowSeconds] = policy

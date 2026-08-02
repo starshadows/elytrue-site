@@ -1,43 +1,76 @@
 # 星花札记 · elytrue.com
 
-以爱莉希雅为主题的非商业个人同人网站，保留上游站点的全屏背景、主题、音乐与留言交互，并迁移为 EdgeOne Makers 单仓库全栈项目。
+以爱莉希雅为主题的非商业个人同人网站。项目保留原有全屏背景、主题、音乐、时间轴、账号与留言交互，并以 Vue 3、TypeScript 和 EdgeOne Makers 维护为单仓库全栈应用。
 
-## 来源关系
+## 运行环境
 
-本仓库是 [haojiezhe12345/haojiezhe12345.github.io](https://github.com/haojiezhe12345/haojiezhe12345.github.io) 的正式 Fork，保留上游提交历史和 GitHub Fork 关系。上游后端 [haojiezhe12345/MadoHomuAPI](https://github.com/haojiezhe12345/MadoHomuAPI) 仅作为本地迁移参考，未部署至 EdgeOne。
+```text
+构建与前端工具链：Node 22.17.1
+EdgeOne Cloud Functions：平台管理的 Node 20.x
+middleware.js：Edge Runtime / Web APIs / ES2023+
+```
+
+这三个环境不能互换：
+
+- `.nvmrc` 推荐本地构建使用 Node `22.17.1`。
+- `edgeone.json#nodeVersion` 选择 EdgeOne 的依赖安装和 Vite 构建版本 `22.17.1`。
+- `package.json#engines.node` 是开发/构建工具链兼容范围：`>=20.19.0 <21 || >=22.12.0 <23`。
+- 以上配置都不会把 Cloud Functions 切换到 Node 22。`cloud-functions/api/[[default]].js` 和 `server/` 仍以平台管理的 Node 20.x 为生产基线。
+- 根目录 `middleware.js` 不是 Node 程序，只使用 `Request`、`Response`、`URL`、`context.env` 等 Edge Runtime 能力。
 
 ## 目录
 
-- `src/`、`index.html`：Vue/Vite 前端
-- `cloud-functions/`：EdgeOne Node.js 20 Cloud Functions 入口
-- `server/`：账号、会话、邮件、留言、图片与管理逻辑
-- `shared/`：前后端可复用的校验规则
-- `middleware.js`：`www`、`blog` 域名跳转
-- `edgeone.json`：构建、上海函数地域、缓存与 SPA fallback
-- `public/assets/`：公开的 WebP、原图和官方音乐
-- `scripts/export-edgeone-data.mjs`：站长手动导出 Blob 数据
+- `src/app/`、`src/features/`、`src/components/`：Vue 根应用、功能 composable 与组件。
+- `src/config/`：站点、SEO、背景、作者、原图和音乐的类型化配置。
+- `src/lib/api-client.ts`、`src/net/`：同源 `/api/*` 客户端、CSRF、超时与错误 envelope。
+- `cloud-functions/api/[[default]].js`：稳定的 EdgeOne Cloud Functions 入口。
+- `server/`：Node 20 兼容的路由、服务、仓储、认证、留言和 Blob 存储逻辑。
+- `shared/`：不依赖 Node 或 DOM 的纯校验模块。
+- `middleware.js`：主域跳转和 Edge KV 限流。
+- `public/assets/`、`public/res/`：版本化站点素材、音乐、字体与 UI 资源。
 
-## 本地验证
+完整分层与数据流见 [架构文档](docs/ARCHITECTURE.md)，素材来源与保留依据见 [素材清单](docs/ASSET_INVENTORY.md)。
+
+## 本地开发与验证
+
+安装 [`.nvmrc`](.nvmrc) 指定的 Node 后执行：
 
 ```powershell
 npm ci
-npm test
-npm run build:edgeone
+npm run dev
 ```
 
-连接 EdgeOne 项目后，可使用：
+`npm run dev` 只启动 Vite。需要同源 API、内存 Blob 和固定测试数据时：
+
+```powershell
+npm run build:edgeone
+npm run mock:server
+```
+
+连接自己的非生产 EdgeOne Makers 项目后，可运行精确锁定在 lockfile 中的 CLI：
 
 ```powershell
 npm run dev:edgeone
 ```
 
-本地仅调试前端时仍可运行 `npm run dev`；该模式不会模拟 EdgeOne Blob、KV 与 Cloud Functions。
+常用验收：
 
-## 部署
+```powershell
+npm run lint
+npm run format:check
+npm run check
+npm test
+npm run build:edgeone
+npm run test:e2e
+```
 
-EdgeOne Makers 连接公开仓库的 `main` 分支。环境变量、KV 绑定、Blob 存储和首次管理员初始化步骤见 [docs/EDGEONE_SETUP.md](docs/EDGEONE_SETUP.md)。
+CI 的 `verify` 和 `e2e` 使用 Node 22.17.1；独立 `server-node20` 任务只运行 `check:server` 与 `test:server`，不会导入 Vite、Vue SFC 或 Playwright。
 
-正式域名仍为 `elytrue.com`。腾讯云接入备案通过前不切换生产 DNS，现有 ECS 继续提供公网服务。
+## 生产部署
+
+唯一生产部署目标是 EdgeOne Makers。项目连接、环境变量、Blob/KV、管理员初始化、备份、修复和回滚步骤见 [EdgeOne 运维清单](docs/EDGEONE_SETUP.md)。本仓库不包含 Vercel、GitHub Pages、ECS 或独立 Node 服务器部署流程。
+
+所有历史 Blob key、字段语义、内部 ID、公开编号、索引、墓碑、repair marker 和图片别名状态保持存储结构兼容；现有数据无需整体迁移或重新序列化。
 
 ## 权利与使用说明
 

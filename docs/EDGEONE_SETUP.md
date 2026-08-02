@@ -1,132 +1,129 @@
-# EdgeOne Makers 配置清单
+# EdgeOne Makers 运维清单
 
-## 1. 免费项目与构建
+生产环境只使用 EdgeOne Makers。本清单不包含 Vercel、GitHub Pages、ECS 或独立 Node 服务器部署方案。
 
-1. 在腾讯云中国站 EdgeOne Makers 创建免费项目。
-2. 连接公开仓库 `starshadows/elytrue-site`，生产分支选择 `main`。
-3. 构建命令使用 `npm run build:edgeone`，输出目录为 `dist`。
-4. 不开通 COS、腾讯云邮件推送、付费增值套件或后付费资源。
-5. 在费用中心设置低额预算预警；免费额度耗尽时暂停对应功能。
+## 1. 运行时与构建
 
-`edgeone.json` 已将 Node.js Cloud Functions 地域固定为上海 `ap-shanghai`。
+```text
+构建与前端工具链：Node 22.17.1
+EdgeOne Cloud Functions：平台管理的 Node 20.x
+middleware.js：Edge Runtime / Web APIs / ES2023+
+```
 
-## 2. 环境变量
+项目连接公开仓库 `starshadows/elytrue-site`，生产分支选择 `main`：
 
-仅在 EdgeOne 项目设置中保存：
+- 安装：`npm ci`
+- 构建：`npm run build:edgeone`
+- 输出：`dist`
+- 构建 Node：`edgeone.json#nodeVersion = 22.17.1`
+- Cloud Function 入口：`cloud-functions/api/[[default]].js`
+- Cloud Function 地域：`ap-shanghai`
+
+`cloudFunctions.nodejs` 只保留平台支持的 `maxDuration` 等字段，不声明 runtime 或 nodeVersion。生产 Functions 始终按平台管理的 Node 20.x 编写。
+
+## 2. 环境变量与绑定
+
+仅在 EdgeOne 项目设置保存：
 
 - `ELYTRUE_APP_SECRET`：至少 32 个随机字符，用于邮箱加密和索引摘要。
 - `RESEND_API_KEY`：Resend API Key。
-- `RESEND_FROM_EMAIL`：重置邮件发件地址（默认 `noreply@mail.elytrue.com`，需在 Resend 验证该域）。
-- `RESEND_FROM_NAME`：重置邮件发件人名称（默认 `星花札记`）。
-- `PUBLIC_SITE_URL`：预览阶段填预览域名，正式切流后填 `https://elytrue.com`。密码重置链接以此为准生成。
+- `RESEND_FROM_EMAIL`：重置邮件发件地址，需先在 Resend 验证域名。
+- `RESEND_FROM_NAME`：重置邮件发件人名称，默认 `星花札记`。
+- `PUBLIC_SITE_URL`：当前 EdgeOne 预览域或 `https://elytrue.com`。
 - `ADMIN_BOOTSTRAP_SECRET`：首次管理员初始化的一次性高强度随机值。
-- `ALLOWED_ORIGINS`：预览与正式站点允许的来源，逗号分隔。
+- `ALLOWED_ORIGINS`：允许的 EdgeOne 预览域与正式域，逗号分隔。
 
-真实值不得写入仓库、构建日志或前端环境变量。
+真实值不得写入仓库、构建日志或前端变量。
 
-## 3. 存储
-
-创建或首次访问时使用两个 Pages Blob Store：
+绑定两个 Pages Blob Store：
 
 - `elytrue-data`：用户、索引、会话、重置令牌、留言、点赞、举报和元数据。
 - `elytrue-uploads`：头像和留言图片。
 
-创建 KV 绑定，变量名必须为 `ELYTRUE_RATE_LIMIT_KV`。KV 目前只支持 Edge Functions，因此短期频率计数由根目录 `middleware.js` 在边缘节点执行；Node.js Cloud Functions 仍保留进程内二次限流。未绑定时本地开发会退化为后端进程内限流，生产部署必须绑定。
+绑定 Edge KV 为 `ELYTRUE_RATE_LIMIT_KV`。`middleware.js` 只从 `context.env` 获取此绑定；缺少绑定时边缘层跳过计数，Cloud Functions 的进程内限流仍工作，但生产验收必须确认 KV 已绑定。
 
-上传累计值达到参考免费额度 80% 时后台会记录警告；达到 90% 时停止新图片上传，文字留言和读取仍继续。管理员可通过 `GET /api/admin/usage` 检查记录值，并结合 EdgeOne 控制台核对实际用量。
+## 3. 首次管理员
 
-## 4. Resend
-
-1. 在 Resend 验证 `mail.elytrue.com`。
-2. 按 Resend 提供的记录配置 SPF、DKIM，并为该子域配置 DMARC。
-3. 发件人固定为 `星花札记 <noreply@mail.elytrue.com>`。
-4. 免费额度达到上限后找回密码邮件暂停，不切换到付费渠道。
-
-注册不发送验证邮件；用户名、邮箱和密码提交后账号立即激活。
-
-## 5. 初始化管理员
-
-1. 只在预览部署注册站长账号并登录。
+1. 在 EdgeOne 预览部署注册站长账号并登录。
 2. 携带当前 CSRF 头和 `X-Admin-Bootstrap-Secret` 请求 `POST /api/admin/bootstrap`。
-3. 成功后后端写入永久关闭标记，初始化入口无法再次使用。
-4. 随后从 EdgeOne 环境变量中删除 `ADMIN_BOOTSTRAP_SECRET`。
+3. 成功后确认永久关闭标记已写入，初始化入口不能再次使用。
+4. 从 EdgeOne 环境变量删除 `ADMIN_BOOTSTRAP_SECRET`。
 
-## 6. 域名与切流
+## 4. 发布前验收
 
-- 腾讯云接入备案通过前，继续由当前阿里云 ECS 提供 `elytrue.com` 公网服务。
-- 审核期间仅使用 EdgeOne 预览域名验收，不提前切换正式 DNS。
-- 通过后绑定 `elytrue.com`，将 `www.elytrue.com`、`blog.elytrue.com` 301 到主域名。
-- `mail.elytrue.com` 只用于 Resend 发信认证。
-- 页面底部中央保留 `赣ICP备2026015414号-1` 链接。
-- 切流后保留 ECS 14 天；关键检查失败时恢复旧 DNS。
-- 若公安备案记录的是旧 ECS IP 或阿里云接入信息，按平台要求办理变更。
+本地和 CI 必须通过：
 
-## 7. 手动备份
+```powershell
+npm ci
+npm run lint
+npm run format:check
+npm run check
+npm run check:server
+npm test
+npm run test:server
+npm run build:edgeone
+npm run test:e2e
+npm run check:assets
+npm audit --omit=dev
+npm audit
+```
 
-在本地临时设置只读所需的 EdgeOne 项目 ID 与 API Token 后运行：
+完整 `npm audit` 可能报告只属于精确锁定 EdgeOne CLI 的传递开发依赖；按 `docs/REFACTOR_AUDIT.md` 逐项复核，不使用 `npm audit fix --force`，也不把 CLI 改成运行时 `npx` 下载。
+
+部署预览后检查：
+
+- `GET /api/health` 返回目标 `version`、`buildTime` 和 `commitTime`。
+- 注册、用户名/邮箱登录、刷新恢复、退出与找回密码。
+- 留言发布、回复、点赞、举报、编号跳转和用户主页分页。
+- 桌面/移动背景焦点、主题、音乐恢复、语言、PWA。
+- HTML/API 缓存头、`/assets/*` immutable、`/res/*` 重新验证以及 CSP。
+- Cloud Functions 日志不包含密码、重置 token、完整邮箱密文或 API Key。
+
+## 5. 域名与回滚
+
+- 在 EdgeOne 绑定 `elytrue.com`。
+- `www.elytrue.com` 与 `blog.elytrue.com` 由 `middleware.js` 301 到主域。
+- `mail.elytrue.com` 仅用于 Resend 发信认证。
+- 页面底部备案链接保持不变。
+
+发布失败时在 EdgeOne Makers 回滚到最近一个已验收部署版本；不要运行数据迁移作为应用回滚手段。API 与 Blob key 保持向后兼容，因此正常代码回滚不要求重写历史数据。
+
+## 6. 手动备份与只读核查
+
+只对明确授权的项目临时设置 EdgeOne 项目 ID 和 API Token：
 
 ```powershell
 npm run export:data
 ```
 
-导出文件写入被 Git 忽略的 `exports/`。任务结束后立即清除本地环境变量和不再使用的 Token。
+导出写入 Git 忽略的 `exports/`。完成后清除 Token。普通构建、测试和本次重构均不访问真实 Blob/KV。
 
-## 8. 数据迁移脚本
+以下命令默认只读：
 
-以下脚本需要临时设置 `EDGEONE_PROJECT_ID`、`EDGEONE_API_TOKEN`（参考 export:data），运行前建议先 `npm run export:data` 备份。
-
-### 8.1 重复用户名检查与修复
-
-```bash
-node scripts/check-duplicate-users.mjs          # 报告模式:扫描并输出重复组,不修改数据
-node scripts/check-duplicate-users.mjs --fix    # 修复:保留最早账号,其余改名 原名_2/_3
+```powershell
+node scripts/check-duplicate-users.mjs
+node scripts/rebuild-comment-indexes.mjs
+node scripts/rebuild-usage.mjs
 ```
 
-修复只改 `users/{id}.json` 的 `name` 与用户名索引，不触碰邮箱、留言、头像与会话。修复前打印计划、修复后自动校验。退出码 1 表示仍存在重复或环境变量缺失。
+任何写入都必须先完成备份，并显式使用脚本要求的 `--fix`、`--confirm-production-migration` 等确认参数。留言编号迁移会修改本体和索引，不能通过“只删索引”回滚；没有生产变更授权时不得执行。
 
-### 8.2 留言编号/日期/用户索引迁移
+## 7. 可选的非生产集成测试
 
-稳定公开编号（`indexes/comments/number/`）、自然日计数（`dates/`）与用户留言索引（`indexes/comments/by-user/`）需要为旧留言回填：
+真实 EdgeOne Blob 测试只允许指向独立非生产项目：
 
-```bash
-node scripts/rebuild-comment-indexes.mjs          # 报告:统计缺口并检查悬空编号索引
-node scripts/rebuild-comment-indexes.mjs --fix --confirm-production-migration \
-    [--allow-mixed-numbering] [--manifest-dir exports]
+```powershell
+$env:EDGEONE_TEST_PROJECT_ID = '<non-production-project>'
+$env:EDGEONE_TEST_TOKEN = '<temporary-token>'
+node --test tests/integration.test.js
 ```
 
-要点：
+测试使用 `integration-test/` 前缀并尝试清理。未设置凭据时安全跳过；不得将生产项目凭据用于常规 CI 或本地回归。
 
-- `--fix` 必须同时带 `--confirm-production-migration` 才执行；
-- 若「已有 number 的留言」与「缺 number 的留言」同时存在，默认中止（旧留言编号会排在新留言之后），确认接受后显式加 `--allow-mixed-numbering`；
-- `--fix` 会修改 `comments/` 本体（补 `number` 字段）并新增三个前缀的索引，**仅删除索引不能回滚**；真正回滚必须恢复运行前的完整备份（含 `comments/`，建议先 `npm run export:data`）；
-- 执行前会把旧内容快照与新增索引 key 清单写入 `--manifest-dir`（默认 `exports/`）作为审计依据；
-- 幂等可重跑；迁移中途失败会留下悬空编号占位，重跑会被「混合编号」安全拦截，需按备份恢复或手工清理悬空占位后继续；
-- **生产建议：首次部署时先进入维护状态（或选择低峰期），完成编号迁移并校验通过后，再开放留言发布。**
+## 8. 平台限制与修复工具
 
-### 8.3 图片空间统计重算
-
-`usage/uploads.json` 的 `uploadedBytes` 并发扣减下可能出现偏差（Blob 无原子自减）：
-
-```bash
-node scripts/rebuild-usage.mjs                                  # 只读报告
-node scripts/rebuild-usage.mjs --fix --confirm-production-migration
-```
-
-以 `uploads/aliases/` 下所有别名记录的 `size` 之和为准重算并重写统计。
-
-## 9. 部署版本确认与邮件日志
-
-- `GET /api/health` 返回 `version`（构建时注入的 git 短提交）与 `buildTime`，用于确认 EdgeOne 实际部署的提交。
-- 密码重置邮件结果以结构化日志输出到 Cloud Functions 日志：`{"event":"password_reset_email","success":false,"userId":"...","provider":"resend","status":403,"error":"domain is not verified"}`。发送成功时含 `emailId`。日志不包含重置 token、密码或完整 API Key。邮件未收到时按此排查：`RESEND_API_KEY` 是否配置、发件域是否在 Resend 验证（SPF/DKIM）、是否触发限流或退信。
-- 上传的临时图片（超过 24 小时未被留言引用）会在下次上传时自动清理，事件为 `pending_image_cleanup`；删除/清理成功后会按别名 `size` 扣减 `usage/uploads.json`（Blob 删除或别名删除失败时不会先扣减，统计偏差可用 8.3 重算）。
-- 留言硬删除语义：公开编号占位永久保留（空号不重排）；用户留言索引同步删除；日期索引保留（今日留言统计口径为「当天曾发布」）；likes/reports 保留作为审计记录。
-
-## 10. 集成测试（可选）
-
-连接真实 EdgeOne Blob 验证 `onlyIfNew`、强一致读取与并发行为（默认跳过）：
-
-```bash
-EDGEONE_TEST_PROJECT_ID=<测试项目ID> EDGEONE_TEST_TOKEN=<API Token> node --test tests/integration.test.js
-```
-
-使用独立 `integration-test/` 前缀并自动清理，不访问生产数据；可用 `EDGEONE_TEST_STORE` 覆盖目标 Store（默认 `elytrue-data`）。
+- Blob 跨 key 操作非事务化，服务层保留补偿回滚与 repair marker。
+- KV 限流是边缘读改写，跨节点不保证严格原子；服务端进程内限流是第二层保护。
+- `usage/uploads.json` 可能因跨实例并发出现偏差；以 alias `size` 重算为准。
+- 图片先 pending，留言成功后 active；清理任务不得删除已被历史留言引用的图片。
+- 留言硬删除永久保留公开编号墓碑和日期“曾发布”记录，避免编号重排。

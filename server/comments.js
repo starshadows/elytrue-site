@@ -425,7 +425,18 @@ async function listUserComments(data, query, viewer, uid) {
         }
         items.push(comment)
     }
-    hasMore = index < pageWindow.length
+    // 收集满一页后继续只读探测剩余窗口，避免尾部只有隐藏留言时误报 hasMore。
+    // 探测仍受同一 scanCap 限制；达到上限但还有原始索引时保守返回 true。
+    let probeIndex = index
+    while (probeIndex < pageWindow.length && probeIndex < scanCap) {
+        const comment = await getJSON(data, blobKeys.comment(pageWindow[probeIndex]))
+        probeIndex += 1
+        if (comment && isVisibleFor(comment, viewer)) {
+            hasMore = true
+            break
+        }
+    }
+    if (!hasMore && probeIndex < pageWindow.length) hasMore = true
     // nextCursor = 最后「已消费」的原始索引位(下次请求从它之后继续)
     if (hasMore && index > 0) nextCursor = pageWindow[index - 1]
     return { items, hasMore, nextCursor }

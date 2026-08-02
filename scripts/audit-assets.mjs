@@ -133,6 +133,7 @@ const protectedDirectRoutes = new Set([
   'yumeniwa/README.md',
   'yumeniwa/index.html',
   'yumeniwa/link.png',
+  'yumeniwa/main.js',
 ])
 const entryAssets = new Set(['index.manifest.json', 'social-share.jpg'])
 const orphaned = [...publicByPath.keys()]

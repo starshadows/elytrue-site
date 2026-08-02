@@ -11,6 +11,9 @@ test.beforeEach(async ({ page, context }) => {
 test('SPA fallback does not shadow /api routes', async ({ page }) => {
   const documentResponse = await page.goto('/nested/client/route')
   expect(documentResponse?.status()).toBe(200)
+  const csp = documentResponse?.headers()['content-security-policy'] ?? ''
+  expect(csp).toContain("script-src 'self'")
+  expect(csp).not.toMatch(/script-src[^;]*unsafe-inline/u)
   await expect(page.locator('#app')).toHaveAttribute('data-v-app', '')
 
   const health = await page.request.get('/api/health')

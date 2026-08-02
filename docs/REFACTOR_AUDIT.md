@@ -26,7 +26,7 @@ middleware.js：Edge Runtime / Web APIs / ES2023+
 - `cloud-functions/api/[[default]].js` 由 EdgeOne Cloud Functions 的 Node 20.x 执行，入口保持不变。
 - `middleware.js` 在 Edge Runtime 执行，只能使用 Web API；当前实现使用 `Request`、`Response`、`URL`、`context.env` 和普通 ES 数据结构，没有 Node 导入。
 
-## 当前目录与职责
+## 重构前目录与职责
 
 | 目录/文件                            | 当前职责与问题                                                                               |
 | ------------------------------------ | -------------------------------------------------------------------------------------------- |
@@ -43,9 +43,9 @@ middleware.js：Edge Runtime / Web APIs / ES2023+
 | `tests/`                             | Node 原生单元/集成测试与 Playwright E2E                                                      |
 | `public/`                            | 主 CSS、PWA、16 张 WebP、16 张原图、10 首音乐、图标、字体及旧上游内容                        |
 
-## 前端全局、内联事件和职责拆分
+## 重构前前端全局、内联事件和职责拆分
 
-`src/main.ts` 当前执行两次 `Object.assign(window, ...)`。`src/index.ts` 导出约 50 个函数、状态对象和 DOM 引用，其中页面依赖的主要全局包括：
+原始 `src/main.ts` 执行两次 `Object.assign(window, ...)`。原始 `src/index.ts` 导出约 50 个函数、状态对象和 DOM 引用，其中页面依赖的主要全局包括：
 
 - 留言：`loadComments`、`clearComments`、`seekComment`、`newComment`、`sendMessage`、`Comments`。
 - 用户：`User`、`loadUserInfo`、`showUserComment`。
@@ -132,7 +132,7 @@ Store 名称保持：
 
 - `check`、`check:server`、`test`、`build:edgeone` 全部通过。
 - Playwright：17 通过，1 个仅手工生成基线的用例按设计跳过。
-- Node 20.19.5：服务端静态检查和 93 个服务端测试通过（6 个凭据测试跳过）。
+- Node 20.19.5：服务端静态检查通过；93 项服务端测试中 87 项通过、6 项凭据测试跳过。
 - `npm audit --omit=dev`：0；完整审计由 35 降至 30，剩余项在最终审计逐项归类。
 - 未在 `cloudFunctions.nodejs` 增加运行时字段；Cloud Functions 仍由平台以 Node 20.x 托管。
 
@@ -180,8 +180,148 @@ Store 名称保持：
 - `tests/contracts.test.js` 固定历史 Blob key 的完整字符串、API 路由唯一性和 `cloud-functions/api/[[default]].js` 稳定入口；`tests/build/output.test.js` 检查 SPA 壳、哈希资源以及部署产物不含服务端、测试、EdgeOne CLI 或 Node 专属模块。
 - 新增 SPA fallback 与 `/api/*` 优先级、PWA manifest、16 张背景及焦点、2 个主题、10 首音乐和中英文配置的浏览器契约测试。为使深层 SPA URL 能加载应用，Vite 资源基准由文档相对路径改为站点根路径 `/`；API 路由仍由 Mock/EdgeOne Functions 优先处理。
 - 桌面 1440×900 与移动 390×844 截图直接和第一阶段“应用代码未修改”时的 PNG 基线比较，关闭动画并允许最多 0.3% 像素抗锯齿差异，不接受布局、尺寸、颜色或背景焦点变化。视觉测试发现并修复了背景元数据晚于旧启动逻辑应用导致的焦点/顺序回归。
+- 最终重复运行发现同毫秒随机内部 ID 会让测试的发布顺序假设不稳定，并暴露用户留言尾部只有隐藏项时 `hasMore` 保守误报。测试种子现固定时间顺序；服务端在收满一页后只读探测剩余可见项，仍受原 `scanCap` 限制，不改变 cursor、ID、索引或隐藏语义。留言套件连续 10 次通过。
 - Mock 的 `POST /__test/reset` 仅在本地测试服务器存在，并同时清理 MemoryStore、上传 Store 和进程内限流 bucket，保证账号、留言和视觉种子不会跨用例泄漏；生产 API 不暴露此入口。
 - 阶段结果：5 项 API 客户端测试、2 项构建产物测试、现有服务端/存储/认证/留言/middleware/迁移测试和 22 项 Playwright 测试全部通过；1 项人工基线采集用例按设计跳过。
+
+## 最终安全审计
+
+审计日期为 2026-08-02。没有执行 `npm audit fix --force`，也没有把必要开发工具改成运行时 `npx` 下载。
+
+### 生产依赖
+
+`npm audit --omit=dev`：
+
+```text
+info 0 / low 0 / moderate 0 / high 0 / critical 0 / total 0
+```
+
+`npm ls --omit=dev --all --package-lock-only` 的根依赖只有 `@edgeone/pages-blob@0.0.15`、`image-size@2.0.2` 和 `vue@3.5.40`。Cloud Functions 的静态 import graph 只从前两者加载服务端运行依赖；Vue 只进入前端构建。
+
+### 完整开发依赖
+
+完整 `npm audit`：
+
+```text
+info 0 / low 0 / moderate 12 / high 14 / critical 3 / total 29
+```
+
+29 项全部由精确锁定的 `edgeone@1.6.19` 本地 Makers CLI 传递引入。表中的“传递修复”表示 npm 已知子包有修复版，但当前 EdgeOne CLI 的内嵌 npm/COS 依赖尚未采用；registry 没有更新且通过本项目审计的 EdgeOne CLI 版本，因此根依赖没有兼容自动修复。
+
+| 包                            | 等级     | 来源路径                                | `dist` | Cloud Functions | 当前修复状态与处置                                                            |
+| ----------------------------- | -------- | --------------------------------------- | ------ | --------------- | ----------------------------------------------------------------------------- |
+| `edgeone`                     | high     | 直接 devDependency                      | 否     | 否              | `fixAvailable=false`；精确保留 1.6.19，仅对受信仓库本地调试，等待官方兼容版本 |
+| `esbuild`                     | moderate | `edgeone` / Nuxt 构建链                 | 否     | 否              | 根 Vite 使用已更新 0.28.1；CLI 内旧 0.19.12 无根级兼容修复，隔离接受          |
+| `undici`                      | high     | `edgeone → undici@5`                    | 否     | 否              | `fixAvailable=false`；仅 CLI 网络客户端，限制为受信 EdgeOne 端点，等待上游    |
+| `cos-nodejs-sdk-v5`           | moderate | `edgeone → cos-nodejs-sdk-v5`           | 否     | 否              | 有传递修复、CLI 未采用；项目生产不导入 COS SDK，隔离接受                      |
+| `fast-xml-parser`             | critical | `edgeone → cos-nodejs-sdk-v5`           | 否     | 否              | 有传递修复、CLI 未采用；不让 CLI 解析不受信 XML，等待上游                     |
+| `request`                     | critical | `edgeone → cos-nodejs-sdk-v5 → request` | 否     | 否              | 已弃用链有传递修复但无根级兼容替换；仅 CLI，隔离接受                          |
+| `form-data`                   | critical | `edgeone → COS → request`               | 否     | 否              | 有传递修复、CLI 未采用；仅 CLI multipart，隔离接受                            |
+| `qs`                          | moderate | `edgeone → COS → request`               | 否     | 否              | 有传递修复、CLI 未采用；生产 API 不加载该副本                                 |
+| `tough-cookie`                | moderate | `edgeone → COS → request`               | 否     | 否              | 有传递修复、CLI 未采用；仅 CLI cookie jar                                     |
+| `uuid`                        | moderate | `edgeone → COS → request`               | 否     | 否              | 有传递修复、CLI 未采用；生产服务端使用 Node Web Crypto UUID                   |
+| `conf`                        | moderate | `edgeone → cos-nodejs-sdk-v5`           | 否     | 否              | 有传递修复、CLI 未采用；仅本地 CLI 配置                                       |
+| `ajv`                         | moderate | `edgeone → COS/conf/request`            | 否     | 否              | 有传递修复、CLI 未采用；生产请求校验不加载此副本                              |
+| `ajv-formats`                 | moderate | `edgeone → COS → conf`                  | 否     | 否              | 有传递修复、CLI 未采用；仅本地 CLI                                            |
+| `npm`                         | high     | `edgeone → npm@10`                      | 否     | 否              | 有传递修复、CLI 内嵌版本未更新；不用其处理不受信包源                          |
+| `@npmcli/arborist`            | high     | `edgeone → npm`                         | 否     | 否              | 有传递修复、CLI 未采用；仅依赖树操作                                          |
+| `@npmcli/metavuln-calculator` | high     | `edgeone → npm/arborist`                | 否     | 否              | 有传递修复、CLI 未采用；仅本地审计链                                          |
+| `libnpmdiff`                  | high     | `edgeone → npm`                         | 否     | 否              | 有传递修复、CLI 未采用；项目运行时不加载                                      |
+| `libnpmexec`                  | high     | `edgeone → npm`                         | 否     | 否              | 有传递修复、CLI 未采用；项目脚本不通过该副本执行生产代码                      |
+| `libnpmfund`                  | high     | `edgeone → npm`                         | 否     | 否              | 有传递修复、CLI 未采用；仅本地元数据                                          |
+| `libnpmpack`                  | high     | `edgeone → npm`                         | 否     | 否              | 有传递修复、CLI 未采用；部署不由该包打包 Functions                            |
+| `libnpmpublish`               | high     | `edgeone → npm`                         | 否     | 否              | 有传递修复、CLI 未采用；本项目不执行 npm publish                              |
+| `pacote`                      | high     | `edgeone → npm`                         | 否     | 否              | 有传递修复、CLI 未采用；仅受信 registry/lockfile                              |
+| `sigstore`                    | high     | `edgeone → npm/pacote`                  | 否     | 否              | 有传递修复、CLI 未采用；不进入签名或生产验证路径                              |
+| `@sigstore/core`              | moderate | `edgeone → npm → sigstore`              | 否     | 否              | 有传递修复、CLI 未采用；隔离接受                                              |
+| `@sigstore/sign`              | moderate | `edgeone → npm → sigstore`              | 否     | 否              | 有传递修复、CLI 未采用；本项目不通过 CLI 签名产物                             |
+| `@sigstore/verify`            | moderate | `edgeone → npm → sigstore`              | 否     | 否              | 有传递修复、CLI 未采用；不用于生产请求验证                                    |
+| `brace-expansion`             | high     | `edgeone → npm` 的内嵌依赖              | 否     | 否              | hoisted 副本已更新至 2.1.4；CLI 内嵌 npm 副本无法独立更新，仅本地文件匹配     |
+| `picomatch`                   | high     | `edgeone → fast-glob/Nuxt`              | 否     | 否              | 根 Vite/ESLint 使用更新副本；受影响副本仅 CLI，隔离接受                       |
+| `ip-address`                  | moderate | `edgeone → npm → socks`                 | 否     | 否              | 有传递修复、CLI 未采用；仅本地代理解析                                        |
+
+### 已修复、接受与部署隔离证明
+
+- 已修复：移除 legacy Chrome 49 双份 bundle，升级 Vite/Vue/TypeScript/ESLint/Sass 工具链；再使用非强制 `npm audit fix` 将共享的 `minimatch` 更新到 9.0.9、hoisted `brace-expansion` 更新到 2.1.4。完整告警由基线 35 降为 29，生产审计保持 0。
+- 暂时接受：上表 29 项。共同边界是 `edgeone@1.6.19` devDependency；不对不受信仓库、XML、glob、包源或代理输入运行 CLI。官方发布兼容新版本后重新审计并精确锁定升级。
+- 不进入 `dist`：`tests/build/output.test.js` 扫描所有构建 JS，不允许 `edgeone makers`、Playwright、服务端路径或 Node 模块；构建产物检查通过。
+- 不进入 Cloud Functions：`server/` 与 `cloud-functions/` 无 `edgeone`、Vite、Vue 或 Playwright import；`check:runtime` 阻断跨运行时导入。
+- lockfile 证明：`npm ls --omit=dev --all --package-lock-only` 不包含 EdgeOne CLI；CLI 继续保留在 lockfile，避免临时下载和绕过审计。
+
+## 最终 EdgeOne 安全与缓存配置
+
+全站安全头启用：
+
+```text
+script-src 'self'
+connect-src 'self'
+img-src 'self' data: blob:
+media-src 'self' blob:
+font-src 'self'
+object-src 'none'
+base-uri 'self'
+frame-ancestors 'none'
+style-src 'self' 'unsafe-inline'
+```
+
+严格脚本 CSP 启用前已移除主应用动态编辑器的 `onfocus/onblur` 属性；保留的 `/yumeniwa/` 也把内联脚本和 `onclick` 外置到同源 `main.js`。构建测试扫描 HTML 和 JS 字符串，阻断新的内联事件属性。
+
+`style-src 'self' 'unsafe-inline'` 仍然必需，具体位置包括：
+
+- `src/app/shell.html` 的背景焦点、初始显示/透明度与历史 DOM 契约。
+- `src/config/assets.ts` 设置背景 `background-position`。
+- `src/index.js` 的背景懒加载、播放器/时间轴、移动下拉面板、弹窗和状态显示。
+- `src/settings/index.ts` 的页面缩放和 Wallpaper Engine 样式。
+- `ProgressSlider.vue`、`ImgViewer.vue`、`FloatMsgs.vue`、`PullDownRefresh.ts` 的进度、手势、缩放和过渡。
+
+移除条件：把静态 style 迁移为已验证的样式类，把连续动态值改为受限 CSS 自定义属性或 nonce/hash 方案，并在桌面/移动视觉基线、主题、背景焦点、动画、图片缩放和播放器测试全部通过后再删除 `'unsafe-inline'`。
+
+缓存层次：
+
+- `/assets/*`：`public, max-age=31536000, immutable`。
+- `/res/*`：`public, max-age=300, must-revalidate`。
+- HTML、manifest 和未版本化根资源：`no-cache`。
+- `/api/*`：`no-store`（Functions 响应也保持 no-store）。
+
+根目录 `middleware.js` 只从 `context.env` 读取 KV，不再依赖任何全局注入；无 `node:*`、Buffer、process、文件系统或 Node crypto。
+
+## 八阶段本地提交
+
+1. `eb1676f` — `chore: add refactor audit and baseline tests`
+2. `a5e20ec` — `chore: align dependencies with EdgeOne runtime`
+3. `6e89dc9` — `refactor: centralize site content and asset metadata`
+4. `6c2b446` — `refactor: modularize frontend application`
+5. `cada92d` — `refactor: modularize EdgeOne API backend`
+6. `9071fa0` — `chore: remove unused upstream content and assets`
+7. `3e4b046` — `test: add behavior and visual regression coverage`
+8. `HEAD` — `docs: document EdgeOne-only architecture and operations`
+
+第 8 个提交无法在自身内容中嵌入自身 SHA（写入 SHA 会再次改变该提交）；提交完成后的权威值由 `git rev-parse HEAD` 和最终执行报告给出。整个分支只包含这 8 个本地提交。
+
+## 最终验收结果
+
+2026-08-02 从全新安装执行了计划规定的命令：
+
+| 命令                    | 结果                                                              |
+| ----------------------- | ----------------------------------------------------------------- |
+| `npm ci`                | 成功；使用精确 Node 22.17.1 与 npm 11.12.1，全新安装 912 个包     |
+| `npm run lint`          | 成功，0 warning                                                   |
+| `npm run format:check`  | 成功                                                              |
+| `npm run check`         | 成功；Vue/测试类型与三类运行时边界通过                            |
+| `npm run check:server`  | 成功                                                              |
+| `npm test`              | 成功；服务端 96 项中 90 通过、6 项真实凭据测试跳过；前端 5 项通过 |
+| `npm run test:server`   | 成功；90 通过、6 跳过                                             |
+| `npm run build:edgeone` | 成功；73 个文件、89,069,515 bytes（84.94 MiB）                    |
+| `npm run test:e2e`      | 成功；22 通过、1 项人工基线采集跳过，并在严格 CSP 响应头下运行    |
+| `npm run check:assets`  | 成功；64 个 `public/` 文件、84.72 MiB、无超限或重复音乐           |
+| `npm audit --omit=dev`  | 成功；0 漏洞                                                      |
+| `npm audit`             | 按预期非零；12 moderate、14 high、3 critical，全部逐项记录于上表  |
+
+前端构建代码为 190,092 bytes JS 和 42,279 bytes CSS（未压缩总和）；Vite 输出的四个 JS chunk gzip 合计约 64.47 KiB。构建没有未解析素材警告。
+
+另以真实 Node 20.19.5 调用 npm 11.12.1 完成 `npm ci`，随后只运行 `check:server` 和 `test:server`，均成功。安装阶段对 EdgeOne CLI 的 `ink`、`cli-truncate`、`slice-ansi` 开发依赖报告 Node >=22 警告，但没有关闭 engine 检查且任务未失败；服务端生产 import graph 不加载这些包。Node 20 测试仍为 90 通过、6 个无真实凭据的集成测试跳过。
+
+本次没有设置真实 EdgeOne 凭据、没有访问 Blob/KV、没有运行生产迁移、没有部署或推送。
 
 ## 风险与回滚
 
