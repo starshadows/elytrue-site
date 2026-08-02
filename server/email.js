@@ -65,6 +65,8 @@ export async function sendPasswordResetEmail(env, { email, username, token }) {
         const details = await response.text().catch(() => '')
         return { ok: false, status: response.status, error: details.slice(0, 300) }
     }
-    const emailId = await response.json().then(body => body?.id || '').catch(() => '')
+    const emailId = await response.json()
+        .then(body => body && typeof body === 'object' && 'id' in body ? String(body.id) : '')
+        .catch(() => '')
     return { ok: true, emailId }
 }

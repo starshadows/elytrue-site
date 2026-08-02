@@ -7,9 +7,15 @@ import {
     scrypt as scryptCallback,
     timingSafeEqual,
 } from 'node:crypto'
-import { promisify } from 'node:util'
 
-const scrypt = promisify(scryptCallback)
+function scrypt(password, salt, keyLength, options) {
+    return new Promise((resolve, reject) => {
+        scryptCallback(password, salt, keyLength, options, (error, derivedKey) => {
+            if (error) reject(error)
+            else resolve(derivedKey)
+        })
+    })
+}
 
 function toBase64Url(value) {
     return Buffer.from(value).toString('base64url')

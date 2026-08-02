@@ -77,6 +77,11 @@ async function claimCommentNumber(data, commentId, reservationId) {
  * 回滚一次留言创建:删除正文、本次占用的编号(仅当 reservationId 匹配)、
  * 以及可能已写入的用户/日期索引。任何一步失败都记录结构化日志,不抛错。
  */
+/**
+ * @param {any} data
+ * @param {number} commentId
+ * @param {{reservationId: string, number?: number, uid: string, date: string}} resources
+ */
 async function rollbackCommentResources(data, commentId, { reservationId, number, uid, date }) {
     const failures = []
     if (number) {
@@ -144,6 +149,19 @@ export async function createComment(data, user, body, { idFactory = newCommentId
     const date = shanghaiDateString(createdAt)
 
     // 1. 写入正文(内部 ID 冲突则换号重试,最多 5 次;以 persisted 为准,不依赖对象真值)
+    /** @type {null | {
+     *   id: number,
+     *   number?: number,
+     *   uid: string,
+     *   sender: string,
+     *   avatar: string,
+     *   comment: string,
+     *   image: string,
+     *   replyid: number | null,
+     *   hidden: boolean,
+     *   createdAt: number,
+     *   time: number,
+     * }} */
     let comment = null
     let persisted = false
     for (let attempt = 0; attempt < 5 && !persisted; attempt += 1) {
@@ -388,7 +406,7 @@ async function listUserComments(data, query, viewer, uid) {
         .filter(Boolean)
         .sort((a, b) => b - a)
 
-    const window = cursor ? ids.filter(id => id < cursor) : ids
+    const pageWindow = cursor ? ids.filter(id => id < cursor) : ids
 
     // 按可见留言数量分页:扫描到收集够 count 条或窗口结束;
     // nextCursor 记录「最后扫描到的原始索引位」,即使 items 为空(整页隐藏)也能继续
@@ -398,8 +416,8 @@ async function listUserComments(data, query, viewer, uid) {
     const scanCap = Math.max(200, count * 20 + 200)
     let skippedOffset = offset
     let index = 0
-    for (; index < window.length && items.length < count && index < scanCap; index += 1) {
-        const comment = await getJSON(data, commentKey(window[index]))
+    for (; index < pageWindow.length && items.length < count && index < scanCap; index += 1) {
+        const comment = await getJSON(data, commentKey(pageWindow[index]))
         if (!comment) continue
         if (!isVisibleFor(comment, viewer)) continue
         if (skippedOffset > 0) {
@@ -408,9 +426,9 @@ async function listUserComments(data, query, viewer, uid) {
         }
         items.push(comment)
     }
-    hasMore = index < window.length
+    hasMore = index < pageWindow.length
     // nextCursor = 最后「已消费」的原始索引位(下次请求从它之后继续)
-    if (hasMore && index > 0) nextCursor = window[index - 1]
+    if (hasMore && index > 0) nextCursor = pageWindow[index - 1]
     return { items, hasMore, nextCursor }
 }
 

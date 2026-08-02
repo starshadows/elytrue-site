@@ -18,6 +18,16 @@ const SECURITY_HEADERS = {
     'Permissions-Policy': 'camera=(), microphone=(), geolocation=()',
 }
 
+/**
+ * @param {unknown} [data]
+ * @param {{
+ *   status?: number,
+ *   code?: number,
+ *   message?: string,
+ *   headers?: Record<string, string>,
+ *   cookies?: string[],
+ * }} [options]
+ */
 export function apiResponse(data = null, {
     status = 200,
     code = 1,
@@ -67,13 +77,11 @@ export async function readJSON(request, maxBytes = 6 * 1024 * 1024) {
 }
 
 export function httpError(status, message, code = status) {
-    const error = new Error(message)
-    error.status = status
-    error.code = code
-    return error
+    return Object.assign(new Error(message), { status, code })
 }
 
 export function parseCookies(request) {
+    /** @type {Record<string, string>} */
     const result = {}
     for (const item of (request.headers.get('cookie') || '').split(';')) {
         const separator = item.indexOf('=')
@@ -85,6 +93,11 @@ export function parseCookies(request) {
     return result
 }
 
+/**
+ * @param {string} name
+ * @param {string} value
+ * @param {{maxAge?: number, httpOnly?: boolean, sameSite?: string, secure?: boolean}} [options]
+ */
 export function cookie(name, value, {
     maxAge,
     httpOnly = true,
@@ -102,6 +115,10 @@ export function cookie(name, value, {
     return parts.join('; ')
 }
 
+/**
+ * @param {any} user
+ * @param {{includePrivate?: boolean, secret?: string}} [options]
+ */
 export function publicUser(user, { includePrivate = false, secret } = {}) {
     const result = {
         id: user.id,

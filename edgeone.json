@@ -2,11 +2,9 @@
   "outputDirectory": "dist",
   "installCommand": "npm ci",
   "buildCommand": "npm run build:edgeone",
-  "nodeVersion": "20.18.0",
+  "nodeVersion": "22.17.1",
   "cloudFunctions": {
-    "mainlandRegions": [
-      "ap-shanghai"
-    ],
+    "mainlandRegions": ["ap-shanghai"],
     "nodejs": {
       "maxDuration": 30
     }

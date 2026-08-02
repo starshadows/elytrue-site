@@ -4,13 +4,13 @@
 
 ## 基线验证
 
-| 命令 | 原始结果 |
-| --- | --- |
-| `npm ci` | 成功；安装 931 个包，完整审计报告 35 个漏洞 |
-| `npm run check` | 成功 |
-| `npm test` | 93 项：87 通过、6 项真实 EdgeOne 集成测试因无凭据跳过 |
-| `npm run build:edgeone` | 成功；70 个文件、89,414,081 bytes，JS 458,005 bytes |
-| `npm run test:e2e` | 原始失败：Mock Server 在 Windows 将 `file:` URL pathname 与 `path.join` 混用，产生 `C:\C:\...\dist\index.html` |
+| 命令                    | 原始结果                                                                                                       |
+| ----------------------- | -------------------------------------------------------------------------------------------------------------- |
+| `npm ci`                | 成功；安装 931 个包，完整审计报告 35 个漏洞                                                                    |
+| `npm run check`         | 成功                                                                                                           |
+| `npm test`              | 93 项：87 通过、6 项真实 EdgeOne 集成测试因无凭据跳过                                                          |
+| `npm run build:edgeone` | 成功；70 个文件、89,414,081 bytes，JS 458,005 bytes                                                            |
+| `npm run test:e2e`      | 原始失败：Mock Server 在 Windows 将 `file:` URL pathname 与 `path.join` 混用，产生 `C:\C:\...\dist\index.html` |
 
 E2E 原始失败是测试服务器的跨平台路径错误，不是本次重构引入的页面回归。第一阶段仅修复测试工具并重新采集应用未改动时的视觉基线。
 
@@ -28,20 +28,20 @@ middleware.js：Edge Runtime / Web APIs / ES2023+
 
 ## 当前目录与职责
 
-| 目录/文件 | 当前职责与问题 |
-| --- | --- |
-| `index.html` | 650 行页面、弹窗、背景、文案和大量内联事件 |
-| `src/index.ts` | 2,778 行命令式入口；留言、用户、主题、音乐、时间轴、手势和工具函数混杂，并使用 `@ts-nocheck` |
-| `src/main.ts` | 将入口和组件批量暴露到 `window`，挂载空壳 `App.vue` |
-| `src/components/` | 多个独立 Vue app 分别挂载，部分组件仍使用内联事件和 `@ts-nocheck` |
-| `src/net/` | XHR 客户端；依赖 `window.baseUrl/bgBaseUrl` |
-| `server/app.js` | API 路由、上传、用量、认证编排和管理逻辑集中在单文件 |
-| `server/*.js` | 认证、留言、存储、图片、邮件、HTTP 和限流逻辑 |
-| `cloud-functions/api/[[default]].js` | 稳定的 EdgeOne Cloud Functions `/api/*` 入口 |
-| `middleware.js` | 主域名重定向及 KV 边缘限流 |
-| `scripts/` | Mock、构建信息、导出、重复用户、索引和用量维护 |
-| `tests/` | Node 原生单元/集成测试与 Playwright E2E |
-| `public/` | 主 CSS、PWA、16 张 WebP、16 张原图、10 首音乐、图标、字体及旧上游内容 |
+| 目录/文件                            | 当前职责与问题                                                                               |
+| ------------------------------------ | -------------------------------------------------------------------------------------------- |
+| `index.html`                         | 650 行页面、弹窗、背景、文案和大量内联事件                                                   |
+| `src/index.ts`                       | 2,778 行命令式入口；留言、用户、主题、音乐、时间轴、手势和工具函数混杂，并使用 `@ts-nocheck` |
+| `src/main.ts`                        | 将入口和组件批量暴露到 `window`，挂载空壳 `App.vue`                                          |
+| `src/components/`                    | 多个独立 Vue app 分别挂载，部分组件仍使用内联事件和 `@ts-nocheck`                            |
+| `src/net/`                           | XHR 客户端；依赖 `window.baseUrl/bgBaseUrl`                                                  |
+| `server/app.js`                      | API 路由、上传、用量、认证编排和管理逻辑集中在单文件                                         |
+| `server/*.js`                        | 认证、留言、存储、图片、邮件、HTTP 和限流逻辑                                                |
+| `cloud-functions/api/[[default]].js` | 稳定的 EdgeOne Cloud Functions `/api/*` 入口                                                 |
+| `middleware.js`                      | 主域名重定向及 KV 边缘限流                                                                   |
+| `scripts/`                           | Mock、构建信息、导出、重复用户、索引和用量维护                                               |
+| `tests/`                             | Node 原生单元/集成测试与 Playwright E2E                                                      |
+| `public/`                            | 主 CSS、PWA、16 张 WebP、16 张原图、10 首音乐、图标、字体及旧上游内容                        |
 
 ## 前端全局、内联事件和职责拆分
 
@@ -110,6 +110,31 @@ Store 名称保持：
 - legacy 插件当前生成约 291 KiB 未压缩的额外 JS；目标浏览器不需要 Chrome 49，待构建和视觉验证后删除。
 
 当前 `npm audit --omit=dev` 为零漏洞。完整审计的 35 个告警主要来自 EdgeOne CLI 的 COS/npm/esbuild/undici 传递依赖、legacy Babel 链、旧 Vite/Rollup 和 Sass 传递依赖。第二阶段将验证兼容升级；无法由项目安全修复的 CLI-only 告警会逐项隔离说明，不使用强制修复。
+
+### 第二阶段候选与最终版本
+
+2026-08-02 通过 npm registry 检查当前稳定版本、`engines` 和 peer dependency 后得到：
+
+| 包                   | 候选          | 最终               | 选择依据                                                                              |
+| -------------------- | ------------- | ------------------ | ------------------------------------------------------------------------------------- |
+| Vite                 | 8.2.0         | 8.2.0              | Node 要求 `^20.19.0 \|\| >=22.12.0`；Node 22.17.1 工具链满足，EdgeOne 构建与 E2E 通过 |
+| Vue                  | 3.5.40        | 3.5.40             | 3.5 major 当前稳定 patch；行为与视觉回归通过                                          |
+| `@vitejs/plugin-vue` | 6.0.8         | 6.0.8              | peer 明确支持 Vite 5–8 和 Vue 3                                                       |
+| `vue-tsc`            | 3.3.9         | 3.3.9              | peer 接受 TypeScript 5+；项目类型检查通过                                             |
+| TypeScript           | 7.0.2 / 6.0.3 | 6.0.3              | `typescript-eslint` 8.65.0 正式支持 `<6.1.0`，因此不选 TS 7                           |
+| `@vue/tsconfig`      | 0.9.1         | 0.9.1              | 当前稳定版，与 TS 6/Vue 3 类型检查通过                                                |
+| `sass-embedded`      | 1.100.0       | 1.100.0            | 当前 SFC 仍使用 SCSS；构建通过，不能移除                                              |
+| EdgeOne CLI          | 1.6.19        | 1.6.19（精确锁定） | registry 无更新稳定版；继续进入 lockfile，仅用于本地 Makers 调试                      |
+
+同时移除 `@vitejs/plugin-legacy` 及 Chrome 49 双份 bundle。Vite 8 构建后的主 JS 为约 164 KiB（升级前含 legacy 输出合计约 458 KiB）。本地环境实际为 Node 24，因此另以 `node@20.19.5` 独立执行 `tsconfig.server.json` 和全部 93 个服务端测试，87 通过、6 个真实 EdgeOne 凭据测试安全跳过；CI 和 EdgeOne 构建配置仍固定 Node 22.17.1。
+
+第二阶段验证：
+
+- `check`、`check:server`、`test`、`build:edgeone` 全部通过。
+- Playwright：17 通过，1 个仅手工生成基线的用例按设计跳过。
+- Node 20.19.5：服务端静态检查和 93 个服务端测试通过（6 个凭据测试跳过）。
+- `npm audit --omit=dev`：0；完整审计由 35 降至 30，剩余项在最终审计逐项归类。
+- 未在 `cloudFunctions.nodejs` 增加运行时字段；Cloud Functions 仍由平台以 Node 20.x 托管。
 
 ## 静态素材
 
