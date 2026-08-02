@@ -16,6 +16,13 @@ import { addPullDownRefresh } from "./components/controls/PullDownRefresh"
 import { createApp, watch } from "vue"
 import ProgressSlider from "./components/controls/ProgressSlider.vue"
 import { GallerySwipeController } from "./components/controls/GallerySwiper"
+import {
+    BACKGROUNDS,
+    BACKGROUND_GROUPS,
+    DEFAULT_MUSIC,
+    MUSIC_ROOT,
+    OFFICIAL_MUSIC,
+} from "./config/assets"
 
 export const STATIC_SHOWCASE_MODE = false
 const TIMELINE_START_DATE = new Date(2026, 7, 1)
@@ -820,33 +827,29 @@ export const Popup = {
             switch (popupID) {
                 case 'getImgPopup':
                     document.getElementById('getImgPopup').firstElementChild.lastElementChild.innerHTML = ''
-                    const downloadGroups = [
-                        { layout: 'landscape', zh: '横屏背景', en: 'Landscape backgrounds' },
-                        { layout: 'portrait', zh: '竖屏背景', en: 'Portrait backgrounds' },
-                    ]
-                    downloadGroups.forEach(group => {
-                        const backgrounds = document.querySelectorAll(`.mainbg[data-layout="${group.layout}"][data-src]`)
+                    BACKGROUND_GROUPS.forEach(group => {
+                        const backgrounds = BACKGROUNDS.filter(background => background.layout === group.layout)
                         if (!backgrounds.length) return
 
                         document.getElementById('getImgPopup').firstElementChild.lastElementChild.appendChild(html2elmnt(/*html*/`
                             <h3 class="backgroundGroupTitle">
-                                <span class="ui zh">${group.zh}</span><span class="ui en">${group.en}</span>
+                                <span class="ui zh">${group.title.zh}</span><span class="ui en">${group.title.en}</span>
                             </h3>
                         `))
 
                         backgrounds.forEach(background => {
                             document.getElementById('getImgPopup').firstElementChild.lastElementChild.appendChild(html2elmnt(/*html*/`
-                                <img loading="lazy" decoding="async" src="${background.dataset.src}" style="min-height: 40vh;" onload="this.style.removeProperty('min-height')">
+                                <img loading="lazy" decoding="async" src="${background.preview}" style="min-height: 40vh;" onload="this.style.removeProperty('min-height')">
                                 <p>
-                                    ${background.dataset.creditUrl ? `
+                                    ${background.creditUrl ? `
                                         <span class="authorizedRepost"><span class="ui zh">经作者许可转载</span><span class="ui en">Reposted with permission</span> · </span>
                                     ` : ''}
-                                    ${background.children[1].innerHTML}
-                                    ${background.dataset.creditUrl ? `
-                                        <a href="${background.dataset.creditUrl}" target="_blank" rel="noopener noreferrer">图源↗</a>
+                                    <span class="ui zh">${background.credit.zh}</span><span class="ui en">${background.credit.en}</span>
+                                    ${background.creditUrl ? `
+                                        <a href="${background.creditUrl}" target="_blank" rel="noopener noreferrer">图源↗</a>
                                     ` : ''}
-                                    ${background.dataset.original ? `
-                                        <a class="downloadOriginal" href="${background.dataset.original}" download>
+                                    ${background.original ? `
+                                        <a class="downloadOriginal" href="${background.original}" download>
                                             <span class="ui zh">下载原图</span><span class="ui en">Download original</span> ↓
                                         </a>
                                     ` : ''}
@@ -2354,20 +2357,6 @@ export var closeImgViewer = ImgViewer.close.bind(ImgViewer)
 
 // music player
 //
-const DEFAULT_MUSIC = 'HOYO-MiX - Elysian Realm.mp3'
-const OFFICIAL_MUSIC = [
-    '黄龄 HOYO-MiX - TruE.mp3',
-    'HOYO-MiX - Conflict.mp3',
-    'HOYO-MiX - Elysia.mp3',
-    'HOYO-MiX - Elysian Realm.mp3',
-    'HOYO-MiX - Erupt.mp3',
-    'HOYO-MiX - ForEly.mp3',
-    'HOYO-MiX - Last Waltz.mp3',
-    'HOYO-MiX - Subtle.mp3',
-    'HOYO-MiX - Sweet Trap.mp3',
-    'HOYO-MiX - The Flawless Human.mp3',
-]
-
 export const MusicPlayer = {
     elements: {
         player: document.getElementById('musicAudio'),
@@ -2649,7 +2638,7 @@ export const MusicPlayer = {
 }
 
 try {
-    MusicPlayer.initPlayer(`${baseUrl}assets/elytrue-20260724/bgm/`)
+    MusicPlayer.initPlayer(`${baseUrl}${MUSIC_ROOT.replace(/^\//, '')}`)
 } catch (error) {
     logErr(error, 'failed to init music player')
 }
