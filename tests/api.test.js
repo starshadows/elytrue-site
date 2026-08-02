@@ -24,6 +24,13 @@ class FlakyStore extends MemoryStore {
     }
 }
 
+class SilentConditionalStore extends MemoryStore {
+    async setJSON(key, value, options = {}) {
+        if (options.onlyIfNew && this.values.has(key)) return
+        return super.setJSON(key, value, options)
+    }
+}
+
 function nameIndexKey(name) {
     return `indexes/users/name/${sha256(normalizeUsername(name))}.json`
 }
@@ -566,6 +573,24 @@ describe('registration uniqueness and normalization', () => {
         })
         assert.equal(fullWidthLogin.response.status, 200)
         assert.equal(fullWidthLogin.payload.data.name, 'STARFLOWER')
+    })
+
+    it('rejects a duplicate username even if conditional storage silently keeps the old value', async () => {
+        const silentStores = {
+            data: new SilentConditionalStore(),
+            uploads: new SilentConditionalStore(),
+        }
+        const first = createState('10.0.3.8')
+        const second = createState('10.0.3.9')
+        first.stores = silentStores
+        second.stores = silentStores
+
+        const created = await register(first, '不可重复', 'first@example.com')
+        assert.equal(created.response.status, 201)
+
+        const duplicate = await register(second, '不可重复', 'second@example.com')
+        assert.equal(duplicate.response.status, 409)
+        assert.equal(duplicate.payload.message, '用户名已被使用')
     })
 })
 

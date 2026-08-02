@@ -209,6 +209,11 @@ test('发布留言：新留言卡片出现且编号为 #1', async ({ page }) => 
 
   await liftPanel(page)
   await page.locator('#newMsg').click()
+  await expect(page.locator('#msgPopupAvatar')).toHaveAttribute(
+    'src',
+    await page.locator('#userInfoAvatar').getAttribute('src'),
+  )
+  await expect(page.locator('#senderText')).toHaveText(user1Name)
   await typeMessage(page, user1Message)
   await sendMessageAndWaitNewCard(page, 1)
 

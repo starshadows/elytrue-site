@@ -10,6 +10,7 @@ import { createApp } from 'vue'
 import ProgressSlider from './components/controls/ProgressSlider.vue'
 import { GallerySwipeController } from './components/controls/GallerySwiper'
 import { toQueryString } from './lib/query'
+import { ApiError } from './lib/api-client'
 import {
   BACKGROUNDS,
   BACKGROUND_GROUPS,
@@ -476,6 +477,12 @@ const NewMessage = {
       TouchKeyboardDetector.detect()
     })
     editor.addEventListener('blur', () => TouchKeyboardDetector.detect())
+    const identityReady = await User.loadUserInfo()
+    if (!identityReady) {
+      document.getElementById('newCommentBox')?.remove()
+      Popup.show('loginPopup')
+      return
+    }
     editor.focus({ preventScroll: true })
   },
   previewLocalImgs() {
@@ -599,11 +606,21 @@ const NewMessage = {
         const result = await XHR.post('uploads/image', { image })
         uploaded.push(result.data.imageId)
       }
-      await XHR.post('comments/post', {
+      const payload = {
         comment: msg,
         imageKeys: uploaded,
         replyid,
-      })
+      }
+      try {
+        await XHR.post('comments/post', payload)
+      } catch (error) {
+        const csrfRejected =
+          error instanceof ApiError &&
+          error.status === 403 &&
+          error.message.includes('\u5B89\u5168\u6821\u9A8C\u5931\u8D25')
+        if (!csrfRejected || !(await User.loadUserInfo())) throw error
+        await XHR.post('comments/post', payload)
+      }
     } catch (error) {
       if (uploaded.length > 0) {
         Promise.allSettled(
@@ -614,8 +631,10 @@ const NewMessage = {
           ),
         )
       }
+      const reason =
+        error instanceof Error && error.message ? `\uFF1A${error.message}` : ''
       window.alert(
-        '\u53D1\u9001\u7559\u8A00\u5931\u8D25\uFF0C\u8BF7\u786E\u8BA4\u672C\u5730\u540E\u7AEF\u4ECD\u5728\u8FD0\u884C\u540E\u91CD\u8BD5\u3002\n\nFailed to send the message. Please make sure the local backend is running and try again.',
+        `\u53D1\u9001\u7559\u8A00\u5931\u8D25${reason}\u3002\u8BF7\u7A0D\u540E\u91CD\u8BD5\u3002\n\nFailed to send the message. Please try again later.`,
       )
       document.getElementById('sendBtn').disabled = false
       document.getElementById('sendBtn').innerHTML =

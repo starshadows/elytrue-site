@@ -38,6 +38,23 @@ function emailIndexKey(secret, email) {
     return blobKeys.userEmailIndex(keyedDigest(secret, normalizeEmail(email), 'email-index'))
 }
 
+async function claimUniqueIndex(data, key, userId, conflictMessage) {
+    const existing = await getJSON(data, key)
+    if (existing) throw httpError(409, conflictMessage)
+
+    try {
+        await data.setJSON(key, { userId }, { onlyIfNew: true })
+    } catch (error) {
+        if (isPreconditionFailure(error)) throw httpError(409, conflictMessage)
+        throw error
+    }
+
+    // 部分对象存储代理可能把 If-None-Match 冲突表现为成功但不写入。
+    // 强一致回读必须确认索引确实属于本次注册，不能只依赖 SDK 抛错。
+    const claimed = await getJSON(data, key)
+    if (claimed?.userId !== userId) throw httpError(409, conflictMessage)
+}
+
 async function applyAdminMarker(data, user) {
     if (!user) return user
     if (user.role === 'admin') {
@@ -95,9 +112,9 @@ export async function registerUser(data, env, { name, email, password }) {
     let emailReserved = false
 
     try {
-        await data.setJSON(nameKey, { userId }, { onlyIfNew: true })
+        await claimUniqueIndex(data, nameKey, userId, '用户名已被使用')
         nameReserved = true
-        await data.setJSON(emailKey, { userId }, { onlyIfNew: true })
+        await claimUniqueIndex(data, emailKey, userId, '邮箱已被注册')
         emailReserved = true
 
         const now = Date.now()
