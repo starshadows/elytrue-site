@@ -209,11 +209,15 @@ export async function revokeAllSessions(data, user) {
     return user
 }
 
-export async function updateUser(data, uploads, env, user, updates) {
+export async function updateUser(data, uploads, env, user, updates, deps = {}) {
     const secret = getAppSecret(env)
+    const hashPasswordImpl = deps.hashPassword || hashPassword
 
-    // 索引事务:先保存原状态 → 原子认领全部新索引 → 写用户本体 →
-    // 成功后删除旧索引;失败只回滚本次认领的新索引,用户本体与旧索引保持不变
+    // 索引事务:
+    //   1. 在任何存储写入前完成全部验证与预计算(用户名/邮箱/密码);
+    //   2. 原子认领全部新索引(首个认领后任意异常 → 统一 rollback 本次认领);
+    //   3. 写用户本体(失败 → rollback);
+    //   4. 删除旧索引前强一致读取并校验归属,防止误删历史重名账号的索引。
     const claimedKeys = []
     const oldIndexes = []
     const rollback = async () => {
@@ -228,55 +232,75 @@ export async function updateUser(data, uploads, env, user, updates) {
             })
         }
     }
+    const fail = async error => {
+        await rollback()
+        throw error
+    }
+
+    // ---- 1. 预校验与预计算(零写入) ----
+    const next = { passwordHash: user.passwordHash, sessionVersion: user.sessionVersion }
 
     if (updates.name !== undefined) {
         const nameError = validateUsername(updates.name)
         if (nameError) throw httpError(400, nameError)
-        const nextName = String(updates.name).normalize('NFKC').trim()
-        if (normalizeUsername(nextName) !== normalizeUsername(user.name)) {
+        next.name = String(updates.name).normalize('NFKC').trim()
+        if (normalizeUsername(next.name) !== normalizeUsername(user.name)) {
+            next.nameChanged = true
+            next.nameIndexKey = usernameIndexKey(next.name)
             oldIndexes.push({ type: 'name', key: usernameIndexKey(user.name) })
-            try {
-                await data.setJSON(usernameIndexKey(nextName), { userId: user.id }, { onlyIfNew: true })
-                claimedKeys.push(usernameIndexKey(nextName))
-            } catch (error) {
-                if (isPreconditionFailure(error)) throw httpError(409, '用户名已被使用')
-                throw error
-            }
-            user.name = nextName
         }
     }
 
     if (updates.email !== undefined) {
         const emailError = validateEmail(updates.email)
         if (emailError) throw httpError(400, emailError)
-        const nextEmail = normalizeEmail(updates.email)
-        const nextHash = keyedDigest(secret, nextEmail, 'email-index')
-        if (nextHash !== user.emailHash) {
+        next.email = normalizeEmail(updates.email)
+        next.emailHash = keyedDigest(secret, next.email, 'email-index')
+        if (next.emailHash !== user.emailHash) {
+            next.emailChanged = true
+            next.emailIndexKey = emailIndexKey(secret, next.email)
             oldIndexes.push({ type: 'email', key: `indexes/users/email/${user.emailHash}.json` })
-            try {
-                await data.setJSON(emailIndexKey(secret, nextEmail), { userId: user.id }, { onlyIfNew: true })
-                claimedKeys.push(emailIndexKey(secret, nextEmail))
-            } catch (error) {
-                if (isPreconditionFailure(error)) {
-                    await rollback()
-                    throw httpError(409, '邮箱已被注册')
-                }
-                await rollback()
-                throw error
-            }
-            user.emailHash = nextHash
-            user.emailCipher = encryptEmail(secret, nextEmail)
         }
     }
 
     if (updates.password !== undefined) {
         const passwordError = validatePassword(updates.password)
         if (passwordError) throw httpError(400, passwordError)
-        user.passwordHash = await hashPassword(updates.password)
-        user.sessionVersion = Number(user.sessionVersion || 0) + 1
+        next.passwordHash = await hashPasswordImpl(updates.password)
+        next.sessionVersion = Number(user.sessionVersion || 0) + 1
     }
 
-    if (updates.avatarKey !== undefined) user.avatarKey = updates.avatarKey
+    if (updates.avatarKey !== undefined) next.avatarKey = updates.avatarKey
+
+    // ---- 2. 原子认领全部新索引 ----
+    if (next.nameChanged) {
+        try {
+            await data.setJSON(next.nameIndexKey, { userId: user.id }, { onlyIfNew: true })
+            claimedKeys.push(next.nameIndexKey)
+        } catch (error) {
+            if (isPreconditionFailure(error)) return fail(httpError(409, '用户名已被使用'))
+            return fail(error)
+        }
+    }
+    if (next.emailChanged) {
+        try {
+            await data.setJSON(next.emailIndexKey, { userId: user.id }, { onlyIfNew: true })
+            claimedKeys.push(next.emailIndexKey)
+        } catch (error) {
+            if (isPreconditionFailure(error)) return fail(httpError(409, '邮箱已被注册'))
+            return fail(error)
+        }
+    }
+
+    // ---- 3. 写用户本体 ----
+    if (next.nameChanged) user.name = next.name
+    if (next.emailChanged) {
+        user.emailHash = next.emailHash
+        user.emailCipher = encryptEmail(secret, next.email)
+    }
+    user.passwordHash = next.passwordHash
+    user.sessionVersion = next.sessionVersion
+    if (next.avatarKey !== undefined) user.avatarKey = next.avatarKey
     user.updatedAt = Date.now()
 
     try {
@@ -286,8 +310,35 @@ export async function updateUser(data, uploads, env, user, updates) {
         throw error
     }
 
-    // 本体写入成功后再删旧索引;删除失败不影响结果,但记录结构化日志供修复
+    // ---- 4. 删除旧索引:先强一致校验归属,防止误删历史重名账号的索引 ----
     for (const old of oldIndexes) {
+        let current
+        try {
+            current = await getJSON(data, old.key)
+        } catch (error) {
+            console.error(JSON.stringify({
+                event: 'user_old_index_read_failed',
+                userId: user.id,
+                indexType: old.type,
+                key: old.key,
+                error: String(error?.message || error).slice(0, 300),
+            }))
+            continue
+        }
+        if (!current) {
+            // 旧索引已不存在,无需删除
+            continue
+        }
+        if (String(current.userId) !== String(user.id)) {
+            console.error(JSON.stringify({
+                event: 'user_old_index_not_owned',
+                userId: user.id,
+                indexType: old.type,
+                key: old.key,
+                indexUserId: current.userId,
+            }))
+            continue
+        }
         await data.delete(old.key).catch(error => {
             console.error(JSON.stringify({
                 event: 'user_old_index_delete_failed',

@@ -218,6 +218,30 @@ describe('comment index migration', () => {
         assert.equal(manifest.comments[0].actualSeatKey, 'indexes/comments/number/2.json')
     })
 
+    it('keeps body snapshots pristine in the final manifest after migration', async () => {
+        const store = new MemoryStore()
+        await seedComment(store, { id: 100, createdAt: 1000 })
+        await seedComment(store, { id: 200, createdAt: 2000 })
+        const dir = mkdtempSync(join(tmpdir(), 'elytrue-snapshot-'))
+        const result = await runCommentIndexMigration(store, {
+            ...FIX_CONFIRM,
+            manifestDir: dir,
+            reportDir: dir,
+        })
+        const manifest = JSON.parse(readFileSync(result.manifestPath, 'utf8'))
+        for (const entry of manifest.comments) {
+            assert.equal(entry.bodySnapshot.number, undefined, '快照不得包含迁移分配的 number')
+            assert.equal(entry.numberBefore, null)
+            assert.ok(entry.actualNumber >= 1)
+        }
+        // 实际留言本体包含 number,与快照明确不同
+        const body = await store.get(commentKey(100), { type: 'json' })
+        assert.equal(body.number, 1)
+        assert.notEqual(body.number, undefined)
+        assert.notEqual(manifest.comments[0].bodySnapshot.number, body.number)
+        assert.equal(manifest.comments[0].bodySnapshot.comment, body.comment, '快照其余字段与本体一致')
+    })
+
     it('keeps reports healthy after a hard delete via tombstone seats', async () => {
         const store = new MemoryStore()
         await seedMigrated(store, { id: 100, createdAt: 1000, number: 1 })
@@ -302,5 +326,50 @@ describe('comment index migration', () => {
         assert.equal(new Set([1, ...numbers]).size, 3)
         // 备份依据:清单与报告都留在 workDir
         assert.ok(readdirSync(workDir).some(file => file.includes('rebuild-comment-indexes')))
+    })
+})
+
+describe('repair markers', () => {
+    it('reports and resolves comment-delete repair markers in fix mode', async () => {
+        const store = new MemoryStore()
+        await seedMigrated(store, { id: 100, createdAt: 1000, number: 1 })
+        await seedMigrated(store, { id: 200, createdAt: 2000, number: 2 })
+
+        // 模拟硬删除 100 但用户索引删除失败:正文删除、seat tombstone、byUser 残留、marker
+        await store.delete(`comments/${String(100).padStart(16, '0')}.json`)
+        await store.setJSON('indexes/comments/number/1.json', {
+            commentId: 100, number: 1, tombstone: true, deletedAt: 3000, createdAt: 1000,
+        })
+        await store.setJSON(`repairs/comment-delete/100.json`, {
+            commentId: 100, number: 1, uid: 'u1', step: 'user-index', status: 'open', createdAt: 3000,
+        })
+
+        // 报告模式:识别 marker 并计入缺口
+        const report = await runCommentIndexMigration(store, {
+            manifestDir: workDir,
+            reportDir: workDir,
+        })
+        assert.equal(report.report.repairMarkers.length, 1)
+        assert.equal(report.report.repairMarkers[0].commentId, 100)
+
+        // 修复模式:清理残留用户索引并移除 marker
+        const fix = await runCommentIndexMigration(store, {
+            ...FIX_CONFIRM,
+            manifestDir: workDir,
+            reportDir: workDir,
+        })
+        assert.equal(fix.aborted, false)
+        assert.ok(fix.report.executed.some(event => event.includes('repair')))
+        assert.equal(await store.get(`indexes/comments/by-user/u1/${String(100).padStart(16, '0')}.json`, { type: 'json' }), null)
+        assert.equal(await store.get('repairs/comment-delete/100.json', { type: 'json' }), null)
+        assert.equal(fix.validation.length, 0, '修复后校验必须通过')
+
+        // 再次报告:不再有 marker,健康
+        const after = await runCommentIndexMigration(store, {
+            manifestDir: workDir,
+            reportDir: workDir,
+        })
+        assert.equal(after.report.repairMarkers.length, 0)
+        assert.equal(after.report.indexes.number.gap, 0)
     })
 })

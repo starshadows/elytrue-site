@@ -2,8 +2,9 @@ import assert from 'node:assert/strict'
 import { after, before, describe, it } from 'node:test'
 import { handleApiRequest } from '../server/app.js'
 import { MemoryStore } from '../server/storage.js'
-import { sha256 } from '../server/crypto.js'
+import { encryptEmail, keyedDigest, sha256 } from '../server/crypto.js'
 import { normalizeUsername } from '../shared/validation.js'
+import { updateUser } from '../server/auth.js'
 
 class FlakyStore extends MemoryStore {
     constructor(failures = {}) {
@@ -797,5 +798,113 @@ describe('updateUser index transaction', () => {
         assert.equal(await loginWorks('10.0.16.2', state.stores, '新名丁'), 200, '新用户名可登录')
         // 旧索引删除失败 → 旧索引残留指向同一用户(已记日志),旧名仍能登录,待修复任务清理
         assert.equal(await loginWorks('10.0.16.3', state.stores, '旧名丁'), 200, '旧索引残留,旧名仍可登录(已记录日志)')
+    })
+})
+
+describe('updateUser pre-validation and index ownership', () => {
+    async function registerIn(ip, name, email, password = 'update-secure-password', stores) {
+        const state = createState(ip)
+        state.stores = stores || { data: new MemoryStore(), uploads: new MemoryStore() }
+        await call(state, 'POST', 'user/register', { name, email, password })
+        return state
+    }
+
+    async function loginWorks(ip, stores, identifier, password = 'update-secure-password') {
+        const state = createState(ip)
+        state.stores = stores
+        const result = await call(state, 'POST', 'user/login', { identifier, password })
+        return result.response.status
+    }
+
+    it('rejects invalid email format before any index claim', async () => {
+        const state = await registerIn('10.0.18.1', '预校验甲', 'tx-e@example.com')
+        const failed = await call(state, 'PUT', 'user/update', {
+            name: '新名戊',
+            email: 'not-an-email',
+        })
+        assert.equal(failed.response.status, 400)
+        assert.match(failed.payload.message, /邮箱格式不正确/u)
+        assert.equal(await state.stores.data.get(nameIndexKey('新名戊'), { type: 'json' }), null, '不得留下新用户名索引')
+        assert.equal(await loginWorks('10.0.18.2', state.stores, '预校验甲'), 200)
+    })
+
+    it('rejects invalid password format before any index claim', async () => {
+        const state = await registerIn('10.0.19.1', '预校验乙', 'tx-f@example.com')
+        const failed = await call(state, 'PUT', 'user/update', {
+            name: '新名己',
+            password: 'short',
+        })
+        assert.equal(failed.response.status, 400)
+        assert.match(failed.payload.message, /密码长度/u)
+        assert.equal(await state.stores.data.get(nameIndexKey('新名己'), { type: 'json' }), null)
+        assert.equal(await loginWorks('10.0.19.2', state.stores, '预校验乙'), 200)
+    })
+
+    it('leaves no claimed indexes when password hashing fails mid-update', async () => {
+        // 直测 updateUser:注入会抛错的 hashPassword,验证预计算先于任何索引写入
+        const data = new MemoryStore()
+        const secret = 'x'.repeat(40)
+        const email = 'tx-g@example.com'
+        const user = {
+            id: 'unit-update-user',
+            name: '预校验丙',
+            emailHash: keyedDigest(secret, email, 'email-index'),
+            emailCipher: encryptEmail(secret, email),
+            passwordHash: 'old-hash',
+            sessionVersion: 1,
+        }
+        const env2 = { ELYTRUE_APP_SECRET: secret }
+        await data.setJSON(`users/${user.id}.json`, { ...user, updatedAt: 1 })
+        await assert.rejects(
+            () => updateUser(data, null, env2, user, {
+                name: '新名庚',
+                email: 'new-hash@example.com',
+                password: 'a-new-secure-password',
+            }, {
+                hashPassword: async () => { throw new Error('hash password failure') },
+            }),
+            /hash password failure/u,
+        )
+        assert.equal(await data.get(nameIndexKey('新名庚'), { type: 'json' }), null, '新用户名索引必须不产生')
+        assert.equal(await data.get(nameIndexKey('预校验丙'), { type: 'json' }), null, '不得产生任何新索引')
+        // 数据库中的旧本体未被改动
+        const record = await data.get(`users/${user.id}.json`, { type: 'json' })
+        assert.equal(record.name, '预校验丙')
+        assert.equal(record.emailHash, user.emailHash)
+        assert.equal(record.passwordHash, 'old-hash')
+    })
+
+    it('never deletes an old name index owned by another historical account', async () => {
+        const shared = { data: new MemoryStore(), uploads: new MemoryStore() }
+        await registerIn('10.0.21.1', '历史重名', 'tx-h@example.com', 'update-secure-password', shared)
+        const state = await registerIn('10.0.21.2', '重名新主', 'tx-i@example.com', 'update-secure-password', shared)
+        const otherId = (await call(state, 'GET', 'user/me')).payload.data.id === undefined
+            ? null
+            : null
+        // 历史重复数据:把「重名新主」的旧名索引改指另一个账号
+        const me = await call(state, 'GET', 'user/me')
+        const myId = me.payload.data.id
+        const legacyId = (await call(state, 'GET', `user/find?name=${encodeURIComponent('历史重名')}`)).payload.data[0].id
+        assert.notEqual(legacyId, myId)
+        await state.stores.data.setJSON(nameIndexKey('重名新主'), { userId: legacyId })
+
+        const captured = []
+        const original = console.error
+        console.error = (...args) => captured.push(args.join(' '))
+        let result
+        try {
+            result = await call(state, 'PUT', 'user/update', { name: '全新名字' })
+        } finally {
+            console.error = original
+        }
+        assert.equal(result.response.status, 200)
+        assert.ok(captured.some(text => text.includes('user_old_index_not_owned')), '必须记录非本人索引日志')
+        // 旧索引保留并仍指向历史账号,未被删除
+        const oldIndex = await state.stores.data.get(nameIndexKey('重名新主'), { type: 'json' })
+        assert.equal(oldIndex.userId, legacyId, '不得删除他人索引')
+        // 新索引指向本人
+        const newIndex = await state.stores.data.get(nameIndexKey('全新名字'), { type: 'json' })
+        assert.equal(newIndex.userId, myId)
+        void otherId
     })
 })

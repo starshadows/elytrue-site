@@ -93,7 +93,7 @@ export default {
                 count: 50,
                 cursor: this.nextCursor || undefined,
             }).then(r => {
-                const result = Array.isArray(r) ? { items: r, hasMore: false } : r
+                const result = Array.isArray(r) ? { items: r, hasMore: false, nextCursor: null } : r
                 result.items.forEach(comment => {
                     let time = new Date(comment.time * 1000)
                     comment.timeStr = time.toLocaleDateString() + ' ' + time.toLocaleTimeString()
@@ -105,10 +105,21 @@ export default {
                     this.comments.push(comment)
                 })
 
-                if (result.hasMore && result.items.length > 0) {
-                    this.nextCursor = result.items[result.items.length - 1].id
+                // nextCursor 是「最后扫描到的索引位」,即使本页 items 为空(整页隐藏)也能继续
+                const nextCursor = result.nextCursor
+                    ?? (result.items.length > 0 ? result.items[result.items.length - 1].id : null)
+                if (result.hasMore && nextCursor) {
+                    this.nextCursor = nextCursor
                     this.scrollPaused = false
+                    if (result.items.length === 0) {
+                        // 整页隐藏:立即继续下一页,避免用户无法滚动触发
+                        this.getComments()
+                    }
                 } else {
+                    // 防御:hasMore 却拿不到游标(不应发生),终止避免死循环
+                    if (result.hasMore) {
+                        console.error('UserHome: hasMore 但缺少 nextCursor,终止加载', result)
+                    }
                     this.toEnd = true
                     this.nextCursor = null
                 }

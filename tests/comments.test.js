@@ -767,3 +767,171 @@ describe('timeline time filter', () => {
         assert.equal(empty.payload.data.length, 0)
     })
 })
+
+describe('timeline time filter (integer-second boundary)', () => {
+    const state = createState('10.0.23.1')
+    const T = 1750001000
+
+    it('includes the whole integer second and respects fractional boundaries', async () => {
+        const entries = [
+            [T * 1e6, T * 1000, '秒内ms0'],
+            [T * 1e6 + 1000, T * 1000 + 1, '秒内ms1'],
+            [T * 1e6 + 500000, T * 1000 + 500, '秒内ms500'],
+            [T * 1e6 + 999000, T * 1000 + 999, '秒内ms999'],
+            [(T + 1) * 1e6, (T + 1) * 1000, '下一秒'],
+        ]
+        for (const [id, createdAt, text] of entries) {
+            await state.stores.data.setJSON(`comments/${String(id).padStart(16, '0')}.json`, {
+                id,
+                uid: 'boundary-user',
+                sender: '边界用户',
+                comment: text,
+                image: '',
+                hidden: false,
+                createdAt,
+                time: Math.floor(createdAt / 1000),
+            })
+        }
+
+        // 整数秒 T:该秒内 ms 0..999 全部包含,下一秒不混入
+        const whole = await call(state, 'GET', `comments?time=${T}&count=10`)
+        assert.equal(whole.response.status, 200)
+        assert.deepEqual(whole.payload.data.map(comment => comment.comment).sort(), ['秒内ms0', '秒内ms1', '秒内ms500', '秒内ms999'])
+        assert.equal(whole.payload.data.some(comment => comment.comment === '下一秒'), false)
+
+        // 小数 T+0.5:按精确毫秒上界,ms500 含、ms999 不含
+        const fractional = await call(state, 'GET', `comments?time=${T + 0.5}&count=10`)
+        assert.deepEqual(fractional.payload.data.map(comment => comment.comment).sort(), ['秒内ms0', '秒内ms1', '秒内ms500'])
+    })
+})
+
+describe('hard-delete failure consistency and repair markers', () => {
+    let setupCounter = 0
+    async function setup(ip) {
+        setupCounter += 1
+        const state = createState(ip)
+        await register(state, `删除失败用户${setupCounter}`, `del-fail-${setupCounter}@example.com`)
+        const posted = await postComment(state, '待删除')
+        await call(state, 'POST', 'admin/bootstrap', undefined, {
+            headers: { 'X-Admin-Bootstrap-Secret': env.ADMIN_BOOTSTRAP_SECRET },
+        })
+        return state
+    }
+
+    it('aborts cleanly when the tombstone write fails, leaving everything intact', async () => {
+        const state = await setup('10.0.24.1')
+        const posted = await call(state, 'GET', 'comments?count=5')
+        const targetId = posted.payload.data[0].id
+        const originalValues = state.stores.data.values
+        state.stores.data = new FlakyStore({ setJSON: key => key.startsWith('indexes/comments/number/') })
+        state.stores.data.values = originalValues
+        try {
+            const failed = await call(state, 'POST', 'admin/comments/moderate', {
+                commentId: targetId,
+                action: 'delete',
+            })
+            assert.equal(failed.response.status, 500)
+        } finally {
+            state.stores.data = Object.assign(new MemoryStore(), { values: originalValues })
+        }
+        // 正文、占位(未 tombstone)、用户索引全部保持原样
+        const body = await state.stores.data.get(`comments/${String(targetId).padStart(16, '0')}.json`, { type: 'json' })
+        assert.ok(body, '正文不得被删除')
+        const seat = await state.stores.data.get('indexes/comments/number/1.json', { type: 'json' })
+        assert.equal(seat.tombstone, undefined, '占位不得标记 tombstone')
+        const uid = (await call(state, 'GET', 'user/me')).payload.data.id
+        const byUserKey = `indexes/comments/by-user/${uid}/${String(targetId).padStart(16, '0')}.json`
+        assert.ok(await state.stores.data.get(byUserKey, { type: 'json' }), '用户索引不得被删除')
+        assert.equal((await state.stores.data.list({ prefix: 'repairs/' })).blobs.length, 0, '不得写 repair marker')
+    })
+
+    it('writes a repair marker when the user index delete fails', async () => {
+        const state = await setup('10.0.24.2')
+        const me = await call(state, 'GET', 'user/me')
+        const targetId = (await call(state, 'GET', 'comments?count=5')).payload.data[0].id
+        const originalValues = state.stores.data.values
+        const uid = me.payload.data.id
+        const byUserKey = `indexes/comments/by-user/${uid}/${String(targetId).padStart(16, '0')}.json`
+        state.stores.data = new FlakyStore({ delete: key => key === byUserKey })
+        state.stores.data.values = originalValues
+        let result
+        try {
+            result = await call(state, 'POST', 'admin/comments/moderate', {
+                commentId: targetId,
+                action: 'delete',
+            })
+        } finally {
+            state.stores.data = Object.assign(new MemoryStore(), { values: originalValues })
+        }
+        assert.equal(result.response.status, 200)
+        // 正文已删、占位已 tombstone、残留用户索引 + marker
+        assert.equal(await state.stores.data.get(`comments/${String(targetId).padStart(16, '0')}.json`, { type: 'json' }), null)
+        const seat = await state.stores.data.get('indexes/comments/number/1.json', { type: 'json' })
+        assert.equal(seat.tombstone, true)
+        assert.ok(await state.stores.data.get(byUserKey, { type: 'json' }), '用户索引残留等待修复')
+        const marker = await state.stores.data.get(`repairs/comment-delete/${targetId}.json`, { type: 'json' })
+        assert.ok(marker, '必须写入 repair marker')
+        assert.equal(marker.step, 'user-index')
+        assert.equal(marker.status, 'open')
+        // 修复:手工重试删除残留索引后清除 marker
+        await state.stores.data.delete(byUserKey)
+        await state.stores.data.delete(`repairs/comment-delete/${targetId}.json`)
+        assert.equal((await state.stores.data.list({ prefix: 'repairs/' })).blobs.length, 0)
+    })
+})
+
+describe('scanCap pagination with nextCursor', () => {
+    const state = createState('10.0.25.1')
+    const viewer = createState('10.0.25.2')
+
+    it('pages past a hidden block longer than scanCap without loss or loops', async () => {
+        await register(state, '深藏用户', 'deep@example.com')
+        viewer.stores = state.stores
+        await register(viewer, '旁观者', 'bystander@example.com')
+        const ownerId = (await call(state, 'GET', 'user/me')).payload.data.id
+
+        // 直接播种:252 条留言,其中 i=2..251 为隐藏(250 条,超过 scanCap=240),i=0,1 可见且最旧
+        const baseId = 1786000000000000
+        for (let i = 0; i < 252; i += 1) {
+            const id = baseId + i
+            const createdAt = 1786000000000 + i
+            const hidden = i >= 2
+            await state.stores.data.setJSON(`comments/${String(id).padStart(16, '0')}.json`, {
+                id,
+                uid: ownerId,
+                sender: '深藏用户',
+                comment: hidden ? `隐藏${i}` : `可见${i}`,
+                image: '',
+                hidden,
+                createdAt,
+                time: Math.floor(createdAt / 1000),
+            })
+            await state.stores.data.setJSON(`indexes/comments/by-user/${ownerId}/${String(id).padStart(16, '0')}.json`, { commentId: id, createdAt })
+        }
+
+        // 用户列表:首页 240 次扫描全部是隐藏 → items=[] 但 hasMore + nextCursor 可继续
+        const page1 = await call(viewer, 'GET', `comments?uid=${ownerId}&count=2`)
+        assert.equal(page1.payload.data.items.length, 0, '首页全部隐藏')
+        assert.equal(page1.payload.data.hasMore, true)
+        assert.ok(page1.payload.data.nextCursor, 'items 为空也必须给出 nextCursor')
+
+        const found = []
+        let cursor = page1.payload.data.nextCursor
+        let rounds = 0
+        for (; rounds < 10; rounds += 1) {
+            const page = await call(viewer, 'GET', `comments?uid=${ownerId}&count=2&cursor=${cursor}`)
+            found.push(...page.payload.data.items.map(item => item.comment))
+            if (!page.payload.data.hasMore) break
+            assert.ok(page.payload.data.nextCursor, 'hasMore 时必须带 nextCursor,避免死循环')
+            cursor = page.payload.data.nextCursor
+        }
+        assert.ok(rounds < 10, '必须终止,不得死循环')
+        assert.deepEqual(found.sort(), ['可见0', '可见1'], '不重复、不遗漏')
+
+        // 主列表:可见内容在 cap 之外,返回 { items:[], hasMore:true },不得误判到底
+        const main = await call(viewer, 'GET', 'comments?count=2')
+        assert.equal(Array.isArray(main.payload.data), false, '截断时返回对象形态')
+        assert.equal(main.payload.data.hasMore, true, '不得误判到底')
+        assert.equal(main.payload.data.items.length, 0, 'cap 内全部隐藏')
+    })
+})

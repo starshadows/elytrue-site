@@ -270,9 +270,11 @@ function isVisibleFor(comment, viewer) {
 }
 
 /**
- * 从升序 ids 中按可见留言数量收集,最多 count 条:
- * 内部 ID ≈ createdAt*1000(±1 秒),time 参数为 Unix 秒。
- * 返回 id 降序的可见留言数组。
+ * 从升序 ids 中按可见留言数量收集,最多 count 条。
+ * time 参数语义(Unix 秒):
+ *   - 整数秒 T:包含该秒内全部 comment.time <= T 的留言(边界整秒含 ms 0..999);
+ *   - 小数秒 T.5:按精确毫秒上界 createdAt <= T.5*1000 处理。
+ * 返回 { items(可见留言,id 降序), truncated(是否因 scanCap 截断) }。
  */
 async function collectVisibleComments(data, ids, {
     count,
@@ -296,23 +298,33 @@ async function collectVisibleComments(data, ids, {
             selected = ids.filter(id => id < from).reverse()
         }
     } else if (beforeTime) {
-        // id = createdAtMs*1000 + r(0 ≤ r < 1000);time 是 Unix 秒
-        const upperBound = beforeTime * 1_000_000 + 1000
+        // id = createdAtMs*1000 + r(0 ≤ r < 1000);候选上界覆盖整秒(含 ms 999),
+        // 精确边界由 createdAt 过滤决定
+        const upperBound = beforeTime * 1_000_000 + 1_000_000
         selected = ids.filter(id => id <= upperBound).reverse()
     } else {
         selected = [...ids].reverse()
     }
+
+    const isWholeSecond = Number.isInteger(beforeTime)
+    const beforeTimeMs = beforeTime * 1000
+    const boundaryMs = beforeTimeMs + (isWholeSecond ? 999 : 0)
 
     const comments = []
     const scanCap = Math.max(200, count * 20 + 200)
     for (let i = 0; i < selected.length && comments.length < count && i < scanCap; i += 1) {
         const comment = await getJSON(data, commentKey(selected[i]))
         if (!comment) continue
-        if (beforeTime && comment.time > beforeTime) continue
+        if (beforeTime) {
+            // 有 createdAt 时按毫秒精确过滤;旧数据缺 createdAt 时回落 time 比较
+            const createdAt = Number(comment.createdAt)
+            if (Number.isFinite(createdAt) && createdAt > boundaryMs) continue
+            if (!Number.isFinite(createdAt) && comment.time > beforeTime) continue
+        }
         if (!isVisibleFor(comment, viewer)) continue
         comments.push(comment)
     }
-    return comments
+    return { items: comments, truncated: comments.length < count && selected.length > scanCap }
 }
 
 export async function listComments(data, query, viewer) {
@@ -344,7 +356,7 @@ export async function listComments(data, query, viewer) {
     const ids = keys.map(keyToId).filter(Boolean)
 
     // 按可见留言数量收集(count=1 与居中窗口保持跳转语义)
-    const visible = await collectVisibleComments(data, ids, {
+    const collected = await collectVisibleComments(data, ids, {
         count,
         from,
         rawCount,
@@ -354,15 +366,16 @@ export async function listComments(data, query, viewer) {
     })
 
     // 旧数据(未迁移)缺少 number 字段时,用 id 顺序作为展示编号
-    const needFallback = visible.some(comment => !comment.number)
+    const needFallback = collected.items.some(comment => !comment.number)
     const fallbackRanks = needFallback
         ? new Map(ids.map((id, index) => [id, index + 1]))
         : null
 
-    return Promise.all(visible.map(comment => getCommentDetail(data, {
+    const items = await Promise.all(collected.items.map(comment => getCommentDetail(data, {
         ...comment,
         number: comment.number ?? fallbackRanks.get(comment.id) ?? comment.id,
     }, viewer)))
+    return { items, hasMore: collected.truncated }
 }
 
 async function listUserComments(data, query, viewer, uid) {
@@ -378,9 +391,10 @@ async function listUserComments(data, query, viewer, uid) {
     const window = cursor ? ids.filter(id => id < cursor) : ids
 
     // 按可见留言数量分页:扫描到收集够 count 条或窗口结束;
-    // hasMore 只在「窗口内仍有未扫描条目」时为 true,避免末端多发无意义请求
+    // nextCursor 记录「最后扫描到的原始索引位」,即使 items 为空(整页隐藏)也能继续
     const items = []
     let hasMore = false
+    let nextCursor = null
     const scanCap = Math.max(200, count * 20 + 200)
     let skippedOffset = offset
     let index = 0
@@ -395,7 +409,9 @@ async function listUserComments(data, query, viewer, uid) {
         items.push(comment)
     }
     hasMore = index < window.length
-    return { items, hasMore }
+    // nextCursor = 最后「已消费」的原始索引位(下次请求从它之后继续)
+    if (hasMore && index > 0) nextCursor = window[index - 1]
+    return { items, hasMore, nextCursor }
 }
 
 function isValidCalendarDate(year, month, day) {
@@ -471,40 +487,59 @@ export async function moderateComment(data, commentId, action) {
     const comment = await getJSON(data, key)
     if (!comment) throw httpError(404, '留言不存在')
     if (action === 'delete') {
-        await data.delete(key)
-        // 公开编号占位转为 tombstone:保留 commentId/number/deletedAt,
-        // 形成空号且不参与编号分配;跳转该编号返回 404
+        // 可恢复顺序:先写 tombstone(失败则中止,状态未变)→ 删正文 → 删用户索引。
+        // 用户索引删除失败:写 repair marker(repairs/comment-delete/{id}.json)供迁移/修复任务处理,
+        // 不能无标记返回成功。
         if (comment.number) {
             const seatKey = commentNumberKey(comment.number)
             const seat = await getJSON(data, seatKey)
             if (seat) {
-                await data.setJSON(seatKey, {
-                    ...seat,
-                    commentId: comment.id,
-                    number: comment.number,
-                    tombstone: true,
-                    deletedAt: Date.now(),
-                }).catch(error => {
+                try {
+                    await data.setJSON(seatKey, {
+                        ...seat,
+                        commentId: comment.id,
+                        number: comment.number,
+                        tombstone: true,
+                        deletedAt: Date.now(),
+                    })
+                } catch (error) {
                     console.error(JSON.stringify({
                         event: 'comment_seat_tombstone_failed',
                         commentId,
                         number: comment.number,
                         error: String(error?.message || error).slice(0, 300),
                     }))
-                })
+                    throw httpError(500, '管理操作失败，请稍后再试')
+                }
             }
         }
         // 日期索引保留:今日留言统计口径为「当天曾发布」(见 docs)
         // likes/reports 保留:作为审计记录,不做清理
-        // 用户留言索引删除,避免个人主页分页指向不存在的正文
-        await data.delete(userCommentsKey(comment.uid, commentId)).catch(error => {
+        await data.delete(key)
+        try {
+            await data.delete(userCommentsKey(comment.uid, commentId))
+        } catch (error) {
+            await data.setJSON(`repairs/comment-delete/${commentId}.json`, {
+                commentId,
+                number: comment.number ?? null,
+                uid: comment.uid,
+                step: 'user-index',
+                status: 'open',
+                createdAt: Date.now(),
+            }, { onlyIfNew: true }).catch(markerError => {
+                console.error(JSON.stringify({
+                    event: 'comment_repair_marker_failed',
+                    commentId,
+                    error: String(markerError?.message || markerError).slice(0, 300),
+                }))
+            })
             console.error(JSON.stringify({
                 event: 'comment_user_index_delete_failed',
                 commentId,
                 uid: comment.uid,
                 error: String(error?.message || error).slice(0, 300),
             }))
-        })
+        }
         return
     }
     if (!['hide', 'restore'].includes(action)) throw httpError(400, '管理操作无效')

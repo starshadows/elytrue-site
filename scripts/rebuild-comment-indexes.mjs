@@ -287,9 +287,24 @@ async function runMigrationInner(data, options, manifestDir, reportDir, fix, con
             ],
         )
 
-        const numberGap = numberStats.validCount !== withNumber.length
-        const datesGap = dateBlobs.length < comments.length
-        const byUserGap = byUserBlobs.length !== comments.length
+    const numberGap = numberStats.validCount !== withNumber.length
+    const datesGap = dateBlobs.length < comments.length
+    const byUserGap = byUserBlobs.length !== comments.length
+
+    // 硬删除残留的 repair markers(如用户索引删除失败)
+    const repairBlobs = await listAll(data, 'repairs/comment-delete/', Infinity)
+    const repairMarkers = []
+    for (const blob of repairBlobs) {
+        const marker = await getJSON(data, blob.key)
+        if (marker) repairMarkers.push({ key: blob.key, ...marker })
+    }
+    repairMarkers.sort((a, b) => Number(a.createdAt || 0) - Number(b.createdAt || 0))
+    if (repairMarkers.length > 0) {
+        say(`发现硬删除 repair markers ${repairMarkers.length} 个(--fix 可自动处理):`)
+        for (const marker of repairMarkers) {
+            say(`  ${marker.key}(commentId=${marker.commentId}, step=${marker.step}, status=${marker.status})`)
+        }
+    }
 
         const report = {
             generatedAt: new Date().toISOString(),
@@ -299,6 +314,14 @@ async function runMigrationInner(data, options, manifestDir, reportDir, fix, con
             missingNumber: missing.length,
             mixedNumbering: missing.length > 0 && withNumber.length > 0,
             tombstoneSeats: numberStats.tombstoneCount,
+            repairMarkers: repairMarkers.map(marker => ({
+                key: marker.key,
+                commentId: marker.commentId,
+                number: marker.number,
+                uid: marker.uid,
+                step: marker.step,
+                status: marker.status,
+            })),
             missingTop: missing.slice(0, 20).map(entry => ({
                 id: entry.id,
                 createdAt: entry.body.createdAt,
@@ -315,7 +338,7 @@ async function runMigrationInner(data, options, manifestDir, reportDir, fix, con
             hint,
         }
 
-        const gaps = missing.length > 0 || numberGap || datesGap || byUserGap
+        const gaps = missing.length > 0 || numberGap || datesGap || byUserGap || repairMarkers.length > 0
     
         if (!fix) {
             await writeReport(report, reportDir)
@@ -358,7 +381,8 @@ async function runMigrationInner(data, options, manifestDir, reportDir, fix, con
                     uid: entry.body.uid,
                     createdAt: new Date(createdAt).toISOString(),
                     numberBefore: entry.body.number ?? null,
-                    bodySnapshot: entry.body,
+                    // 深拷贝快照:迁移中会修改 entry.body,快照必须保持迁移前原样
+                    bodySnapshot: structuredClone(entry.body),
                     plannedSeatKey: null,
                     actualSeatKey: null,
                     actualNumber: null,
@@ -453,6 +477,28 @@ async function runMigrationInner(data, options, manifestDir, reportDir, fix, con
             say('  无需操作:所有索引均已完备。')
         } else {
             for (const event of executed) say(`  - ${event}`)
+        }
+
+        // 处理硬删除 repair markers:正文已删但用户索引删除失败的残留
+        for (const marker of repairMarkers) {
+            if (marker.status !== 'open') continue
+            const id = Number(marker.commentId)
+            if (!id) {
+                executed.push(`警告:repair marker ${marker.key} 的 commentId 无效,跳过`)
+                continue
+            }
+            const body = await getJSON(data, commentKey(id))
+            if (body) {
+                executed.push(`警告:repair marker ${marker.key} 对应留言 ${id} 仍存在,跳过`)
+                continue
+            }
+            const byUserKey = userCommentsKey(marker.uid, id)
+            if (await getJSON(data, byUserKey)) {
+                await data.delete(byUserKey)
+                executed.push(`repair ${marker.key}:已清理残留用户索引 ${byUserKey}`)
+            }
+            await data.delete(marker.key)
+            executed.push(`repair ${marker.key}:已处理`)
         }
     
         say('\n==== 修复后校验 ====')

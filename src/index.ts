@@ -38,11 +38,15 @@ export function loadComments(queryObj = {}, keepPosEl = undefined, noKami = fals
 
     return XHR.get("comments", queryObj).then(response => {
 
+        // scanCap 截断时后端返回 { items, hasMore:true },否则为数组
+        const truncated = !Array.isArray(response) && response?.hasMore === true
+        const items = Array.isArray(response) ? response : (response?.items || [])
+
         if (debug) console.log(queryObj)
-        if (debug) console.log('isNewer:', isCommentsNewer, ' isOlder:', isCommentsOlder, ' length:', response.length)
+        if (debug) console.log('isNewer:', isCommentsNewer, ' isOlder:', isCommentsOlder, ' length:', items.length)
 
         // handle empty response
-        if (response.length == 0) {
+        if (items.length == 0) {
             if (document.getElementsByClassName('commentItem').length == 0) {
                 finishCommentsLoading()
                 Comments.upToDate = true
@@ -55,8 +59,10 @@ export function loadComments(queryObj = {}, keepPosEl = undefined, noKami = fals
                 return
             }
             if (isCommentsOlder) {
-                console.log('reached the oldest comment')
-                document.getElementById('loadingIndicator').style.display = 'none'
+                if (!truncated) {
+                    console.log('reached the oldest comment')
+                    document.getElementById('loadingIndicator').style.display = 'none'
+                }
                 return
             }
 
@@ -72,14 +78,14 @@ export function loadComments(queryObj = {}, keepPosEl = undefined, noKami = fals
         }
 
         // update timeline & today comment count
-        if (response[0].time > maxTimelineTime) {
-            maxTimelineTime = response[0].time
+        if (items[0].time > maxTimelineTime) {
+            maxTimelineTime = items[0].time
             loadTimeline(maxTimelineTime)
             setTodayCommentCount()
         }
 
         // save old comment position before inserting new comments
-        var keepPos = (response[0].time > getMaxCommentTime() || keepPosEl != undefined)
+        var keepPos = (items[0].time > getMaxCommentTime() || keepPosEl != undefined)
         if (debug) console.log('KeepPos:', keepPos)
         if (keepPosEl == undefined) {
             keepPosEl = getFirstVisibleComment()
@@ -92,7 +98,7 @@ export function loadComments(queryObj = {}, keepPosEl = undefined, noKami = fals
         var prevMinCommentTime = getMinCommentTime()
 
         // insert comments
-        for (let comment of response) {
+        for (let comment of items) {
 
             // skip 2024 kami msgs when loading 2023.05
             if (queryObj.db == 'kami' && comment.id >= 35668 && getMaxCommentTime() <= 1684651800) {
@@ -119,25 +125,25 @@ export function loadComments(queryObj = {}, keepPosEl = undefined, noKami = fals
         if (Settings.showKami && queryObj.db == null && noKami == false) {
             if (isCommentsOlder) {
                 loadComments({
-                    'timeMin': response[response.length - 1].time,
+                    'timeMin': items[items.length - 1].time,
                     'timeMax': prevMinCommentTime,
                     'db': 'kami'
                 })
             } else if (isCommentsNewer) {
                 loadComments({
                     'timeMin': prevMaxCommentTime,
-                    'timeMax': response[0].time,
+                    'timeMax': items[0].time,
                     'db': 'kami'
                 }, keepPosEl)
             } else if (queryObj.time != null || queryObj.from != null) {
                 loadComments({
-                    'timeMin': response[response.length - 1].time,
-                    'timeMax': response[0].time,
+                    'timeMin': items[items.length - 1].time,
+                    'timeMax': items[0].time,
                     'db': 'kami'
                 })
             } else if (queryObj.timeMin == null && queryObj.timeMax == null) {
                 loadComments({
-                    'timeMin': response[response.length - 1].time,
+                    'timeMin': items[items.length - 1].time,
                     'timeMax': parseInt(Date.now() / 1000),
                     'db': 'kami'
                 })
@@ -148,7 +154,8 @@ export function loadComments(queryObj = {}, keepPosEl = undefined, noKami = fals
 
         document.getElementById('loadingIndicatorBefore')?.style.setProperty('display', 'none')
         const requestedCount = Math.min(100, Math.max(1, Math.abs(Number(queryObj.count ?? 30))))
-        if (!isCommentsNewer && response.length < requestedCount) {
+        // scanCap 截断时不得误判到底
+        if (!isCommentsNewer && items.length < requestedCount && !truncated) {
             document.getElementById('loadingIndicator')?.style.setProperty('display', 'none')
         }
 
@@ -636,27 +643,27 @@ export const NewMessage = {
     },
 
     async reply(id) {
-        if (document.getElementById('newCommentBox')) {
-            /** @type {HTMLDivElement} */
-            let msgText = document.getElementById('msgText')
-
-            this.removeReply()
-
-            let quoteEl = html2elmnt(`<div id="newCommentReplyQuote"></div>`)
-
-            if (!this.getNewMessage()) {
-                msgText.appendChild(html2elmnt(`<div><br></div>`))
-            }
-            msgText.appendChild(quoteEl)
-
-            initCommentReplyQuote(this.getReplyQuote(), id, { dark: true })
-
+        // 确保编辑器存在;show() 未真正创建(如登录被拦截)则直接返回,不递归重试
+        if (!document.getElementById('newCommentBox')) {
             await this.show()
-
-        } else {
-            await this.show()
-            this.reply(id)
+            if (!document.getElementById('newCommentBox')) return
         }
+
+        /** @type {HTMLDivElement} */
+        let msgText = document.getElementById('msgText')
+
+        this.removeReply()
+
+        let quoteEl = html2elmnt(`<div id="newCommentReplyQuote"></div>`)
+
+        if (!this.getNewMessage()) {
+            msgText.appendChild(html2elmnt(`<div><br></div>`))
+        }
+        msgText.appendChild(quoteEl)
+
+        initCommentReplyQuote(this.getReplyQuote(), id, { dark: true })
+
+        await this.show()
     },
 
     removeReply() {

@@ -434,8 +434,12 @@ async function postComment(context, stores) {
 async function getComments(context, stores) {
     const auth = await getSession(stores.data, context.request)
     const url = new URL(context.request.url)
-    const comments = await listComments(stores.data, url.searchParams, auth?.user)
-    return apiResponse(comments, { cookies: auth?.refreshCookies || [] })
+    const result = await listComments(stores.data, url.searchParams, auth?.user)
+    // 用户列表:{ items, hasMore, nextCursor };主列表:数组(scanCap 截断时返回 { items, hasMore })
+    if (Array.isArray(result)) return apiResponse(result, { cookies: auth?.refreshCookies || [] })
+    if (url.searchParams.get('uid')) return apiResponse(result, { cookies: auth?.refreshCookies || [] })
+    if (result.hasMore) return apiResponse({ items: result.items, hasMore: true }, { cookies: auth?.refreshCookies || [] })
+    return apiResponse(result.items, { cookies: auth?.refreshCookies || [] })
 }
 
 async function commentsCount(context, stores) {

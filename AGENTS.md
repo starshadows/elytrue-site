@@ -19,10 +19,11 @@
 - `cloud-functions/api/[[default]].js` → `server/app.js` 的 `handleApiRequest`:全部 `/api/*` 路由是手写路由表(路径去掉 `/api` 前缀后精确匹配)。`server/` 是纯 JS、无构建步骤;`shared/validation.js` 前后端共用
 - 存储:`server/storage.js` 的 `createStores` 固定取两个 Blob Store——`elytrue-data`(用户/会话/留言/索引)和 `elytrue-uploads`(头像/留言图);key 约定如 `users/{id}.json`、`uploads/aliases/...`。生产环境只注入,测试注入 `MemoryStore`
 - 留言数据(server/comments.js):评论本体 `comments/{16位内部ID}.json`(内部 ID 保持稳定,点赞/回复/图片引用它);**稳定公开编号** `indexes/comments/number/{n}.json`(onlyIfNew 原子占位,允许空洞,占位带 reservationId 供回滚识别;硬删除时转为 `tombstone:true` 空号,跳转 404、不复用、迁移校验豁免);自然日计数 `dates/{YYYY-MM-DD}/{id}.json`(Asia/Shanghai,`comments/count` 用;删除留言不删此索引,口径为「当天曾发布」);用户留言索引 `indexes/comments/by-user/{uid}/{id}.json`(个人页游标分页 `cursor`+`hasMore`,硬删除时同步删除)。`number` 查询参数按公开编号跳转,`from` 仍是内部 ID 语义(精确命中时是居中窗口)。旧数据无 `number` 字段时回落 id 顺序展示编号,迁移脚本可回填
-- 分页按**可见留言数量**收集(越过隐藏留言直到凑够 count 或窗口结束):主列表保持数组返回,用户列表返回 `{items, hasMore}`;`time` 参数为 Unix 秒,内部 ID 上界换算为 `time*1e6+1000`
+- 分页按**可见留言数量**收集(越过隐藏留言直到凑够 count 或窗口结束):主列表保持数组返回(scanCap 截断时返回 `{items, hasMore:true}` 对象),用户列表返回 `{items, hasMore, nextCursor}`(nextCursor 是最后扫描的索引位,即使整页隐藏也能继续);`time` 参数为 Unix 秒(整数含整秒 ms0..999,小数按精确毫秒上界),内部 ID 候选上界 `time*1e6+1e6`,最终按 createdAt 精确过滤
 - createComment 一致性:正文→编号占位→(回写 number+用户索引+日期索引)→图片 pending→active,任一失败回滚本次已写资源(仅删自己 reservationId 的占位;已激活图片还原为 pending)并记结构化日志(`comment_*` 事件),不返回 201;编号占位不得指向不存在的留言
+- 硬删除:先写 tombstone(失败则 500 中止)→删正文→删用户索引(失败写 `repairs/comment-delete/{id}.json` marker 供迁移脚本识别/修复)
 - 图片别名 status 缺失按 active 处理:`DELETE /api/uploads/image?imageId=` 只允许 pending;自动清理(>24h)会先经用户留言索引核对引用,被引用的 pending 不删
-- updateUser 索引事务:先原子认领全部新索引→写用户本体→成功后删旧索引;失败只回滚本次认领;旧索引删除失败记 `user_old_index_delete_failed` 日志
+- updateUser 索引事务:先全部预校验+预计算(含 passwordHash)→原子认领新索引→写用户本体→删除旧索引前强一致校验归属(他人索引不删,记 `user_old_index_not_owned`);失败只回滚本次认领
 - 图片别名带 `status`:`pending`(未关联留言,可被 `DELETE /api/uploads/image?imageId=` 删除或 24h 后自动清理)/`active`;缺省视为 active
 - 边缘限流在 `middleware.js`(Edge Function),依赖 KV 绑定 `ELYTRUE_RATE_LIMIT_KV`(策略表 `RATE_LIMIT_POLICIES`);未绑定则退化为 `server/rate-limit.js` 进程内二次限流。新增写端点时两处都要加
 - 环境变量只在 EdgeOne 项目设置里(`ELYTRUE_APP_SECRET`、`RESEND_API_KEY`、`RESEND_FROM_EMAIL`、`RESEND_FROM_NAME`、`PUBLIC_SITE_URL`、`ADMIN_BOOTSTRAP_SECRET`、`ALLOWED_ORIGINS`),`.env.example` 仅占位;本地跑测试时自己构造 env(见 tests/api.test.js)
