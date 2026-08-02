@@ -89,17 +89,37 @@ node scripts/check-duplicate-users.mjs --fix    # 修复:保留最早账号,其�
 稳定公开编号（`indexes/comments/number/`）、自然日计数（`dates/`）与用户留言索引（`indexes/comments/by-user/`）需要为旧留言回填：
 
 ```bash
-node scripts/rebuild-comment-indexes.mjs          # 报告:统计缺口
-node scripts/rebuild-comment-indexes.mjs --fix    # 按 createdAt 为旧留言分配编号并回填索引
+node scripts/rebuild-comment-indexes.mjs          # 报告:统计缺口并检查悬空编号索引
+node scripts/rebuild-comment-indexes.mjs --fix --confirm-production-migration \
+    [--allow-mixed-numbering] [--manifest-dir exports]
 ```
 
-幂等可重跑。回滚：删除上述三个前缀的 key 即可，`comments/` 本体不变。
+要点：
+
+- `--fix` 必须同时带 `--confirm-production-migration` 才执行；
+- 若「已有 number 的留言」与「缺 number 的留言」同时存在，默认中止（旧留言编号会排在新留言之后），确认接受后显式加 `--allow-mixed-numbering`；
+- `--fix` 会修改 `comments/` 本体（补 `number` 字段）并新增三个前缀的索引，**仅删除索引不能回滚**；真正回滚必须恢复运行前的完整备份（含 `comments/`，建议先 `npm run export:data`）；
+- 执行前会把旧内容快照与新增索引 key 清单写入 `--manifest-dir`（默认 `exports/`）作为审计依据；
+- 幂等可重跑；迁移中途失败会留下悬空编号占位，重跑会被「混合编号」安全拦截，需按备份恢复或手工清理悬空占位后继续；
+- **生产建议：首次部署时先进入维护状态（或选择低峰期），完成编号迁移并校验通过后，再开放留言发布。**
+
+### 8.3 图片空间统计重算
+
+`usage/uploads.json` 的 `uploadedBytes` 并发扣减下可能出现偏差（Blob 无原子自减）：
+
+```bash
+node scripts/rebuild-usage.mjs                                  # 只读报告
+node scripts/rebuild-usage.mjs --fix --confirm-production-migration
+```
+
+以 `uploads/aliases/` 下所有别名记录的 `size` 之和为准重算并重写统计。
 
 ## 9. 部署版本确认与邮件日志
 
 - `GET /api/health` 返回 `version`（构建时注入的 git 短提交）与 `buildTime`，用于确认 EdgeOne 实际部署的提交。
 - 密码重置邮件结果以结构化日志输出到 Cloud Functions 日志：`{"event":"password_reset_email","success":false,"userId":"...","provider":"resend","status":403,"error":"domain is not verified"}`。发送成功时含 `emailId`。日志不包含重置 token、密码或完整 API Key。邮件未收到时按此排查：`RESEND_API_KEY` 是否配置、发件域是否在 Resend 验证（SPF/DKIM）、是否触发限流或退信。
-- 上传的临时图片（超过 24 小时未被留言引用）会在下次上传时自动清理，事件为 `pending_image_cleanup`。
+- 上传的临时图片（超过 24 小时未被留言引用）会在下次上传时自动清理，事件为 `pending_image_cleanup`；删除/清理成功后会按别名 `size` 扣减 `usage/uploads.json`（Blob 删除或别名删除失败时不会先扣减，统计偏差可用 8.3 重算）。
+- 留言硬删除语义：公开编号占位永久保留（空号不重排）；用户留言索引同步删除；日期索引保留（今日留言统计口径为「当天曾发布」）；likes/reports 保留作为审计记录。
 
 ## 10. 集成测试（可选）
 

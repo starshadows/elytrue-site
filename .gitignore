@@ -38,3 +38,6 @@ coverage
 # Playwright
 test-results
 playwright-report
+
+# generated at build time (scripts/gen-build-info.mjs)
+server/build-info.js

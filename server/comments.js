@@ -26,36 +26,6 @@ export function newCommentId() {
     return Date.now() * 1000 + Math.floor(Math.random() * 1000)
 }
 
-/** 按 Asia/Shanghai 自然日返回 YYYY-MM-DD */
-export function shanghaiDateString(ms) {
-    return new Intl.DateTimeFormat('en-CA', {
-        timeZone: 'Asia/Shanghai',
-        year: 'numeric',
-        month: '2-digit',
-        day: '2-digit',
-    }).format(new Date(ms))
-}
-
-/** 原子认领下一个稳定公开编号(onlyIfNew 占位,并发安全,允许空洞) */
-async function claimCommentNumber(data, commentId) {
-    const hint = Number((await getJSON(data, NUMBER_HINT_KEY))?.value || 0)
-    let number = hint + 1
-    for (let attempt = 0; attempt < 2000; attempt += 1) {
-        try {
-            await data.setJSON(commentNumberKey(number), {
-                commentId,
-                createdAt: Date.now(),
-            }, { onlyIfNew: true })
-            await data.setJSON(NUMBER_HINT_KEY, { value: number, updatedAt: Date.now() }).catch(() => {})
-            return number
-        } catch (error) {
-            if (!isPreconditionFailure(error)) throw error
-            number += 1
-        }
-    }
-    throw httpError(500, '留言编号分配失败，请稍后再试')
-}
-
 /**
  * 把「公开编号或内部 ID」解析为内部 ID。
  * 公开编号(小数值)优先查编号索引;旧数据未迁移时回退按内部 ID 直查。
@@ -70,7 +40,82 @@ export async function resolveCommentId(data, value) {
     return legacy ? raw : null
 }
 
-export async function createComment(data, user, body) {
+/** 按 Asia/Shanghai 自然日返回 YYYY-MM-DD */
+export function shanghaiDateString(ms) {
+    return new Intl.DateTimeFormat('en-CA', {
+        timeZone: 'Asia/Shanghai',
+        year: 'numeric',
+        month: '2-digit',
+        day: '2-digit',
+    }).format(new Date(ms))
+}
+
+/** 原子认领下一个稳定公开编号(onlyIfNew 占位,并发安全,允许空洞) */
+async function claimCommentNumber(data, commentId, reservationId) {
+    const hint = Number((await getJSON(data, NUMBER_HINT_KEY))?.value || 0)
+    let number = hint + 1
+    for (let attempt = 0; attempt < 2000; attempt += 1) {
+        try {
+            await data.setJSON(commentNumberKey(number), {
+                commentId,
+                reservationId,
+                createdAt: Date.now(),
+            }, { onlyIfNew: true })
+            await data.setJSON(NUMBER_HINT_KEY, { value: number, updatedAt: Date.now() }).catch(() => {})
+            return number
+        } catch (error) {
+            if (!isPreconditionFailure(error)) throw error
+            number += 1
+        }
+    }
+    throw httpError(500, '留言编号分配失败，请稍后再试')
+}
+
+/**
+ * 回滚一次留言创建:删除正文、本次占用的编号(仅当 reservationId 匹配)、
+ * 以及可能已写入的用户/日期索引。任何一步失败都记录结构化日志,不抛错。
+ */
+async function rollbackCommentResources(data, commentId, { reservationId, number, uid, date }) {
+    const failures = []
+    if (number) {
+        const seat = await getJSON(data, commentNumberKey(number)).catch(() => null)
+        if (seat?.reservationId === reservationId) {
+            await data.delete(commentNumberKey(number)).catch(error => failures.push(`seat:${error?.message || error}`))
+        } else if (seat && seat.commentId !== commentId) {
+            // 占位不属于本次操作:绝不删除,仅记录
+            console.error(JSON.stringify({
+                event: 'comment_rollback_seat_not_owned',
+                commentId,
+                number,
+                seatCommentId: seat.commentId,
+            }))
+        }
+    }
+    await data.delete(commentKey(commentId)).catch(error => failures.push(`comment:${error?.message || error}`))
+    if (uid) {
+        await data.delete(userCommentsKey(uid, commentId)).catch(error => failures.push(`userIndex:${error?.message || error}`))
+    }
+    if (date) {
+        await data.delete(dateCommentsKey(date, commentId)).catch(error => failures.push(`dateIndex:${error?.message || error}`))
+    }
+    if (failures.length > 0) {
+        console.error(JSON.stringify({
+            event: 'comment_rollback_failed',
+            commentId,
+            number,
+            failures,
+        }))
+    }
+}
+
+/**
+ * 创建留言。一致性约定:
+ *   - 只有正文、公开编号、用户索引、日期索引全部写入成功才返回;
+ *   - 任一步失败都回滚本操作已写入的资源(正文/编号占位/部分索引),
+ *     保证不留指向不存在留言的编号占位;
+ *   - 编号占位携带 reservationId,回滚只清理属于本次操作的占位。
+ */
+export async function createComment(data, user, body, { idFactory = newCommentId } = {}) {
     const commentError = validateComment(body.comment)
     if (commentError) throw httpError(400, commentError)
     const rawImageIds = Array.isArray(body.imageKeys) ? body.imageKeys.map(String) : []
@@ -92,14 +137,17 @@ export async function createComment(data, user, body) {
         replyid = targetId
     }
 
+    const reservationId = randomUUID()
     const createdAt = Date.now()
-    let id = newCommentId()
-    const number = await claimCommentNumber(data, id)
-    let comment
-    for (let attempt = 0; attempt < 5; attempt += 1) {
+    const date = shanghaiDateString(createdAt)
+
+    // 1. 写入正文(内部 ID 冲突则换号重试,最多 5 次;以 persisted 为准,不依赖对象真值)
+    let comment = null
+    let persisted = false
+    for (let attempt = 0; attempt < 5 && !persisted; attempt += 1) {
+        const id = idFactory()
         comment = {
             id,
-            number,
             uid: user.id,
             sender: user.name,
             avatar: user.avatarKey || '',
@@ -112,21 +160,61 @@ export async function createComment(data, user, body) {
         }
         try {
             await data.setJSON(commentKey(id), comment, { onlyIfNew: true })
-            break
+            persisted = true
         } catch (error) {
             if (!isPreconditionFailure(error)) throw error
-            id = newCommentId()
         }
     }
-    if (!comment || id <= 0) throw httpError(500, '留言创建失败，请稍后再试')
+    if (!persisted || !comment) {
+        console.error(JSON.stringify({
+            event: 'comment_persist_conflict',
+            userId: user.id,
+            attempts: 5,
+        }))
+        throw httpError(500, '留言创建失败，请稍后再试')
+    }
 
-    await data.setJSON(userCommentsKey(user.id, id), { commentId: id, createdAt }).catch(() => {})
-    await data.setJSON(dateCommentsKey(shanghaiDateString(createdAt), id), { commentId: id, createdAt }).catch(() => {})
+    // 2. 认领公开编号,占位必须指向实际写入的内部 ID
+    let number
+    try {
+        number = await claimCommentNumber(data, comment.id, reservationId)
+    } catch (error) {
+        await rollbackCommentResources(data, comment.id, { reservationId, uid: user.id, date })
+        console.error(JSON.stringify({
+            event: 'comment_number_claim_failed',
+            commentId: comment.id,
+            error: String(error?.message || error).slice(0, 300),
+        }))
+        throw error
+    }
+    comment.number = number
+
+    // 3. 回写编号 + 用户索引 + 日期索引;任一失败则回滚全部并返回 500
+    try {
+        await data.setJSON(commentKey(comment.id), comment)
+        await data.setJSON(userCommentsKey(user.id, comment.id), { commentId: comment.id, createdAt })
+        await data.setJSON(dateCommentsKey(date, comment.id), { commentId: comment.id, createdAt })
+    } catch (error) {
+        await rollbackCommentResources(data, comment.id, { reservationId, number, uid: user.id, date })
+        console.error(JSON.stringify({
+            event: 'comment_index_write_failed',
+            commentId: comment.id,
+            number,
+            error: String(error?.message || error).slice(0, 300),
+        }))
+        throw httpError(500, '留言创建失败，请稍后再试')
+    }
 
     for (const { imageId, alias } of aliases) {
         if (alias.status !== 'active') {
             alias.status = 'active'
-            await data.setJSON(`uploads/aliases/comments/${imageId}.json`, alias).catch(() => {})
+            await data.setJSON(`uploads/aliases/comments/${imageId}.json`, alias).catch(error => {
+                console.error(JSON.stringify({
+                    event: 'comment_alias_active_failed',
+                    imageId,
+                    error: String(error?.message || error).slice(0, 300),
+                }))
+            })
         }
     }
     return comment
@@ -258,6 +346,13 @@ async function listUserComments(data, query, viewer, uid) {
     return { items, hasMore }
 }
 
+function isValidCalendarDate(year, month, day) {
+    const probe = new Date(Date.UTC(year, month - 1, day))
+    return probe.getUTCFullYear() === year
+        && probe.getUTCMonth() === month - 1
+        && probe.getUTCDate() === day
+}
+
 export async function countComments(data, query) {
     const date = query.get('date') || shanghaiDateString(Date.now())
     const match = /^(\d{4})-(\d{2})-(\d{2})$/u.exec(date)
@@ -265,9 +360,7 @@ export async function countComments(data, query) {
     const year = Number(match[1])
     const month = Number(match[2])
     const day = Number(match[3])
-    if (year < 2000 || year > 2100 || month < 1 || month > 12 || day < 1 || day > 31) {
-        throw httpError(400, '日期格式不正确')
-    }
+    if (!isValidCalendarDate(year, month, day)) throw httpError(400, '日期格式不正确')
     const blobs = await listAll(data, `dates/${date}/`, Infinity)
     return blobs.length
 }
@@ -327,6 +420,18 @@ export async function moderateComment(data, commentId, action) {
     if (!comment) throw httpError(404, '留言不存在')
     if (action === 'delete') {
         await data.delete(key)
+        // 公开编号占位永久保留(形成空号,编号不重排)
+        // 日期索引保留:今日留言统计口径为「当天曾发布」(见 docs)
+        // likes/reports 保留:作为审计记录,不做清理
+        // 用户留言索引删除,避免个人主页分页指向不存在的正文
+        await data.delete(userCommentsKey(comment.uid, commentId)).catch(error => {
+            console.error(JSON.stringify({
+                event: 'comment_user_index_delete_failed',
+                commentId,
+                uid: comment.uid,
+                error: String(error?.message || error).slice(0, 300),
+            }))
+        })
         return
     }
     if (!['hide', 'restore'].includes(action)) throw httpError(400, '管理操作无效')

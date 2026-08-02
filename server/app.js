@@ -24,7 +24,6 @@ import {
 } from './comments.js'
 import { sha256, randomToken, hashPassword, decryptEmail } from './crypto.js'
 import { sendPasswordResetEmail } from './email.js'
-import { BUILD_VERSION, BUILD_TIME } from './build-info.js'
 import {
     apiResponse,
     binaryResponse,
@@ -35,8 +34,24 @@ import {
 } from './http.js'
 import { contentTypeForKey, decodeBase64Image, validateImage } from './images.js'
 import { enforceRateLimit } from './rate-limit.js'
-import { createStores, getJSON, listAll } from './storage.js'
+import { createStores, getJSON, isPreconditionFailure, listAll } from './storage.js'
 import { validatePassword } from '../shared/validation.js'
+
+// server/build-info.js 由 scripts/gen-build-info.mjs 在构建时生成(被 gitignore),
+// 本地测试/开发时不存在,回退为 dev 默认值。
+let buildInfoPromise = null
+async function loadBuildInfo() {
+    if (!buildInfoPromise) {
+        buildInfoPromise = import('./build-info.js')
+            .then(module => ({
+                version: module.BUILD_VERSION,
+                buildTime: module.BUILD_TIME,
+                commitTime: module.COMMIT_TIME,
+            }))
+            .catch(() => ({ version: 'dev', buildTime: null, commitTime: null }))
+    }
+    return buildInfoPromise
+}
 
 const MAX_AVATAR_BYTES = 1024 * 1024
 const MAX_COMMENT_IMAGE_BYTES = 2 * 1024 * 1024
@@ -74,11 +89,33 @@ async function ensureWriteOrigin(context) {
     }
 }
 
+// 进程内按 key 串行化 usage/uploads.json 的读-改-写,减少并发覆盖;
+// 跨实例并发仍是最终一致(可运行 scripts/rebuild-usage.mjs 重算)。
+const usageWriteQueue = new Map()
+function enqueueUsageWrite(key, task) {
+    const previous = usageWriteQueue.get(key) || Promise.resolve()
+    const next = previous.then(task, task)
+    usageWriteQueue.set(key, next.then(() => {}, () => {}))
+    return next
+}
+
+async function adjustUploadUsage(data, delta) {
+    const key = 'usage/uploads.json'
+    return enqueueUsageWrite(key, async () => {
+        const current = await getJSON(data, key) || { uploadedBytes: 0 }
+        const uploadedBytes = Math.max(0, Math.round(Number(current.uploadedBytes || 0) + delta))
+        const next = { ...current, uploadedBytes, updatedAt: Date.now() }
+        next.warning = uploadedBytes >= UPLOAD_WARNING_BYTES
+        await data.setJSON(key, next)
+        return uploadedBytes
+    })
+}
+
 async function saveImage({ data, uploads }, user, base64, kind) {
     const maxBytes = kind === 'avatar' ? MAX_AVATAR_BYTES : MAX_COMMENT_IMAGE_BYTES
     const buffer = decodeBase64Image(base64, maxBytes)
     const image = validateImage(buffer, maxBytes)
-    const usage = await getJSON(data, 'usage/uploads.json') || { uploadedBytes: 0, updatedAt: 0 }
+    const usage = await getJSON(data, 'usage/uploads.json') || { uploadedBytes: 0 }
     if (Number(usage.uploadedBytes || 0) + buffer.length >= UPLOAD_STOP_BYTES) {
         throw httpError(507, '图片存储空间接近免费额度上限，已暂停新图片上传')
     }
@@ -99,11 +136,10 @@ async function saveImage({ data, uploads }, user, base64, kind) {
         createdAt: Date.now(),
     }, { onlyIfNew: true })
 
-    usage.uploadedBytes = Number(usage.uploadedBytes || 0) + buffer.length
-    usage.updatedAt = Date.now()
-    usage.warning = usage.uploadedBytes >= UPLOAD_WARNING_BYTES
-    await data.setJSON('usage/uploads.json', usage)
-    if (usage.warning) console.warn('Elytrue Blob usage has reached the 80% warning threshold.')
+    const uploadedBytes = await adjustUploadUsage(data, buffer.length)
+    if (uploadedBytes >= UPLOAD_WARNING_BYTES) {
+        console.warn('Elytrue Blob usage has reached the 80% warning threshold.')
+    }
     return { imageId, blobKey, size: buffer.length }
 }
 
@@ -258,9 +294,20 @@ async function completePasswordReset(context, stores) {
     if (!token || passwordError) throw httpError(400, passwordError || '重置链接无效')
     const key = `password-resets/${sha256(token)}.json`
     const reset = await getJSON(stores.data, key)
-    if (!reset || reset.expiresAt <= Date.now()) throw httpError(400, '重置链接无效或已过期')
+    if (!reset || reset.expiresAt <= Date.now()) throw httpError(400, '重置链接无效或已使用')
     const user = await findUserById(stores.data, reset.userId)
-    if (!user) throw httpError(400, '重置链接无效或已过期')
+    if (!user) throw httpError(400, '重置链接无效或已使用')
+
+    // 原子认领:同一 token 只允许一个请求继续,并发/重复使用在此被拒绝。
+    // 认领标记与原始记录都是 token 的哈希,不落 token 本身。
+    const claimKey = `${key}.claimed`
+    try {
+        await stores.data.setJSON(claimKey, { claimedAt: Date.now() }, { onlyIfNew: true })
+    } catch (error) {
+        if (isPreconditionFailure(error)) throw httpError(400, '重置链接无效或已使用')
+        throw error
+    }
+
     user.passwordHash = await hashPassword(password)
     user.sessionVersion = Number(user.sessionVersion || 0) + 1
     user.updatedAt = Date.now()
@@ -289,8 +336,28 @@ async function deleteUploadedImage(context, stores) {
     const alias = await getJSON(stores.data, aliasKey)
     if (!alias || alias.userId !== auth.user.id) throw httpError(404, '图片不存在')
     if (alias.status === 'active') throw httpError(409, '图片已关联留言，无法删除')
-    await stores.uploads.delete(alias.blobKey).catch(() => {})
-    await stores.data.delete(aliasKey).catch(() => {})
+    // 先删 Blob,再删别名,最后扣减统计;任何一步失败都不扣减,避免重复/错误扣减
+    try {
+        await stores.uploads.delete(alias.blobKey)
+    } catch (error) {
+        console.error(JSON.stringify({
+            event: 'upload_delete_blob_failed',
+            imageId,
+            error: String(error?.message || error).slice(0, 300),
+        }))
+        throw httpError(500, '图片删除失败，请稍后再试')
+    }
+    try {
+        await stores.data.delete(aliasKey)
+    } catch (error) {
+        console.error(JSON.stringify({
+            event: 'upload_alias_delete_failed',
+            imageId,
+            error: String(error?.message || error).slice(0, 300),
+        }))
+        throw httpError(500, '图片删除失败，请稍后再试')
+    }
+    await adjustUploadUsage(stores.data, -Number(alias.size || 0))
     return apiResponse(null, { message: '图片已删除' })
 }
 
@@ -306,6 +373,7 @@ async function cleanupStalePendingImages(stores, user) {
         try {
             await stores.uploads.delete(alias.blobKey)
             await stores.data.delete(blob.key)
+            await adjustUploadUsage(stores.data, -Number(alias.size || 0))
             console.log(JSON.stringify({
                 event: 'pending_image_cleanup',
                 success: true,
@@ -427,11 +495,13 @@ export async function handleApiRequest(context, injectedStores) {
     try {
         if (method === 'OPTIONS') return new Response(null, { status: 204 })
         if (method === 'GET' && (path === '' || path === 'health')) {
+            const build = await loadBuildInfo()
             return apiResponse({
                 service: 'elytrue-edgeone',
                 status: 'ok',
-                version: BUILD_VERSION,
-                buildTime: BUILD_TIME,
+                version: build.version,
+                buildTime: build.buildTime,
+                commitTime: build.commitTime,
             })
         }
 

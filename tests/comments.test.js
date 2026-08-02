@@ -2,7 +2,31 @@ import assert from 'node:assert/strict'
 import { describe, it } from 'node:test'
 import { handleApiRequest } from '../server/app.js'
 import { MemoryStore } from '../server/storage.js'
-import { shanghaiDateString } from '../server/comments.js'
+import { createComment, newCommentId, shanghaiDateString } from '../server/comments.js'
+
+class FlakyStore extends MemoryStore {
+    constructor(failures = {}) {
+        super()
+        this.failures = failures
+    }
+
+    async setJSON(key, value, options = {}) {
+        if (this.failures.setJSON?.(key, options)) throw new Error('injected setJSON failure')
+        return super.setJSON(key, value, options)
+    }
+
+    async delete(key) {
+        if (this.failures.delete?.(key)) throw new Error('injected delete failure')
+        return super.delete(key)
+    }
+}
+
+function idSequence(ids) {
+    let index = 0
+    return () => (index < ids.length ? ids[index++] : newCommentId())
+}
+
+const user = { id: 'unit-user', name: '单元用户', avatarKey: '' }
 
 const origin = 'https://preview.elytrue.test'
 const env = {
@@ -314,5 +338,233 @@ describe('upload lifecycle and orphan cleanup', () => {
             const cleanup = await call(state, 'DELETE', `uploads/image?imageId=${imageId}`)
             assert.equal(cleanup.response.status, 200)
         }
+    })
+})
+
+describe('createComment failure paths', () => {
+    it('retries with a fresh internal id on collision and points the number seat at the persisted id', async () => {
+        const data = new MemoryStore()
+        const collidingId = 1234567890123000
+        await data.setJSON(`comments/${String(collidingId).padStart(16, '0')}.json`, {
+            id: collidingId, uid: 'other', comment: '占位',
+        })
+        const comment = await createComment(data, user, { comment: '第一条' }, {
+            idFactory: idSequence([collidingId, 9876543210123000]),
+        })
+        assert.equal(comment.id, 9876543210123000)
+        assert.equal(comment.number, 1)
+        const seat = await data.get('indexes/comments/number/1.json', { type: 'json' })
+        assert.equal(Number(seat.commentId), 9876543210123000, '编号索引必须指向实际写入的内部 ID')
+    })
+
+    it('rejects after five consecutive internal id collisions without returning data', async () => {
+        const data = new MemoryStore()
+        const collidingId = 1111111111111000
+        await data.setJSON(`comments/${String(collidingId).padStart(16, '0')}.json`, {
+            id: collidingId, uid: 'other', comment: '占位',
+        })
+        const idFactory = () => collidingId
+        await assert.rejects(
+            () => createComment(data, user, { comment: '反复冲突' }, { idFactory }),
+            error => error.status === 500,
+        )
+        assert.equal((await data.list({ prefix: 'comments/' })).blobs.length, 1, '不得留下半成品留言')
+        assert.equal((await data.list({ prefix: 'indexes/comments/number/' })).blobs.length, 0)
+        const captured = []
+        const original = console.error
+        console.error = (...args) => captured.push(args.join(' '))
+        try {
+            await assert.rejects(
+                () => createComment(data, user, { comment: '反复冲突2' }, { idFactory }),
+                error => error.status === 500,
+            )
+        } finally {
+            console.error = original
+        }
+        assert.ok(captured.some(text => text.includes('comment_persist_conflict')))
+    })
+
+    it('fails cleanly when the comment body write throws a non-precondition error', async () => {
+        const data = new FlakyStore({
+            setJSON: key => key.startsWith('comments/'),
+        })
+        await assert.rejects(
+            () => createComment(data, user, { comment: '正文异常' }, { idFactory: () => 9876543210123999 }),
+            /injected setJSON failure/u,
+        )
+        assert.equal((await data.list({ prefix: 'comments/' })).blobs.length, 0)
+        assert.equal((await data.list({ prefix: 'indexes/comments/number/' })).blobs.length, 0)
+    })
+
+    it('rolls back comment and seat when the user index write fails', async () => {
+        const data = new FlakyStore({
+            setJSON: key => key.startsWith('indexes/comments/by-user/'),
+        })
+        await assert.rejects(
+            () => createComment(data, user, { comment: '索引失败' }, { idFactory: () => 9876543210123888 }),
+            error => error.status === 500,
+        )
+        assert.equal((await data.list({ prefix: 'comments/' })).blobs.length, 0, '正文必须回滚')
+        assert.equal((await data.list({ prefix: 'indexes/comments/number/' })).blobs.length, 0, '编号占位必须回滚')
+        assert.equal((await data.list({ prefix: 'indexes/comments/by-user/' })).blobs.length, 0)
+    })
+
+    it('rolls back comment and seat when the date index write fails', async () => {
+        const data = new FlakyStore({
+            setJSON: key => key.startsWith('dates/'),
+        })
+        await assert.rejects(
+            () => createComment(data, user, { comment: '日期索引失败' }, { idFactory: () => 9876543210123777 }),
+            error => error.status === 500,
+        )
+        assert.equal((await data.list({ prefix: 'comments/' })).blobs.length, 0)
+        assert.equal((await data.list({ prefix: 'indexes/comments/number/' })).blobs.length, 0)
+    })
+
+    it('logs a structured error when rollback itself fails', async () => {
+        const data = new FlakyStore({
+            setJSON: key => key.startsWith('indexes/comments/by-user/'),
+            delete: key => key.startsWith('indexes/comments/number/'),
+        })
+        const captured = []
+        const original = console.error
+        console.error = (...args) => captured.push(args.join(' '))
+        try {
+            await assert.rejects(
+                () => createComment(data, user, { comment: '回滚失败' }, { idFactory: () => 9876543210123666 }),
+                error => error.status === 500,
+            )
+        } finally {
+            console.error = original
+        }
+        assert.ok(captured.some(text => text.includes('comment_index_write_failed')))
+        assert.ok(captured.some(text => text.includes('comment_rollback_failed')))
+        assert.equal((await data.list({ prefix: 'comments/' })).blobs.length, 0, '正文仍应尝试回滚')
+    })
+
+    it('never returns success when any step fails', async () => {
+        const failDate = new FlakyStore({ setJSON: key => key.startsWith('dates/') })
+        const failUser = new FlakyStore({ setJSON: key => key.startsWith('indexes/comments/by-user/') })
+        const results = await Promise.allSettled([
+            createComment(failDate, user, { comment: 'x' }),
+            createComment(failUser, user, { comment: 'y' }),
+        ])
+        assert.equal(results[0].status, 'rejected')
+        assert.equal(results[1].status, 'rejected')
+    })
+})
+
+describe('hard-delete related indexes', () => {
+    const state = createState('10.0.9.1')
+
+    it('keeps the number seat (gap), removes user index, keeps date count, and jumps to 404', async () => {
+        await register(state, '删除用户', 'del@example.com')
+        const c1 = await postComment(state, '甲')
+        const c2 = await postComment(state, '乙')
+        const c3 = await postComment(state, '丙')
+
+        await call(state, 'POST', 'admin/bootstrap', undefined, {
+            headers: { 'X-Admin-Bootstrap-Secret': env.ADMIN_BOOTSTRAP_SECRET },
+        })
+        const removed = await call(state, 'POST', 'admin/comments/moderate', {
+            commentId: c2.id,
+            action: 'delete',
+        })
+        assert.equal(removed.response.status, 200)
+
+        // 编号占位保留:跳转空号返回 404,新留言从 4 开始
+        const jump = await call(state, 'GET', 'comments?number=2')
+        assert.equal(jump.response.status, 404)
+        const d = await postComment(state, '丁')
+        assert.equal(d.number, 4)
+        assert.equal((await state.stores.data.get('indexes/comments/number/2.json', { type: 'json' })).commentId, c2.id)
+
+        // 用户索引已删除:个人主页分页不含被删留言
+        const me = await call(state, 'GET', 'user/me')
+        const uid = me.payload.data.id
+        const page = await call(state, 'GET', `comments?uid=${uid}&count=10`)
+        assert.equal(page.payload.data.hasMore, false)
+        assert.deepEqual(page.payload.data.items.map(item => item.comment), ['丁', '丙', '甲'])
+        assert.equal(page.payload.data.items.some(item => item.id === c2.id), false)
+
+        // 日期统计口径为「当天曾发布」:删除不扣减
+        const today = shanghaiDateString(Date.now())
+        const count = await call(state, 'GET', `comments/count?date=${today}`)
+        assert.equal(count.payload.data, 4)
+    })
+})
+
+describe('upload usage accounting', () => {
+    const state = createState('10.0.10.1')
+    const png = 'iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mP8/x8AAusB9Wl2nfsAAAAASUVORK5CYII='
+
+    async function usageBytes() {
+        const usage = await state.stores.data.get('usage/uploads.json', { type: 'json' })
+        return usage?.uploadedBytes ?? 0
+    }
+
+    async function upload() {
+        const result = await call(state, 'POST', 'uploads/image', { image: png })
+        assert.equal(result.response.status, 201)
+        return result.payload.data.imageId
+    }
+
+    it('increments on upload, decrements on pending delete, and stays put for active images', async () => {
+        await register(state, '用量用户', 'usage@example.com')
+        const before = await usageBytes()
+        const id1 = await upload()
+        const id2 = await upload()
+        const afterUploads = await usageBytes()
+        assert.equal(afterUploads - before, 2 * Buffer.from(png, 'base64').length)
+
+        // active 图片拒绝删除,统计不变
+        const posted = await postComment(state, '带图', { imageKeys: [id1] })
+        assert.equal(posted.number, 1)
+        const rejected = await call(state, 'DELETE', `uploads/image?imageId=${id1}`)
+        assert.equal(rejected.response.status, 409)
+        assert.equal(await usageBytes(), afterUploads)
+
+        // 删除 pending 后减少
+        const removed = await call(state, 'DELETE', `uploads/image?imageId=${id2}`)
+        assert.equal(removed.response.status, 200)
+        assert.equal(await usageBytes(), afterUploads - Buffer.from(png, 'base64').length)
+
+        // 重复删除 404,不重复扣减
+        const again = await call(state, 'DELETE', `uploads/image?imageId=${id2}`)
+        assert.equal(again.response.status, 404)
+        assert.equal(await usageBytes(), afterUploads - Buffer.from(png, 'base64').length)
+    })
+
+    it('does not decrement when the blob delete fails', async () => {
+        const id = await upload()
+        const before = await usageBytes()
+        const originalUploads = state.stores.uploads
+        state.stores.uploads = new FlakyStore({ delete: () => true })
+        try {
+            const failed = await call(state, 'DELETE', `uploads/image?imageId=${id}`)
+            assert.equal(failed.response.status, 500)
+        } finally {
+            state.stores.uploads = originalUploads
+        }
+        assert.equal(await usageBytes(), before, 'Blob 删除失败时统计不得先扣减')
+        // 别名仍在,仍可正常删除
+        const removed = await call(state, 'DELETE', `uploads/image?imageId=${id}`)
+        assert.equal(removed.response.status, 200)
+        assert.equal(await usageBytes(), before - Buffer.from(png, 'base64').length)
+    })
+
+    it('decrements for stale pending images cleaned up on the next upload', async () => {
+        const stale = await upload()
+        const staleAlias = await state.stores.data.get(`uploads/aliases/comments/${stale}.json`, { type: 'json' })
+        staleAlias.createdAt = Date.now() - 25 * 60 * 60 * 1000
+        await state.stores.data.setJSON(`uploads/aliases/comments/${stale}.json`, staleAlias)
+
+        const before = await usageBytes()
+        const fresh = await upload()
+        const after = await usageBytes()
+        const oneImage = Buffer.from(png, 'base64').length
+        assert.equal(after, before - oneImage + oneImage, '旧 pending 被清理,新图计入')
+        assert.equal(await state.stores.data.get(`uploads/aliases/comments/${stale}.json`, { type: 'json' }), null)
+        assert.ok(fresh)
     })
 })

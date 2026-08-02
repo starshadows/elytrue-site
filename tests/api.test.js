@@ -622,4 +622,69 @@ describe('password reset observability and health', () => {
         })
         assert.equal(reuse.response.status, 400)
     })
+
+    it('allows only one of two concurrent uses of the same reset token', async () => {
+        const raceUser = createState('10.0.4.5')
+        raceUser.stores = stores
+        await call(raceUser, 'POST', 'user/register', {
+            name: '并发重置用户',
+            email: 'race-reset@example.com',
+            password: 'race-reset-password',
+        })
+        const sent = {}
+        const originalFetch = globalThis.fetch
+        globalThis.fetch = async (_url, init) => {
+            sent.body = JSON.parse(init.body)
+            return new Response(JSON.stringify({ id: 'email-race' }), { status: 200 })
+        }
+        try {
+            await call(raceUser, 'POST', 'user/resetpassword', { identifier: 'race-reset@example.com' })
+        } finally {
+            globalThis.fetch = originalFetch
+        }
+        const token = sent.body.html.match(/#resetpassword=([a-zA-Z0-9_-]+)/u)?.[1]
+        assert.ok(token)
+
+        const results = await Promise.all([
+            call(raceUser, 'POST', 'action', { id: token, data: 'first-winner-password' }),
+            call(raceUser, 'POST', 'action', { id: token, data: 'second-loser-password' }),
+        ])
+        assert.deepEqual(results.map(result => result.response.status).sort(), [200, 400])
+        const loser = results.find(result => result.response.status === 400)
+        assert.match(loser.payload.message, /无效或已使用/u)
+        const winner = results.find(result => result.response.status === 200)
+        assert.ok(winner)
+
+        // 旧会话全部失效,只能用赢家设置的新密码登录
+        const oldMe = await call(raceUser, 'GET', 'user/me')
+        assert.equal(oldMe.response.status, 401)
+        const newLogin = await call(raceUser, 'POST', 'user/login', {
+            identifier: 'race-reset@example.com',
+            password: 'first-winner-password',
+        })
+        assert.equal(newLogin.response.status, 200)
+    })
+
+    it('validates real calendar dates for comment counts', async () => {
+        const cases = [
+            ['2026-02-29', 400],
+            ['2026-04-31', 400],
+            ['2024-02-29', 200],
+            ['2026-08-02', 200],
+        ]
+        for (const [date, expected] of cases) {
+            const result = await call(state, 'GET', `comments/count?date=${date}`)
+            assert.equal(result.response.status, expected, `日期 ${date} 应返回 ${expected}`)
+        }
+    })
+
+    it('reports version, build time and commit time', async () => {
+        const result = await call(state, 'GET', 'health')
+        assert.equal(result.response.status, 200)
+        assert.equal(result.payload.data.service, 'elytrue-edgeone')
+        assert.equal(result.payload.data.status, 'ok')
+        assert.equal(typeof result.payload.data.version, 'string')
+        assert.ok('buildTime' in result.payload.data)
+        assert.ok('commitTime' in result.payload.data)
+    })
 })
