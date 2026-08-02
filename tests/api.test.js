@@ -125,6 +125,7 @@ describe('EdgeOne account and session API', () => {
         assert.equal(payload.code, 1)
         assert.equal(payload.data.name, '星花旅人')
         assert.equal(payload.data.email, 'owner@example.com')
+        assert.equal(payload.data.role, 'admin')
         assert.ok(state.jar.has('elytrue_session'))
         assert.equal(state.jar.has('elytrue_csrf'), false)
         assert.match(state.csrfToken, /^[a-zA-Z0-9_-]+$/u)
@@ -311,16 +312,6 @@ describe('EdgeOne comments, uploads and moderation API', () => {
         assert.equal(duplicate.response.status, 409)
         assert.match(duplicate.payload.message, /已举报过该留言/u)
 
-        const bootstrap = await call(state, 'POST', 'admin/bootstrap', undefined, {
-            headers: { 'X-Admin-Bootstrap-Secret': env.ADMIN_BOOTSTRAP_SECRET },
-        })
-        assert.equal(bootstrap.response.status, 200)
-
-        const second = await call(state, 'POST', 'admin/bootstrap', undefined, {
-            headers: { 'X-Admin-Bootstrap-Secret': env.ADMIN_BOOTSTRAP_SECRET },
-        })
-        assert.equal(second.response.status, 410)
-
         const reports = await call(state, 'GET', 'admin/reports')
         assert.equal(reports.response.status, 200)
         assert.equal(reports.payload.data[0].reason, '测试举报')
@@ -354,6 +345,65 @@ describe('EdgeOne comments, uploads and moderation API', () => {
 })
 
 describe('concurrent uniqueness checks', () => {
+    it('assigns exactly one admin during concurrent first registrations', async () => {
+        const stores = { data: new MemoryStore(), uploads: new MemoryStore() }
+        const first = createState('10.0.2.10')
+        const second = createState('10.0.2.11')
+        first.stores = stores
+        second.stores = stores
+
+        const results = await Promise.all([
+            call(first, 'POST', 'user/register', {
+                name: '首位甲',
+                email: 'first-admin-a@example.com',
+                password: 'secure-password-one',
+            }),
+            call(second, 'POST', 'user/register', {
+                name: '首位乙',
+                email: 'first-admin-b@example.com',
+                password: 'secure-password-two',
+            }),
+        ])
+
+        assert.deepEqual(
+            results.map(result => result.payload.data.role).sort(),
+            ['admin', 'user'],
+        )
+        const marker = await stores.data.get('system/admin-bootstrap-closed.json', {
+            type: 'json',
+        })
+        const admin = results.find(result => result.payload.data.role === 'admin')
+        assert.equal(marker.userId, admin.payload.data.id)
+        assert.equal(marker.automatic, true)
+        const storedAdmin = await stores.data.get(`users/${admin.payload.data.id}.json`, {
+            type: 'json',
+        })
+        assert.equal(storedAdmin.role, 'admin')
+    })
+
+    it('does not promote a later registration in an existing unmarked store', async () => {
+        const stores = { data: new MemoryStore(), uploads: new MemoryStore() }
+        await stores.data.setJSON('users/legacy-account.json', {
+            id: 'legacy-account',
+            role: 'user',
+        })
+        const state = createState('10.0.2.12')
+        state.stores = stores
+
+        const result = await call(state, 'POST', 'user/register', {
+            name: '后来用户',
+            email: 'later-user@example.com',
+            password: 'secure-password-later',
+        })
+
+        assert.equal(result.response.status, 201)
+        assert.equal(result.payload.data.role, 'user')
+        assert.equal(
+            await stores.data.get('system/admin-bootstrap-closed.json', { type: 'json' }),
+            null,
+        )
+    })
+
     it('allows only one registration for the same email', async () => {
         const stores = { data: new MemoryStore(), uploads: new MemoryStore() }
         const first = createState('10.0.2.1')

@@ -9,8 +9,8 @@ import {
     verifyPassword,
 } from './crypto.js'
 import { cookie, httpError, parseCookies, publicUser } from './http.js'
-import { getJSON, isPreconditionFailure } from './storage.js'
-import { blobKeys } from './domain/blob-keys.js'
+import { getJSON, isPreconditionFailure, listAll } from './storage.js'
+import { blobKeys, blobPrefixes } from './domain/blob-keys.js'
 import {
     normalizeEmail,
     normalizeUsername,
@@ -20,6 +20,7 @@ import {
 } from '../shared/validation.js'
 
 const SESSION_SECONDS = 30 * 24 * 60 * 60
+const adminUserIds = new WeakMap()
 
 export function getAppSecret(env) {
     const secret = env?.ELYTRUE_APP_SECRET
@@ -37,6 +38,21 @@ function emailIndexKey(secret, email) {
     return blobKeys.userEmailIndex(keyedDigest(secret, normalizeEmail(email), 'email-index'))
 }
 
+async function applyAdminMarker(data, user) {
+    if (!user) return user
+    if (user.role === 'admin') {
+        adminUserIds.set(data, user.id)
+        return user
+    }
+    const cachedAdminId = adminUserIds.get(data)
+    if (cachedAdminId) {
+        return cachedAdminId === user.id ? { ...user, role: 'admin' } : user
+    }
+    const marker = await getJSON(data, blobKeys.adminBootstrapClosed)
+    if (marker?.userId) adminUserIds.set(data, marker.userId)
+    return marker?.userId === user.id ? { ...user, role: 'admin' } : user
+}
+
 export async function findUserByIdentifier(data, env, identifier) {
     const secret = getAppSecret(env)
     const normalized = String(identifier ?? '').normalize('NFKC').trim()
@@ -46,12 +62,12 @@ export async function findUserByIdentifier(data, env, identifier) {
         : usernameIndexKey(normalized)
     const index = await getJSON(data, indexKey)
     if (!index?.userId) return null
-    return getJSON(data, blobKeys.user(index.userId))
+    return applyAdminMarker(data, await getJSON(data, blobKeys.user(index.userId)))
 }
 
 export async function findUserById(data, userId) {
     if (!/^[a-f0-9-]{36}$/iu.test(String(userId || ''))) return null
-    return getJSON(data, blobKeys.user(userId))
+    return applyAdminMarker(data, await getJSON(data, blobKeys.user(userId)))
 }
 
 export async function registerUser(data, env, { name, email, password }) {
@@ -68,6 +84,13 @@ export async function registerUser(data, env, { name, email, password }) {
     const userId = randomUUID()
     const nameKey = usernameIndexKey(normalizedName)
     const emailKey = emailIndexKey(secret, normalizedEmail)
+    // 旧仓库可能有用户但没有管理员关闭标记；强一致列举可避免把后来注册者误升为管理员。
+    // 并发空仓库注册最终再由 onlyIfNew 标记选出唯一管理员。
+    const adminMarker = await getJSON(data, blobKeys.adminBootstrapClosed)
+    const hasExistingUsers = adminMarker
+        ? true
+        : (await listAll(data, blobPrefixes.users, 1)).length > 0
+    const canBecomeFirstAdmin = !adminMarker && !hasExistingUsers
     let nameReserved = false
     let emailReserved = false
 
@@ -91,6 +114,33 @@ export async function registerUser(data, env, { name, email, password }) {
             updatedAt: now,
         }
         await data.setJSON(blobKeys.user(userId), user, { onlyIfNew: true })
+
+        if (canBecomeFirstAdmin) {
+            try {
+                await data.setJSON(
+                    blobKeys.adminBootstrapClosed,
+                    {
+                        userId,
+                        closedAt: now,
+                        automatic: true,
+                    },
+                    { onlyIfNew: true },
+                )
+                user.role = 'admin'
+                await data.setJSON(blobKeys.user(userId), user)
+            } catch (error) {
+                if (!isPreconditionFailure(error)) {
+                    console.error(
+                        JSON.stringify({
+                            event: 'first_admin_assignment_failed',
+                            userId,
+                            error: error instanceof Error ? error.message : String(error),
+                        }),
+                    )
+                }
+            }
+        }
+
         return user
     } catch (error) {
         const conflictMessage = !nameReserved

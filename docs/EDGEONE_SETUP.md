@@ -30,7 +30,6 @@ middleware.js：Edge Runtime / Web APIs / ES2023+
 - `RESEND_FROM_EMAIL`：重置邮件发件地址，需先在 Resend 验证域名。
 - `RESEND_FROM_NAME`：重置邮件发件人名称，默认 `星花札记`。
 - `PUBLIC_SITE_URL`：当前 EdgeOne 预览域或 `https://elytrue.com`。
-- `ADMIN_BOOTSTRAP_SECRET`：首次管理员初始化的一次性高强度随机值。
 - `ALLOWED_ORIGINS`：允许的 EdgeOne 预览域与正式域，逗号分隔。
 
 真实值不得写入仓库、构建日志或前端变量。
@@ -44,10 +43,11 @@ middleware.js：Edge Runtime / Web APIs / ES2023+
 
 ## 3. 首次管理员
 
-1. 在 EdgeOne 预览部署注册站长账号并登录。
-2. 携带当前 CSRF 头和 `X-Admin-Bootstrap-Secret` 请求 `POST /api/admin/bootstrap`。
-3. 成功后确认永久关闭标记已写入，初始化入口不能再次使用。
-4. 从 EdgeOne 环境变量删除 `ADMIN_BOOTSTRAP_SECRET`。
+全新、空的 `elytrue-data` Store 中，第一个成功注册的账号自动成为唯一管理员，并立即写入永久关闭标记。后续注册账号均为普通用户，不需要配置 `ADMIN_BOOTSTRAP_SECRET`，也不需要手工调用初始化接口。
+
+管理员以后仍从普通登录弹窗使用用户名或邮箱和密码登录；登录后在个人主页显示“管理举报与留言”。必须妥善保管首个账号密码；未配置 Resend 时无法通过邮件找回密码。
+
+保留的 `POST /api/admin/bootstrap` 仅用于兼容已有部署的人工恢复流程，不是新站点初始化步骤。
 
 ## 4. 发布前验收
 

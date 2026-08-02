@@ -125,10 +125,6 @@ describe('stable public comment numbers', () => {
     })
 
     it('keeps numbers stable after deleting another comment', async () => {
-        const deleteResult = await call(state, 'POST', 'admin/bootstrap', undefined, {
-            headers: { 'X-Admin-Bootstrap-Secret': env.ADMIN_BOOTSTRAP_SECRET },
-        })
-        assert.equal(deleteResult.response.status, 200)
         const removed = await call(state, 'POST', 'admin/comments/moderate', {
             commentId: published.b.id,
             action: 'delete',
@@ -469,9 +465,6 @@ describe('hard-delete related indexes', () => {
         const c2 = await postComment(state, '乙')
         const c3 = await postComment(state, '丙')
 
-        await call(state, 'POST', 'admin/bootstrap', undefined, {
-            headers: { 'X-Admin-Bootstrap-Secret': env.ADMIN_BOOTSTRAP_SECRET },
-        })
         const removed = await call(state, 'POST', 'admin/comments/moderate', {
             commentId: c2.id,
             action: 'delete',
@@ -527,9 +520,6 @@ describe('visible-comment pagination', () => {
             Date.now = realNow
         }
         // 隐藏第 2、4 条
-        await call(state, 'POST', 'admin/bootstrap', undefined, {
-            headers: { 'X-Admin-Bootstrap-Secret': env.ADMIN_BOOTSTRAP_SECRET },
-        })
         for (const id of [posts[1].id, posts[3].id]) {
             await call(state, 'POST', 'admin/comments/moderate', { commentId: id, action: 'hide' })
         }
@@ -819,9 +809,6 @@ describe('hard-delete failure consistency and repair markers', () => {
         const state = createState(ip)
         await register(state, `删除失败用户${setupCounter}`, `del-fail-${setupCounter}@example.com`)
         const posted = await postComment(state, '待删除')
-        await call(state, 'POST', 'admin/bootstrap', undefined, {
-            headers: { 'X-Admin-Bootstrap-Secret': env.ADMIN_BOOTSTRAP_SECRET },
-        })
         return state
     }
 

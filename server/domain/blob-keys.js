@@ -9,6 +9,7 @@
 const paddedCommentId = id => String(id).padStart(16, '0')
 
 export const blobPrefixes = Object.freeze({
+    users: 'users/',
     comments: 'comments/',
     commentNumbers: 'indexes/comments/number/',
     commentUsers: 'indexes/comments/by-user/',

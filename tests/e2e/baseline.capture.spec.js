@@ -89,16 +89,6 @@ test('capture pre-refactor desktop and mobile states', async ({
     },
   })
   expect(postResponse.status()).toBe(201)
-  const bootstrapResponse = await page.request.post('/api/admin/bootstrap', {
-    data: {},
-    headers: {
-      origin: 'http://127.0.0.1:4173',
-      'x-csrf-token': csrfToken,
-      'x-admin-bootstrap-secret': 'e2e-bootstrap-secret',
-    },
-  })
-  expect(bootstrapResponse.ok()).toBeTruthy()
-
   await page.reload()
   await expect(page.locator('#userInfoName')).toHaveText('基线管理员')
   await expect(page.locator('#comments .commentItem')).toHaveCount(1)
