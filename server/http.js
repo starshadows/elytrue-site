@@ -142,12 +142,36 @@ export function requestOriginAllowed(request, env = {}) {
         const originUrl = new URL(origin)
         const requestUrl = new URL(request.url)
         if (originUrl.origin === requestUrl.origin) return true
+
+        // EdgeOne 在 HTTPS 终止后可能把 Cloud Function 的 request.url 暴露为内部
+        // HTTP URL，但 Host 仍是浏览器访问的公开域名。Host 由边缘平台控制，浏览器
+        // 跨域脚本不能伪造，因此同 Host 可安全视为同站请求。
+        const publicHosts = [
+            requestUrl.host,
+            request.headers.get('host'),
+        ]
+            .map(value => String(value || '').trim().toLowerCase())
+            .filter(Boolean)
+        if (publicHosts.includes(originUrl.host.toLowerCase())) return true
+
         const explicitlyAllowed = String(env.ALLOWED_ORIGINS || '')
             .split(',')
             .map(value => value.trim())
             .filter(Boolean)
-        if (explicitlyAllowed.includes(originUrl.origin)) return true
-        return ['localhost', '127.0.0.1'].includes(originUrl.hostname)
+            .some(value => {
+                try {
+                    return new URL(value).origin === originUrl.origin
+                } catch {
+                    return false
+                }
+            })
+        if (explicitlyAllowed) return true
+
+        const localHosts = ['localhost', '127.0.0.1']
+        return (
+            localHosts.includes(originUrl.hostname) &&
+            localHosts.some(host => publicHosts.some(value => value.split(':')[0] === host))
+        )
     } catch {
         return false
     }

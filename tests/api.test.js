@@ -3,6 +3,7 @@ import { after, before, describe, it } from 'node:test'
 import { handleApiRequest } from '../server/app.js'
 import { MemoryStore } from '../server/storage.js'
 import { encryptEmail, keyedDigest, sha256 } from '../server/crypto.js'
+import { requestOriginAllowed } from '../server/http.js'
 import { normalizeUsername } from '../shared/validation.js'
 import { updateUser } from '../server/auth.js'
 
@@ -228,6 +229,32 @@ describe('EdgeOne account and session API', () => {
         })
         assert.equal(result.response.status, 200)
         assert.match(result.payload.message, /如果账号存在/u)
+    })
+})
+
+describe('EdgeOne public origin validation', () => {
+    it('accepts the public Host when TLS termination changes request.url protocol', () => {
+        const request = new Request('http://elytrue.internal/api/user/register', {
+            method: 'POST',
+            headers: {
+                Host: 'elytrue-demo.edgeone.app',
+                Origin: 'https://elytrue-demo.edgeone.app',
+                'X-Forwarded-Proto': 'https',
+            },
+        })
+        assert.equal(requestOriginAllowed(request), true)
+    })
+
+    it('still rejects a forged external Origin', () => {
+        const request = new Request('http://elytrue.internal/api/user/register', {
+            method: 'POST',
+            headers: {
+                Host: 'elytrue-demo.edgeone.app',
+                Origin: 'https://evil.example',
+                'X-Forwarded-Proto': 'https',
+            },
+        })
+        assert.equal(requestOriginAllowed(request), false)
     })
 })
 
