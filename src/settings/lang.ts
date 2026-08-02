@@ -1,21 +1,22 @@
-
 export let lang: string
 
 export function changeLang(targetLang?: string | null) {
-    if (!targetLang) {
-        if (navigator.language.slice(0, 2) == 'zh' || navigator.language.slice(0, 3) == 'yue') {
-            targetLang = 'zh'
-        } else {
-            targetLang = 'en'
-        }
+  if (!targetLang) {
+    if (
+      navigator.language.slice(0, 2) == 'zh' ||
+      navigator.language.slice(0, 3) == 'yue'
+    ) {
+      targetLang = 'zh'
+    } else {
+      targetLang = 'en'
     }
+  }
 
-    if (!['zh', 'en'].includes(targetLang)) {
-        console.log(`invalid lang "${targetLang}"`)
-        return
-    }
+  if (!['zh', 'en'].includes(targetLang)) {
+    return
+  }
 
-    document.getElementById('langCSS')!.innerHTML = /*css*/`
+  document.getElementById('langCSS')!.innerHTML = /*css*/ `
         .ui {
             display: none !important;
         }
@@ -24,6 +25,5 @@ export function changeLang(targetLang?: string | null) {
         }
     `
 
-    console.log(`changed lang to ${targetLang}`)
-    lang = targetLang
+  lang = targetLang
 }

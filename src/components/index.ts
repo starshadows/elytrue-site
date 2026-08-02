@@ -23,6 +23,6 @@ PopupsApp.component('adminPanel', AdminPanel)
 createApp(GraphicsMode).mount('#graphicsMode')
 
 export default {
-    FloatMsgs,
-    ImgViewer,
-} 
+  FloatMsgs,
+  ImgViewer,
+}

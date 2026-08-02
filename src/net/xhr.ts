@@ -1,114 +1,121 @@
-import Settings from "../settings"
-import FloatMsgs from "../components/FloatMsgs"
-import { obj2queryString } from ".."
-import { baseUrl } from "."
+import FloatMsgs from '../components/FloatMsgs'
+import { ApiClient, ApiError, type ApiEnvelope } from '../lib/api-client'
+import { toQueryString } from '../lib/query'
+import Settings from '../settings'
+import { baseUrl } from '.'
 
 export { baseUrl }
-console.log(`Base URL: "${baseUrl}"`)
-
 
 interface XHRSettings {
-    includeToken?: boolean  // default is true
-    silentStatuses?: number[]
+  includeToken?: boolean
+  silentStatuses?: number[]
+  signal?: AbortSignal
+  timeoutMs?: number
 }
 
+type Payload = BodyInit | Record<string, unknown>
+
 const XHR = {
-    baseUrl: `${baseUrl}api/`,
-    // Kept as a lightweight UI signal for compatibility with the upstream
-    // components. Authentication itself lives only in the HttpOnly cookie.
-    token: '',
-    csrfToken: '',
+  baseUrl: `${baseUrl}api/`,
+  token: '',
+  csrfToken: '',
+  client: undefined as ApiClient | undefined,
 
-    send(method: string, url: string, payload?: object, settings?: XHRSettings) {
-        settings = (() => {
-            let s: XHRSettings = {
-                includeToken: true
-            }
-            if (settings) {
-                Object.assign(s, settings)
-            }
-            return s
-        })()
+  getClient(): ApiClient {
+    this.client ??= new ApiClient(`/${this.baseUrl}`, {
+      getCsrfToken: () => this.csrfToken,
+      setCsrfToken: (token) => {
+        this.csrfToken = token
+      },
+      onUnauthorized: () => {
+        this.token = ''
+        this.csrfToken = ''
+      },
+    })
+    return this.client
+  },
 
-        return new Promise((resolve, reject) => {
-            const xhr = new XMLHttpRequest()
-            xhr.open(method, this.baseUrl + url)
-            xhr.withCredentials = true
+  async send<T = unknown>(
+    method: 'GET' | 'POST' | 'PUT' | 'DELETE',
+    url: string,
+    payload?: Payload,
+    settings: XHRSettings = {},
+  ): Promise<T | ApiEnvelope<T>> {
+    try {
+      const envelope = await this.getClient().request<T>(url, {
+        method,
+        body: payload,
+        headers: { 'Accept-Language': Settings.lang },
+        signal: settings.signal,
+        timeoutMs: settings.timeoutMs,
+      })
+      if (envelope.code !== 1) {
+        FloatMsgs.show({
+          type: 'warn',
+          msg: `${envelope.message} (${envelope.code})`,
+        })
+      }
+      return method === 'GET' && envelope.code === 1 ? envelope.data : envelope
+    } catch (error) {
+      const status = error instanceof ApiError ? error.status : 0
+      if (!settings.silentStatuses?.includes(status)) {
+        const timedOut =
+          error instanceof DOMException && error.name === 'TimeoutError'
+        FloatMsgs.show({
+          type: 'error',
+          msg: timedOut
+            ? '<span class="ui zh">请求超时</span><span class="ui en">Request timed out</span>'
+            : error instanceof ApiError
+              ? `${error.message} (${error.status})`
+              : '<span class="ui zh">网络错误</span><span class="ui en">Network error</span>',
+        })
+      }
+      throw error
+    }
+  },
 
-            xhr.setRequestHeader('Accept-Language', Settings.lang)
-            if (!['GET', 'HEAD', 'OPTIONS'].includes(method.toUpperCase())) {
-                if (this.csrfToken) xhr.setRequestHeader('X-CSRF-Token', this.csrfToken)
-            }
+  get<T = unknown>(
+    url: string,
+    payload?: Record<string, unknown>,
+    settings?: XHRSettings,
+  ): Promise<T> {
+    return this.send<T>(
+      'GET',
+      url + toQueryString(payload),
+      undefined,
+      settings,
+    ) as Promise<T>
+  },
 
-            if (typeof payload == 'object') {
-                xhr.setRequestHeader("Content-Type", "application/json")
-                xhr.send(JSON.stringify(payload))
-            } else {
-                xhr.send(payload)
-            }
+  post<T = unknown>(
+    url: string,
+    payload?: Payload,
+    settings?: XHRSettings,
+  ): Promise<ApiEnvelope<T>> {
+    return this.send<T>('POST', url, payload, settings) as Promise<
+      ApiEnvelope<T>
+    >
+  },
 
-            xhr.onload = () => {
-                if (xhr.status < 400) {
-                    try {
-                        let r = JSON.parse(xhr.responseText)
-                        if (typeof r?.data?.csrfToken == 'string') {
-                            this.csrfToken = r.data.csrfToken
-                        }
-                        r.code && r.code != 1 && FloatMsgs.show({ type: 'warn', msg: `${r.message} (${r.code})` })
-                        resolve(method.toUpperCase() == 'GET' && r?.code == 1 ? r.data : r)
-                    } catch (error) {
-                        resolve(xhr.responseText)
-                    }
-                } else {
-                    if (xhr.status == 401) {
-                        this.token = ''
-                        this.csrfToken = ''
-                    }
-                    const shouldNotify = !settings.silentStatuses?.includes(xhr.status)
-                    let errorMessage = xhr.responseText
-                    try {
-                        const error = JSON.parse(xhr.responseText)
-                        error.status = xhr.status
-                        errorMessage = error.message || errorMessage
-                        if (shouldNotify) {
-                            FloatMsgs.show({ type: 'error', msg: `${errorMessage} (${xhr.status})` })
-                        }
-                        reject(error)
-                    } catch (error) {
-                        if (shouldNotify) {
-                            FloatMsgs.show({ type: 'error', msg: `${errorMessage} (${xhr.status})` })
-                        }
-                        reject(xhr)
-                    }
-                }
-            }
+  put<T = unknown>(
+    url: string,
+    payload?: Payload,
+    settings?: XHRSettings,
+  ): Promise<ApiEnvelope<T>> {
+    return this.send<T>('PUT', url, payload, settings) as Promise<
+      ApiEnvelope<T>
+    >
+  },
 
-            xhr.onerror = () => {
-                FloatMsgs.show({ type: 'error', msg: '<span class="ui zh">网络错误</span><span class="ui en">Network error</span>' })
-                reject(xhr)
-            }
-            xhr.ontimeout = () => {
-                FloatMsgs.show({ type: 'error', msg: '<span class="ui zh">请求超时</span><span class="ui en">Request timed out</span>' })
-                reject(xhr)
-            }
-        });
-    },
-
-    get(url: string, payload?: object, settings?: XHRSettings) {
-        return this.send('GET', url + obj2queryString(payload), undefined, settings)
-    },
-
-    post(url: string, payload?: object, settings?: XHRSettings) {
-        return this.send('POST', url, payload, settings)
-    },
-
-    put(url: string, payload?: object, settings?: XHRSettings) {
-        return this.send('PUT', url, payload, settings)
-    },
-
-    delete(url: string, payload?: object, settings?: XHRSettings) {
-        return this.send('DELETE', url, payload, settings)
-    },
+  delete<T = unknown>(
+    url: string,
+    payload?: Payload,
+    settings?: XHRSettings,
+  ): Promise<ApiEnvelope<T>> {
+    return this.send<T>('DELETE', url, payload, settings) as Promise<
+      ApiEnvelope<T>
+    >
+  },
 }
 
 export default XHR

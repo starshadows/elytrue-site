@@ -1,8 +1,15 @@
 declare global {
-    interface Window {
-        baseUrl?: string
-        bgBaseUrl?: string
+  interface Window {
+    wallpaperPropertyListener?: {
+      applyUserProperties(
+        properties: Record<string, { value: number } | undefined>,
+      ): void
     }
+  }
+
+  interface Navigator {
+    standalone?: boolean
+  }
 }
 
-export { }
+export {}

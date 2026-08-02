@@ -56,12 +56,4 @@ export default tseslint.config(
       '@typescript-eslint/no-explicit-any': 'error',
     },
   },
-  {
-    // Phase 4 removes this compatibility override together with the legacy
-    // monolithic controller.
-    files: ['src/index.ts', 'src/components/**/*.ts'],
-    rules: {
-      '@typescript-eslint/no-explicit-any': 'off',
-    },
-  },
 )

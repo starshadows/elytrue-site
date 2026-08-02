@@ -1,649 +1,71 @@
-<!DOCTYPE html>
-<html lang="zh" style="font-size: 16px;">
-
-<head>
-    <meta charset="UTF-8">
-    <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0">
+<!doctype html>
+<html lang="zh" style="font-size: 16px">
+  <head>
+    <meta charset="UTF-8" />
+    <meta
+      name="viewport"
+      content="width=device-width, initial-scale=1.0, maximum-scale=1.0"
+    />
     <title>星花札记 | elytrue.com</title>
-    <meta name="author" content="elytrue.com">
-    <meta name="description" content="以爱莉希雅为主题的非商业个人同人展示网站，记录角色相关图片、文字与音乐。">
-    <meta name="keywords" content="爱莉希雅, 崩坏3, 星花札记, elytrue">
-    <meta name="theme-color" content="#ffaacc">
-    <meta property="og:type" content="website">
-    <meta property="og:locale" content="zh_CN">
-    <meta property="og:title" content="星花札记 | elytrue.com">
-    <meta property="og:description" content="以爱莉希雅为主题的非商业个人同人展示网站。">
-    <meta property="og:url" content="https://elytrue.com/">
-    <meta property="og:image" content="https://elytrue.com/social-share.jpg">
-    <meta name="twitter:card" content="summary_large_image">
-    <meta name="twitter:title" content="星花札记 | elytrue.com">
-    <meta name="twitter:description" content="以爱莉希雅为主题的非商业个人同人展示网站。">
-    <meta name="twitter:image" content="https://elytrue.com/social-share.jpg">
-
+    <meta name="author" content="elytrue.com" />
+    <meta
+      name="description"
+      content="以爱莉希雅为主题的非商业个人同人展示网站，记录角色相关图片、文字与音乐。"
+    />
+    <meta name="keywords" content="爱莉希雅, 崩坏3, 星花札记, elytrue" />
+    <meta name="theme-color" content="#ffaacc" />
+    <meta property="og:type" content="website" />
+    <meta property="og:locale" content="zh_CN" />
+    <meta property="og:title" content="星花札记 | elytrue.com" />
+    <meta
+      property="og:description"
+      content="以爱莉希雅为主题的非商业个人同人展示网站。"
+    />
+    <meta property="og:url" content="https://elytrue.com/" />
+    <meta
+      property="og:image"
+      content="https://elytrue.com/social-share.jpg"
+    />
+    <meta name="twitter:card" content="summary_large_image" />
+    <meta name="twitter:title" content="星花札记 | elytrue.com" />
+    <meta
+      name="twitter:description"
+      content="以爱莉希雅为主题的非商业个人同人展示网站。"
+    />
+    <meta
+      name="twitter:image"
+      content="https://elytrue.com/social-share.jpg"
+    />
+    <link rel="manifest" href="/index.manifest.json" />
+    <meta name="mobile-web-app-capable" content="yes" />
+    <meta name="apple-mobile-web-app-capable" content="yes" />
+    <meta name="application-name" content="星花札记" />
+    <meta name="apple-mobile-web-app-title" content="星花札记" />
+    <link
+      rel="icon"
+      type="image/png"
+      sizes="320x320"
+      href="/res/favicon-320.png"
+    />
+    <link
+      rel="apple-touch-icon"
+      type="image/png"
+      sizes="320x320"
+      href="/res/favicon-320.png"
+    />
+    <link rel="canonical" href="https://elytrue.com/" />
+    <script type="module" src="/src/main.ts"></script>
+  </head>
+  <body>
     <style id="langCSS">
-        .ui {
-            display: none !important;
-        }
-        .ui.zh {
-            display: inline !important;
-        }
+      .ui {
+        display: none !important;
+      }
+      .ui.zh {
+        display: inline !important;
+      }
     </style>
     <style id="wallpaperEngineCSS"></style>
-
-    <link rel="manifest" href="index.manifest.json">
-    <meta name="mobile-web-app-capable" content="yes">
-    <meta name="apple-mobile-web-app-capable" content="yes">
-    <meta name="application-name" content="星花札记">
-    <meta name="apple-mobile-web-app-title" content="星花札记">
-
-    <link rel="icon" type="image/png" sizes="320x320" href="res/favicon-320.png">
-    <link rel="apple-touch-icon" type="image/png" sizes="320x320" href="res/favicon-320.png">
-
-    <link rel="canonical" href="https://elytrue.com/" />
-
-    <!-- Insert base URL here -->
-
-    <script type="module" src="/src/main.ts"></script>
-</head>
-
-<body>
-
-    <div id="bgContainer">
-        <!--
-        <div id="mainbg1" class="mainbg bgzoom" style="background-image: url(bg/mainbg1.jpg); opacity: 1; /*display: none*/"></div>
-        <div id="mainbg2" class="mainbg" style="background-image: url(bg/mainbg2.jpg); opacity: 0; animation-name: none; /*display: none*/"></div>
-        -->
-
-        <div class="mainbg defaultbg" data-layout="landscape" data-src="assets/elytrue-20260724/bg/landscape1.webp" data-original="assets/elytrue-20260724/originals/landscape1.jpg"><div style="background-position: 50% 50%;"></div><span>官方美术</span></div>
-        <div class="mainbg defaultbg" data-layout="landscape" data-src="assets/elytrue-20260724/bg/landscape2.webp" data-original="assets/elytrue-20260724/originals/landscape2.png"><div style="background-position: 38% 50%;"></div><span>官方美术</span></div>
-        <div class="mainbg defaultbg" data-layout="landscape" data-src="assets/elytrue-20260724/bg/landscape3.webp" data-original="assets/elytrue-20260724/originals/landscape3.png" data-credit-url="https://www.pixiv.net/users/56022318"><div style="background-position: 55% 50%;"></div><span><span class="ui zh">画师:&nbsp;</span><span class="ui en">Illustrator:&nbsp;</span>合悟昂</span></div>
-        <div class="mainbg defaultbg" data-layout="landscape" data-src="assets/elytrue-20260724/bg/landscape4.webp" data-original="assets/elytrue-20260724/originals/landscape4.png" data-credit-url="https://www.pixiv.net/users/56022318"><div style="background-position: 55% 50%;"></div><span><span class="ui zh">画师:&nbsp;</span><span class="ui en">Illustrator:&nbsp;</span>合悟昂</span></div>
-        <div class="mainbg defaultbg" data-layout="landscape" data-src="assets/elytrue-20260724/bg/landscape5.webp" data-original="assets/elytrue-20260724/originals/landscape5.png" data-credit-url="https://www.pixiv.net/users/58434088"><div style="background-position: 52% 50%;"></div><span><span class="ui zh">画师:&nbsp;</span><span class="ui en">Illustrator:&nbsp;</span>喵咕君QAQ(KH3)</span></div>
-        <div class="mainbg defaultbg" data-layout="landscape" data-src="assets/elytrue-20260724/bg/landscape6.webp" data-original="assets/elytrue-20260724/originals/landscape6.jpg" data-credit-url="https://www.pixiv.net/users/58434088"><div style="background-position: 35% 50%;"></div><span><span class="ui zh">画师:&nbsp;</span><span class="ui en">Illustrator:&nbsp;</span>喵咕君QAQ(KH3)</span></div>
-        <div class="mainbg defaultbg" data-layout="landscape" data-src="assets/elytrue-20260724/bg/landscape7.webp" data-original="assets/elytrue-20260724/originals/landscape7.jpg" data-credit-url="https://www.pixiv.net/users/58434088"><div style="background-position: 43% 50%;"></div><span><span class="ui zh">画师:&nbsp;</span><span class="ui en">Illustrator:&nbsp;</span>喵咕君QAQ(KH3)</span></div>
-
-        <div class="mainbg defaultbg" data-layout="portrait" data-src="assets/elytrue-20260724/bg/portrait1.webp" data-original="assets/elytrue-20260724/originals/portrait1.jpg" data-credit-url="https://www.pixiv.net/users/89748593"><div style="background-position: 50% 50%;"></div><span><span class="ui zh">画师:&nbsp;</span><span class="ui en">Illustrator:&nbsp;</span>nami</span></div>
-        <div class="mainbg defaultbg" data-layout="portrait" data-src="assets/elytrue-20260724/bg/portrait2.webp" data-original="assets/elytrue-20260724/originals/portrait2.png" data-credit-url="https://www.pixiv.net/users/89748593"><div style="background-position: 50% 50%;"></div><span><span class="ui zh">画师:&nbsp;</span><span class="ui en">Illustrator:&nbsp;</span>nami</span></div>
-        <div class="mainbg defaultbg" data-layout="portrait" data-src="assets/elytrue-20260724/bg/portrait3.webp" data-original="assets/elytrue-20260724/originals/portrait3.png" data-credit-url="https://www.pixiv.net/users/35132995"><div style="background-position: 50% 50%;"></div><span><span class="ui zh">画师:&nbsp;</span><span class="ui en">Illustrator:&nbsp;</span>roena</span></div>
-        <div class="mainbg defaultbg" data-layout="portrait" data-src="assets/elytrue-20260724/bg/portrait4.webp" data-original="assets/elytrue-20260724/originals/portrait4.png" data-credit-url="https://www.pixiv.net/users/56022318"><div style="background-position: 50% 50%;"></div><span><span class="ui zh">画师:&nbsp;</span><span class="ui en">Illustrator:&nbsp;</span>合悟昂</span></div>
-        <div class="mainbg defaultbg" data-layout="portrait" data-src="assets/elytrue-20260724/bg/portrait5.webp" data-original="assets/elytrue-20260724/originals/portrait5.png" data-credit-url="https://www.pixiv.net/users/56022318"><div style="background-position: 50% 50%;"></div><span><span class="ui zh">画师:&nbsp;</span><span class="ui en">Illustrator:&nbsp;</span>合悟昂</span></div>
-        <div class="mainbg defaultbg" data-layout="portrait" data-src="assets/elytrue-20260724/bg/portrait6.webp" data-original="assets/elytrue-20260724/originals/portrait6.jpg" data-credit-url="https://www.pixiv.net/users/58434088"><div style="background-position: 50% 50%;"></div><span><span class="ui zh">画师:&nbsp;</span><span class="ui en">Illustrator:&nbsp;</span>喵咕君QAQ(KH3)</span></div>
-        <div class="mainbg defaultbg" data-layout="portrait" data-src="assets/elytrue-20260724/bg/portrait7.webp" data-original="assets/elytrue-20260724/originals/portrait7.jpg" data-credit-url="https://www.pixiv.net/users/58434088"><div style="background-position: 50% 50%;"></div><span><span class="ui zh">画师:&nbsp;</span><span class="ui en">Illustrator:&nbsp;</span>喵咕君QAQ(KH3)</span></div>
-        <div class="mainbg defaultbg" data-layout="portrait" data-src="assets/elytrue-20260724/bg/portrait8.webp" data-original="assets/elytrue-20260724/originals/portrait8.jpg" data-credit-url="https://www.pixiv.net/users/58434088"><div style="background-position: 50% 50%;"></div><span><span class="ui zh">画师:&nbsp;</span><span class="ui en">Illustrator:&nbsp;</span>喵咕君QAQ(KH3)</span></div>
-        <div class="mainbg defaultbg" data-layout="portrait" data-src="assets/elytrue-20260724/bg/portrait9.webp" data-original="assets/elytrue-20260724/originals/portrait9.jpg" data-credit-url="https://www.pixiv.net/users/58434088"><div style="background-position: 50% 50%;"></div><span><span class="ui zh">画师:&nbsp;</span><span class="ui en">Illustrator:&nbsp;</span>喵咕君QAQ(KH3)</span></div>
-
-        <div class="mainbg birthdaybg" data-pixivid="101655453"><div style="background-position: 50% 50%;"></div><span><span class="ui zh">画师:&nbsp;</span><span class="ui en">Illustrator:&nbsp;</span>八重ハルラ</span></div>
-        <div class="mainbg birthdaybg" data-pixivid="91842494" ><div style="background-position: 50% 50%;"></div><span><span class="ui zh">画师:&nbsp;</span><span class="ui en">Illustrator:&nbsp;</span>ほんわか紳士</span></div>
-        <div class="mainbg birthdaybg" data-pixivid="22161754" ><div style="background-position: 35% 50%;"></div><span><span class="ui zh">画师:&nbsp;</span><span class="ui en">Illustrator:&nbsp;</span>mizuki</span></div>
-        <div class="mainbg birthdaybg" data-pixivid="90502009" ><div style="background-position: 65% 50%;"></div><span><span class="ui zh">画师:&nbsp;</span><span class="ui en">Illustrator:&nbsp;</span>ゆきねこ</span></div>
-
-        <div class="mainbg christmasbg" data-pixivid="125492471"><div style="background-position: 50% 0%;"></div><span><span class="ui zh">画师:&nbsp;</span><span class="ui en">Illustrator:&nbsp;</span>五十兎</span></div>
-        <div class="mainbg christmasbg"                         ><div style="background-position: 75% 35%;"></div><span><span class="ui zh">画师:&nbsp;</span><span class="ui en">Illustrator:&nbsp;</span>星影ワタル</span></div>
-        <div class="mainbg christmasbg" data-pixivid="114522904"><div style="background-position: 50% 55%;"></div><span><span class="ui zh">画师:&nbsp;</span><span class="ui en">Illustrator:&nbsp;</span>五十兎</span></div>
-        <div class="mainbg christmasbg" data-pixivid="23876072" ><div style="background-position: 60% 15%;"></div><span><span class="ui zh">画师:&nbsp;</span><span class="ui en">Illustrator:&nbsp;</span>山田あこ</span></div>
-        <div class="mainbg christmasbg"                         ><div style="background-position: 80% 50%;"></div><span><span class="ui zh">官图</span><span class="ui en">Official art</span></span></div>
-        <div class="mainbg christmasbg" data-pixivid="40497980" ><div style="background-position: 5% 100%;"></div><span><span class="ui zh">画师:&nbsp;</span><span class="ui en">Illustrator:&nbsp;</span>ほし</span></div>
-        <div class="mainbg christmasbg" data-pixivid="114519696"><div style="background-position: 60% 100%"></div><span><span class="ui zh">画师:&nbsp;</span><span class="ui en">Illustrator:&nbsp;</span>くるるまどか</span></div>
-        <div class="mainbg christmasbg" data-pixivid="86539485" ><div style="background-position: 50% 0%; "></div><span><span class="ui zh">画师:&nbsp;</span><span class="ui en">Illustrator:&nbsp;</span>いとぅー</span></div>
-        <div class="mainbg christmasbg"                         ><div style="background-position: 50% 10%;"></div><span><span class="ui zh">官图</span><span class="ui en">Official art</span></span></div>
-
-        <div class="mainbg lunarNewYearbg" data-pixivid="108497603"><div style="background-position: 25% 50%;"></div><span><span class="ui zh">画师:&nbsp;</span><span class="ui en">Illustrator:&nbsp;</span>Miuue</span></div>
-        <div class="mainbg lunarNewYearbg" data-pixivid="32580324" ><div style="background-position: 47% 50%;"></div><span><span class="ui zh">画师:&nbsp;</span><span class="ui en">Illustrator:&nbsp;</span>あゆっこ (Forest Village)</span></div>
-        <div class="mainbg lunarNewYearbg"                         ><div style="background-position: 50% 60%;"></div><span><span class="ui zh">画师:&nbsp;</span><span class="ui en">Illustrator:&nbsp;</span>谷口淳一郎</span></div>
-        <div class="mainbg lunarNewYearbg"                         ><div style="background-position: 50% 75%;"></div><span><span class="ui zh">画师:&nbsp;</span><span class="ui en">Illustrator:&nbsp;</span>長田寛人</span></div>
-        <div class="mainbg lunarNewYearbg" data-pixivid="115011226"><div style="background-position: 50% 30%;"></div><span><span class="ui zh">画师:&nbsp;</span><span class="ui en">Illustrator:&nbsp;</span>星影ワタル</span></div>
-        <div class="mainbg lunarNewYearbg"                         ><div style="background-position: 50% 70%;"></div><span><span class="ui zh">画师:&nbsp;</span><span class="ui en">Illustrator:&nbsp;</span>谷口淳一郎</span></div>
-        <div class="mainbg lunarNewYearbg" data-pixivid="106843943"><div style="background-position: 75% 50%;"></div><span><span class="ui zh">画师:&nbsp;</span><span class="ui en">Illustrator:&nbsp;</span>五十兎</span></div>
-        <div class="mainbg lunarNewYearbg" data-pixivid="69754996" ><div style="background-position: 70% 20%;"></div><span><span class="ui zh">画师:&nbsp;</span><span class="ui en">Illustrator:&nbsp;</span>猫さかな。</span></div>
-        <div class="mainbg lunarNewYearbg" data-pixivid="48810660" ><div style="background-position: 55% 100%"></div><span><span class="ui zh">画师:&nbsp;</span><span class="ui en">Illustrator:&nbsp;</span>Heytwo黑兎</span></div>
-        <div class="mainbg lunarNewYearbg"                         ><div style="background-position: 90% 30%;"></div><span><span class="ui zh">画师:&nbsp;</span><span class="ui en">Illustrator:&nbsp;</span>渡辺明夫</span></div>
-        <div class="mainbg lunarNewYearbg" data-pixivid="86712658" ><div style="background-position: 25% 15%;"></div><span><span class="ui zh">画师:&nbsp;</span><span class="ui en">Illustrator:&nbsp;</span>うちゃ</span></div>
-        <div class="mainbg lunarNewYearbg" data-pixivid="48354919" ><div style="background-position: 47% 30%;"></div><span><span class="ui zh">画师:&nbsp;</span><span class="ui en">Illustrator:&nbsp;</span>あゆっこ (Forest Village)</span></div>
-        <div class="mainbg lunarNewYearbg"                         ><div style="background-position: 50% 30%;"></div><span><span class="ui zh">官图</span><span class="ui en">Official art</span></span></div>
-        <div class="mainbg lunarNewYearbg" data-pixivid="114949786"><div style="background-position: 50% 20%;"></div><span><span class="ui zh">画师:&nbsp;</span><span class="ui en">Illustrator:&nbsp;</span>ノート</span></div>
-        <div class="mainbg lunarNewYearbg" data-pixivid="29271922" ><div style="background-position: 40% 50%;"></div><span><span class="ui zh">画师:&nbsp;</span><span class="ui en">Illustrator:&nbsp;</span>たんこ</span></div>
-        <div class="mainbg lunarNewYearbg" data-pixivid="29579137" ><div style="background-position: 67% 25%;"></div><span><span class="ui zh">画师:&nbsp;</span><span class="ui en">Illustrator:&nbsp;</span>Heytwo黑兎</span></div>
-        <div class="mainbg lunarNewYearbg" data-pixivid="55142687" ><div style="background-position: 40% 30%;"></div><span><span class="ui zh">画师:&nbsp;</span><span class="ui en">Illustrator:&nbsp;</span>Heytwo黑兎</span></div>
-        
-        <div class="mainbg qixibg" data-pixivid="121143621"><div style="background-position: 70% 20%;"></div><span><span class="ui zh">画师:&nbsp;</span><span class="ui en">Illustrator:&nbsp;</span>五十兎</span></div>
-        <div class="mainbg qixibg"                         ><div style="background-position: 50% 25%;"></div><span><span class="ui zh">画师:&nbsp;</span><span class="ui en">Illustrator:&nbsp;</span>g小调恰空舞曲</span></div>
-        <div class="mainbg qixibg" data-pixivid="112618522"><div style="background-position: 60% 50%;"></div><span><span class="ui zh">画师:&nbsp;</span><span class="ui en">Illustrator:&nbsp;</span>MOIEKO</span></div>
-        <div class="mainbg qixibg" data-pixivid="117294789"><div style="background-position: 33% 20%;"></div><span><span class="ui zh">画师:&nbsp;</span><span class="ui en">Illustrator:&nbsp;</span>Lauraaa</span></div>
-        <div class="mainbg qixibg" data-pixivid="68266300" ><div style="background-position: 33% 20%;"></div><span><span class="ui zh">同人游戏&nbsp;</span><span class="ui en">Fan game&nbsp;</span>ゆめのおにわでchasing CG</span></div>
-        <div class="mainbg qixibg" data-pixivid="112717128"><div style="background-position: 0% 33%;"></div><span><span class="ui zh">画师:&nbsp;</span><span class="ui en">Illustrator:&nbsp;</span>翻車魚</span></div>
-        
-        <div class="mainbg walpurgispvbg"><div><iframe></iframe></div><span><span class="ui zh">魔女之夜的回天 PV2</span><span class="ui en">Walpurgisnacht: Rising Trailer 2</span></span></div>
-
-        <div class="mainbg nightbg"><div style="background-position: 60% 50%;"></div><span><span class="ui zh">官图 (战斗五芒星CG)</span><span class="ui en">Official art (PMMM: The Battle Pentagram)</span></span></div>
-        
-        <div class="mainbg kamibg" data-pixivid="48824021"><div style="background-position: 45% 50%; filter: brightness(0.85) !important;"></div><span><span class="ui zh">画师:&nbsp;</span><span class="ui en">Illustrator:&nbsp;</span>lyiet</span></div>
-
-
-        <div class="fireworks">
-            <div></div>
-            <div></div>
-            <div></div>
-            <div></div>
-        </div>
-
-
-        <div id="mainCaptions" style="opacity: 0;">
-            <div class="defaultCaption">
-                <p>云想衣裳花想容，</p>
-                <p>春风拂槛露华浓。</p>
-                <p class="captionSource">—— 李白《清平调》</p>
-            </div>
-            <div class="defaultCaption">
-                <p>愿我如星君如月，</p>
-                <p>夜夜流光相皎洁。</p>
-                <p class="captionSource">—— 范成大《车遥遥篇》</p>
-            </div>
-            <div class="defaultCaption" data-sequence-group="elysia-origin">
-                <p>星月落下，编织温柔的童话。</p>
-                <p>大地丰饶，养育初生的新芽。</p>
-                <p>无瑕的少女自人群间穿行，将人之美尽收眼底。</p>
-            </div>
-            <div class="defaultCaption" data-sequence-group="elysia-origin">
-                <p>真我的英桀在末世中起舞，将善与爱贯彻始终。</p>
-                <p>人类的律者化作新生的种子，在细枝上绽放人性的飞花。</p>
-                <p>那花名为爱莉希雅……人之律者，爱莉希雅。</p>
-            </div>
-            <div class="defaultCaption">
-                <p>此后，将有群星闪耀，因为我如今来过。</p>
-                <p>此后，将有百花绽放，因为我从未离去。</p>
-            </div>
-            <div class="defaultCaption">
-                <p>愿你前行的道路有群星闪耀。</p>
-                <p>愿你留下的足迹有百花绽放。</p>
-                <p>你即是上帝的馈赠，世界因你而瑰丽。</p>
-            </div>
-            <div class="defaultCaption">
-                <p>执拗的花朵永远不会因暴雨而褪去颜色，</p>
-                <p>你的决心也一定能在绝境中绽放真我。</p>
-            </div>
-
-            <div class="birthdayCaption">
-                <p>Happy birthday, Madoka!</p>
-                <p id="birthdayDate">10/3/2011 - Madoka's 0th birthday</p>
-            </div>
-
-            <div class="christmasCaption">
-                <p>Merry Christmas!</p>
-            </div>
-
-            <div class="lunarNewYearCaption">
-                <p>新年快乐!</p>
-            </div>
-
-            <div class="qixiCaption">
-                <p><span class="ui zh">七夕快乐!</span><span class="ui en">Happy Chinese Valentine's Day!</span></p>
-            </div>
-
-            <div class="walpurgispvCaption">
-            </div>
-
-            <div class="nightCaption">
-                <p><span class="ui zh">晚安，小焰～</span><span class="ui en">Good night, Homura-chan ~</span></p>
-                <p><span class="ui zh">晚安，小圆。</span><span class="ui en">Good night, Madoka.</span></p>
-            </div>
-
-            <div class="kamiCaption">
-                <p>Darkness cannot drive out darkness,</p>
-                <p>only light can do that.</p>
-                <p>Hate cannot drive out hate,</p>
-                <p>only love can do that.</p>
-                <p style="font-weight: bold;">Your sin, I bear.</p>
-            </div>
-        </div>
-
-        <div class="mainbg walpurgisbg" style="display: none;"><div></div><span>回天宣传海报 1</span></div>
-
-        <div id="videoBgBox" style="display: none;">
-            <video id="mainVideoBg" muted></video>
-            <video id="mainVideo" muted></video>
-        </div>
-
-        <div id="banner" class="banner20231123 banner-info" style="display: none;">
-            <span>
-                <span class="ui zh">若要切换圆神(kami.im)/圆诞主题, 请点击"工具"-"切换主题"</span>
-                <span class="ui en">Tip: You can change theme in "Tools" menu</span>
-            </span>
-            <i onclick="
-                this.parentNode.style.display = 'none'
-                setConfig('hiddenBanner', this.parentNode.classList[0])
-                ">×</i>
-        </div>
-    
-    </div>
-
-    <div id="header">
-
-        <div id="mainTitle">
-            <a>
-                <span style="color: #ff80c0;">星花</span>
-                <span style="color: #c074ff;">札记</span>
-            </a>
-        </div>
-    
-        <br>
-
-        <div class="mainTitleUnder" onclick="showPopup('themeSelectorPopup')">
-            <img class="musicPlayingIndicator" src="res/music_note.svg">
-            <div id="themeIndicator">
-                <div class="currentSong"></div>
-                <span><span class="ui zh">主题:</span><span class="ui en">Theme:</span></span>
-                <span id="currentTheme">
-                    <span id="themeTxt-default"><span class="ui zh">爱莉希雅</span><span class="ui en">Elysia</span></span>
-                    <span id="themeTxt-night"><span class="ui zh">晚安</span><span class="ui en">Night</span></span>
-                    <span id="themeTxt-birthday"><span class="ui zh">圆诞</span><span class="ui en">MadoBirthday</span></span>
-                    <span id="themeTxt-christmas"><span class="ui zh">圣诞</span><span class="ui en">Christmas</span></span>
-                    <span id="themeTxt-lunarNewYear"><span class="ui zh">新年</span><span class="ui en">Lunar New Year</span></span>
-                    <span id="themeTxt-qixi"><span class="ui zh">七夕</span><span class="ui en">Qixi Festival</span></span>
-                    <span id="themeTxt-walpurgispv"><span class="ui zh">魔女之夜的回天</span><span class="ui en">Walpurgisnacht Rising</span></span>
-                    <span id="themeTxt-kami">kami.im</span>
-                </span>
-            </div>
-            <img src="res/arrow_right.svg">
-        </div>
-
-        <br>
-
-        <div class="mainTitleUnder" onclick="showPopup('game2')" style="display: none;">
-            <img data-src="res/sports_esports.svg">
-            <span><span class="ui zh">小情侣(?)</span><span class="ui en">Minigame</span></span>
-            <img src="res/arrow_right.svg">
-        </div>
-
-        <div id="userInfo">
-            <img id="userInfoAvatar" src="res/defaultAvatar.png" alt="">
-            <span id="userInfoName"></span>
-            
-            <div id="my-dropdown" style="display: none;">
-                <div>
-                    <div onclick="User.changeName()"><span class="ui zh">修改昵称</span><span class="ui en">Change nickname</span></div>
-                    <div onclick="User.changeAvatar()"><span class="ui zh">修改头像</span><span class="ui en">Change avatar</span></div>
-                    <div onclick="User.changeEmail()"><span class="ui zh">修改邮箱</span><span class="ui en">Change email</span></div>
-                    <div onclick="User.showMe()"><span class="ui zh">我的留言</span><span class="ui en">My sent messages</span></div>
-                    <div onclick="User.logout()"><span class="ui zh">退出</span><span class="ui en">Logout</span></div>
-                </div>
-            </div>
-        </div>
-    
-    </div>
-
-    <footer id="siteFooter">
-        <a href="https://beian.miit.gov.cn/" target="_blank" rel="noopener noreferrer">赣ICP备2026015414号-1</a>
-    </footer>
-
-    <div id="lowerPanel">
-
-        <div class="tooltip">
-            <span class="ui zh">今日留言: </span><span class="ui en">Messages today: </span>
-            <span id="todayCommentCount"></span>
-        </div>
-
-        <div id="comments" class="noscrollbar">
-
-            <div class="commentBox" id="topComment">
-                <img class="bg" src="assets/elytrue-20260724/bg/portrait1.webp">
-                <div class="bgcover"></div>
-                <img class="avatar" src="res/favicon-320.png">
-                <div class="sender"><span class="ui zh">星花札记</span><span class="ui en">Starflower Notes</span></div>
-                <div class="id"><span class="ui zh">#置顶</span><span class="ui en">#Pinned</span></div>
-                <div class="comment">
-                    <div class="ui zh pinnedNoticeCopy">
-                        欢迎来到 <strong style="text-decoration: underline;">星花札记</strong>。<br>
-                        这里是以<strong style="color: #ffbbdd;">爱莉希雅</strong>为主题的非商业个人同人网站。
-                        <br><br>
-                        留言板用于记录祝愿、感想与日常，也可以分享与角色相关的作品和故事。
-                        <br><br>
-                        <b>※ 请友善交流，共同守护这座花园 ※</b><br>
-                        请勿发布广告、骚扰、违法、侵权或不适宜内容。
-                        <br><br>
-                        游客可以浏览；注册后可留言、回复、点赞、举报和上传图片。<br>
-                        注册需要用户名、长期可用邮箱和密码，账号提交后立即激活。邮箱只用于登录、密码找回和账号安全通知，不会公开展示。
-                        <br><br>
-                        本站使用的二创图片均经作者许可转载并标注来源，感谢所有相关画师。<br>
-                        <a href="javascript:;" onclick="showPopup('getImgPopup')">→ 点击查看图片与画师致谢 ←</a>
-                        <br><br>
-                        角色、官方美术与音乐版权归原权利人所有。
-                    </div>
-                    <div class="ui en pinnedNoticeCopy">
-                        Welcome to <strong style="text-decoration: underline;">Starflower Notes</strong>, a non-commercial personal fan site themed around <strong style="color: #ffbbdd;">Elysia</strong>.
-                        <br><br>
-                        The message board is for wishes, thoughts, everyday notes, and character-related stories or works.
-                        <br><br>
-                        Please be kind. Advertising, harassment, unlawful, infringing and inappropriate content is not allowed.
-                        <br><br>
-                        Visitors can browse. Registered users can post, reply, like, report and upload images. Registration requires a username, a long-term email address and a password. Email addresses are never displayed publicly.
-                        <br><br>
-                        All derivative images are reposted with the artists' permission and credited. Character, official art and music rights remain with their respective owners.<br>
-                        <a href="javascript:;" onclick="showPopup('getImgPopup')">→ View image sources and artist credits ←</a>
-                    </div>
-                </div>
-
-                <div class="time" onclick="
-                    hideTopCommentElmnt.click();
-                    FloatMsgs.show({ type: 'success', persist: true, msg: `
-                        <span class='ui zh'>隐藏成功。可在【工具】→【显示设置】中重新打开</span>
-                        <span class='ui en'>Hidden. Can be displayed again via [Tools] → [Display settings]</span>
-                    ` })
-                " style="
-                    text-decoration: underline;
-                    font-size: 1rem;
-                    right: 0;
-                    left: initial;
-                    cursor: pointer;
-                "><span class="ui zh">隐藏 ×</span><span class="ui en">Hide ×</span></div>
-
-            </div>
-            
-            <div class="commentBox loadingIndicator" id="loadingIndicatorBefore">
-                <div class="loadingCircle"></div>
-            </div>
-            
-            <div class="commentBox loadingIndicator" id="loadingIndicator">
-                <div class="loadingCircle"></div>
-            </div>
-
-        </div>
-
-        <div id="timelineContainer">
-            <div id="timeline">
-                <p>
-                    <strong>2026</strong>
-                    <span>8</span>
-                </p>
-            </div>
-
-            <div id="hoverCalendar" style="display: none;">
-
-            </div>
-        </div>
-
-        <div class="commentSeekArrow" onclick="seekComment(-1)" style="left: 2vw; display: none;">
-            <img src="res/arrow_left.svg">
-        </div>
-        <div class="commentSeekArrow" onclick="seekComment(1)" style="right: 2vw;">
-            <img src="res/arrow_right.svg">
-            <div id="mouseScrollTooltip" class="tooltip">
-                <span class="ui zh">用鼠标滚轮也可滚动</span><span class="ui en">Scrollable with wheel</span>
-            </div>
-        </div>
-
-        <div id="newMsgContainer" class="backTransparent">
-            <button id="newMsg" onclick="newComment()"><span class="ui zh">➕ 发送留言</span><span class="ui en">➕ New message</span></button>
-        </div>
-
-        <div id="toolbarContainer" class="backTransparent">
-            <div id="toolbar">
-                <div id="menu" class="toolbarItem">
-                    <span class="ui zh">工具 🛠</span><span class="ui en">Tools 🛠</span>
-                    <ul>
-                        <li onclick="clearComments();loadComments()"><span class="ui zh">🔄 刷新</span><span class="ui en">🔄 Refresh</span></li>
-                        <li onclick="showPopup('themeSelectorPopup')"><span class="ui zh">🖌️ 主题&音乐设置</span><span class="ui en">🖌️ Themes & Music</span></li>
-                        <li onclick="showPopup('displaySettings')"><span class="ui zh">🖥️ 显示设置</span><span class="ui en">🖥️ Display settings</span></li>
-                        <li onclick="showPopup('getImgPopup')"><span class="ui zh">💾 保存背景图片</span><span class="ui en">💾 Download backgrounds</span></li>
-                        <li onclick="
-                            if (installPrompt != null) installPrompt.prompt()
-                            else if (isInStandaloneMode) FloatMsgs.show({ type: 'info', msg: `<span class='ui zh'>你已安装过App</span><span class='ui en'>App already installed</span>` })
-                            else window.alert('你的浏览器不支持安装PWA App\n\n建议使用谷歌Chrome/微软Edge浏览器\n\n你也可以从浏览器菜单手动添加到桌面\n\nYour browser doesn\'t seem to support PWA Apps.\nWe recommend using Google Chrome or Microsoft Edge to do this.')
-                            "><span class="ui zh">📲 安装App到桌面</span><span class="ui en">📲 Install as App</span></li>
-                        <!--<li onclick="playWalpurgis()">📺 播放回天PV(缩剪版)</li>-->
-                        <li>
-                            <span>🌎 Language (语言)</span>
-                            <i></i>
-                            <ul>
-                                <li onclick="Settings.lang = ''"><span class="ui zh">(自动)</span><span class="ui en">(Auto)</span></li>
-                                <li onclick="Settings.lang = 'en'"><span>English</span></li>
-                                <li onclick="Settings.lang = 'zh'"><span>中文</span></li>
-                            </ul>
-                        </li>
-                        <li>
-                            <span class="ui zh">跳转到留言(#ID)</span><span class="ui en">Go to message (#ID)</span>
-                            <span style="display: inline-flex; align-items: center; padding: 0;">
-                                <input id="goto" style="width: 4rem;">
-                                <button onclick="clearComments(1);loadComments({ 'number': document.getElementById('goto').value })">Go</button>
-                            </span>
-                        </li>
-                    </ul>
-                </div>
-                <button id="fullscreenBtn" class="toolbarItem" onclick="toggleFullscreen()"><span class="ui zh">竖屏 ↕</span><span class="ui en">Expand ↕</span></button>
-            </div>
-        </div>
-
-    </div>
-
-    <div id="popupContainer" class="popupContainer" style="display: none;">
-
-        <div id="popupBG" class="popupBG"></div>
-
-        <div id="getImgPopup" class="popupItem">
-            <div>
-                <h2><span class="ui zh">保存背景图片</span><span class="ui en">Download backgrounds</span></h2>
-                <div class="artPermissionNotice">
-                    <p>
-                        <span class="ui zh">本站展示的二创图片均经原作者许可转载，并按作者要求标注画师与来源链接。</span>
-                        <span class="ui en">Fan artworks displayed here are reposted with their artists’ permission, with artist names and source links credited as requested.</span>
-                    </p>
-                    <p>
-                        <span class="ui zh">感谢画师 <a href="https://www.pixiv.net/users/89748593" target="_blank" rel="noopener noreferrer">nami</a>、<a href="https://www.pixiv.net/users/35132995" target="_blank" rel="noopener noreferrer">roena</a>、<a href="https://www.pixiv.net/users/56022318" target="_blank" rel="noopener noreferrer">合悟昂</a>、<a href="https://www.pixiv.net/users/58434088" target="_blank" rel="noopener noreferrer">喵咕君QAQ(KH3)</a> 的创作与许可。</span>
-                        <span class="ui en">Special thanks to <a href="https://www.pixiv.net/users/89748593" target="_blank" rel="noopener noreferrer">nami</a>, <a href="https://www.pixiv.net/users/35132995" target="_blank" rel="noopener noreferrer">roena</a>, <a href="https://www.pixiv.net/users/56022318" target="_blank" rel="noopener noreferrer">合悟昂</a>, and <a href="https://www.pixiv.net/users/58434088" target="_blank" rel="noopener noreferrer">喵咕君QAQ(KH3)</a> for their artwork and permission.</span>
-                    </p>
-                </div>
-                <h4><span class="ui zh">预览使用轻量 WebP；点击每张图片下方的“下载原图”获取未经压缩的原文件</span><span class="ui en">Previews use lightweight WebP. Use “Download original” below each image for the source file.</span></h4>
-                <div></div>
-            </div>
-            <button class="closeBtn"></button>
-        </div>
-
-        <div id="showUserCommentPopup" class="popupItem">
-            <div id="userComment">
-                <h2>
-                    <img>
-                    <span>User</span>
-                </h2>
-                <div class="userCommentItem">
-                    <p>2023/1/1<span>#1000</span></p>
-                    <p>
-                        <span onclick="clearComments(1); loadComments({ 'from': this.parentNode.parentNode.querySelector('span').innerText.replace('#', '') }); closePopup()">
-                            Hello, world!
-                        </span>
-                        <i></i>
-                        <img>
-                        <img>
-                    </p>
-                </div>
-                <h4>
-                    <span class="ui zh">- 共 0 条留言 -</span>
-                    <span class="ui en">- Total 0 messages -</span>
-                </h4>
-            </div>
-            <button class="closeBtn"></button>
-        </div>
-        
-        <div id="themeSelectorPopup" class="popupItem">
-            <div>
-                <h2><span class="ui zh">主题 & 音乐</span><span class="ui en">Themes & Music</span></h2>
-                <p style="width: 100%;">
-                    <span onclick="showPopup('displaySettings')" class="underlinedIconLink">
-                        <span class="ui zh">🖥️ 显示设置</span><span class="ui en">🖥️ Display settings</span>
-                    </span>
-                    <span onclick="showPopup('getImgPopup')" class="underlinedIconLink" style="float: right; padding-left: 4px;">
-                        <span class="ui zh">下载背景图片</span><span class="ui en">Download backgrounds</span>
-                        <img src="res/download.svg">
-                    </span>
-                </p>
-                <div id="themeList">
-                    <div data-theme="">
-                        <img loading="lazy" src="res/auto_theme.jpg" style="border: 0.5rem solid white;">
-                        <span><span class="ui zh">自动</span><span class="ui en">Auto</span></span>
-                    </div>
-                    <div data-theme="default">
-                        <img loading="lazy" src="assets/elytrue-20260724/bg/landscape1.webp">
-                        <span><span class="ui zh">爱莉希雅</span><span class="ui en">Elysia</span></span>
-                    </div>
-                </div>
-            </div>
-            <div id="musicPlayer">
-                <audio id="musicAudio" preload="auto"></audio>
-                <img id="musicImg">
-                <div>
-                    <div class="currentSong">No Music Playing</div>
-                    <div id="nowPlayingProgress"></div>
-                </div>
-                <button id="musicPlayBtn" class="musicPlayingIndicator"></button>
-                <div id="musicPlayerList">
-                    <button><img src="res/playlist_play.svg"></button>
-                    <div>
-                        <div>
-                            <b><span class="ui zh">播放列表</span><span class="ui en">Playlist</span></b>
-                            <label class="setting-switch">
-                                <span><span class="ui zh">随机播放</span><span class="ui en">Shuffle</span></span>
-                                <input id="musicShuffleBtn" type="checkbox" checked>
-                            </label>
-                        </div>
-                        <ol id="songList">
-                            <li>Music 1</li>
-                            <li>Music 2</li>
-                            <li>Music 3</li>
-                            <li>Music 4</li>
-                        </ol>
-                    </div>
-                </div>
-            </div>
-            <button class="closeBtn"></button>
-        </div>
-
-        <div id="displaySettings" class="popupItem">
-            <div>
-                <h2><span class="ui zh">显示设置</span><span class="ui en">Display settings</span></h2>
-                <ul>
-                    <li>
-                        <label class="setting-switch">
-                            <span><span class="ui zh">显示时间轴</span><span class="ui en">Show timeline</span></span>
-                            <input type="checkbox" id="showTimeline" onchange="toggleTimeline()" checked>
-                        </label>
-                    </li>
-                    <li>
-                        <label class="setting-switch">
-                            <span><span class="ui zh">隐藏置顶说明</span><span class="ui en">Hide pinned notice</span></span>
-                            <input type="checkbox" id="hideTopComment" onchange="toggleTopComment()">
-                        </label>
-                    </li>
-                    <li>
-                        <label class="setting-switch">
-                            <span><span class="ui zh">显示被隐藏留言</span><span class="ui en">Show hidden messages</span></span>
-                            <input type="checkbox" id="showHidden" onchange="Settings.showHidden = this.checked">
-                        </label>
-                    </li>
-                    <li>
-                        <span>
-                            <span class="ui zh">画面效果</span><span class="ui en">Graphics</span>
-                        </span>
-                        <div id="graphicsMode"></div>
-                        <!--
-                        moved to vue 3
-
-                        <select id="graphicsMode" onchange="changeGraphicsMode(this.value)">
-                            <option value="high">极高 | Fancy</option>
-                            <option value="mid">中等 | Balanced</option>
-                            <option value="low">流畅 | Fast</option>
-                        </select>
-                        -->
-                    </li>
-                    <li>
-                        <span>
-                            <span class="ui zh">界面缩放</span><span class="ui en">UI scale</span>
-                        </span>
-                        <div style="white-space: nowrap;">
-                            <button onclick="
-                                var el = this.nextElementSibling
-                                if (parseInt(el.value) > 50) el.value = parseInt(el.value) - 10
-                                el.dispatchEvent(new Event('change'))
-                                ">-</button>
-                            <input id="pageZoomController" value="100" style="width: 3em;" onchange="
-                                let x = parseInt(this.value)
-                                if (50 <= x && x <= 500) Settings.pageScale = x / 100
-                                ">
-                            <button onclick="
-                                var el = this.previousElementSibling
-                                if (parseInt(el.value) < 500) el.value = parseInt(el.value) + 10
-                                el.dispatchEvent(new Event('change'))
-                                ">+</button>
-                        </div>
-                    </li>
-                </ul>
-            </div>
-            <button class="closeBtn"></button>
-        </div>
-
-        <div id="game1" class="popupItem">
-            <div>
-                <h2><span class="ui zh">馒头卡？点一下！</span><span class="ui en">Madoka Click</span></h2>
-                <div>
-                    <label class="setting-switch">
-                        <input type="checkbox" onchange="
-                            if (this.checked) {
-                                this.parentNode.classList.add('active')
-                            } else {
-                                this.parentNode.classList.remove('active')
-                            }
-                        ">
-                    </label>
-                </div>
-                <p>图片作者: 星浩</p>
-            </div>
-            <button class="closeBtn"></button>
-        </div>
-
-        <div id="game2" class="popupItem">
-            <div>
-                <h2><span class="ui zh">小情侣（？）</span><span class="ui en">Minigame</span></h2>
-                <label id="game2-main" class="setting-switch">
-                    <img>
-                    <input type="checkbox" onchange="
-                        const promises = []
-                        if (!this.picList) {
-                            this.picList = {}
-                            for (let name of ['hmr', 'mdk']) {
-                                promises.push(getFileListAsync(`res/mello/${name}/`).then(l => this.picList[name] = l))
-                            }
-                        }
-                        Promise.all(promises).then(() => {
-                            if (this.checked) {
-                                this.nextElementSibling.src = this.picList.mdk[Math.floor(Math.random() * this.picList.mdk.length)]
-                                this.nextElementSibling.style.animationName = 'bounceRight'
-                            } else {
-                                this.previousElementSibling.src = this.picList.hmr[Math.floor(Math.random() * this.picList.hmr.length)]
-                                this.previousElementSibling.style.animationName = 'bounceLeft'
-                            }
-                            setTimeout(() => {
-                                this.nextElementSibling.style.removeProperty('animation-name')
-                                this.previousElementSibling.style.removeProperty('animation-name')
-                            }, 300);
-                        })
-                    ">
-                    <img>
-                </label>
-                <p><span class="ui zh">点上面的按钮看小情侣互动！</span><span class="ui en">Click the button above to start!</span></p>
-                <p><span class="ui zh">(是随机抽图的呢)</span><span class="ui en">(Images are randomly displayed :D)</span></p>
-                <p><span class="ui zh">图源 (X/推特): </span><span class="ui en">Image source (X/Twitter): </span><a href="https://twitter.com/swan0517/media" target="_blank">@swan0517 (Mello)</a></p>
-                <a onclick="showPopup('game1')"><img></a>
-            </div>
-            <button class="closeBtn"></button>
-        </div>
-
-    </div>
-
-    <div id="popups"></div>
-
-    <div id="imgViewer"></div>
-
-    <div id="floatMsgs"></div>
-
     <div id="app"></div>
-
-</body>
-
+  </body>
 </html>

@@ -28,7 +28,8 @@ body {
     font-family: 'Microsoft YaHei', 'Segoe UI', Tahoma, Geneva, Verdana, sans-serif;
 }
 
-body>* {
+body > *,
+body > #app > * {
     position: fixed;
 }
 
