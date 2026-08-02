@@ -233,6 +233,17 @@ describe('EdgeOne account and session API', () => {
 })
 
 describe('EdgeOne public origin validation', () => {
+    it('accepts browser-confirmed same-origin writes when EdgeOne hides the public Host', () => {
+        const request = new Request('http://elytrue.internal/api/user/register', {
+            method: 'POST',
+            headers: {
+                Origin: 'https://elytrue-demo.edgeone.app',
+                'Sec-Fetch-Site': 'same-origin',
+            },
+        })
+        assert.equal(requestOriginAllowed(request), true)
+    })
+
     it('accepts the public Host when TLS termination changes request.url protocol', () => {
         const request = new Request('http://elytrue.internal/api/user/register', {
             method: 'POST',
@@ -251,10 +262,26 @@ describe('EdgeOne public origin validation', () => {
             headers: {
                 Host: 'elytrue-demo.edgeone.app',
                 Origin: 'https://evil.example',
+                'Sec-Fetch-Site': 'cross-site',
                 'X-Forwarded-Proto': 'https',
             },
         })
         assert.equal(requestOriginAllowed(request), false)
+    })
+
+    it('accepts PUBLIC_SITE_URL as a deployment configuration fallback', () => {
+        const request = new Request('http://elytrue.internal/api/user/register', {
+            method: 'POST',
+            headers: {
+                Origin: 'https://elytrue-demo.edgeone.app',
+            },
+        })
+        assert.equal(
+            requestOriginAllowed(request, {
+                PUBLIC_SITE_URL: 'https://elytrue-demo.edgeone.app/',
+            }),
+            true,
+        )
     })
 })
 

@@ -143,6 +143,11 @@ export function requestOriginAllowed(request, env = {}) {
         const requestUrl = new URL(request.url)
         if (originUrl.origin === requestUrl.origin) return true
 
+        // Chromium 等现代浏览器会为同源 fetch 自动发送该 Fetch Metadata 请求头；
+        // 它属于 forbidden request header，页面脚本无法自行伪造。EdgeOne 会透传
+        // 客户端请求头，因此即使 Cloud Function 只看到内部 URL，也能安全识别同源写入。
+        if (request.headers.get('sec-fetch-site')?.toLowerCase() === 'same-origin') return true
+
         // EdgeOne 在 HTTPS 终止后可能把 Cloud Function 的 request.url 暴露为内部
         // HTTP URL，但 Host 仍是浏览器访问的公开域名。Host 由边缘平台控制，浏览器
         // 跨域脚本不能伪造，因此同 Host 可安全视为同站请求。
@@ -154,8 +159,10 @@ export function requestOriginAllowed(request, env = {}) {
             .filter(Boolean)
         if (publicHosts.includes(originUrl.host.toLowerCase())) return true
 
-        const explicitlyAllowed = String(env.ALLOWED_ORIGINS || '')
-            .split(',')
+        const explicitlyAllowed = [
+            ...String(env.ALLOWED_ORIGINS || '').split(','),
+            String(env.PUBLIC_SITE_URL || ''),
+        ]
             .map(value => value.trim())
             .filter(Boolean)
             .some(value => {
