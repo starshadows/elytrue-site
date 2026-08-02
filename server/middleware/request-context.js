@@ -8,9 +8,9 @@ export function clientIdentity(context, suffix = '') {
     const ip =
         context.clientIp ||
         context.request.headers.get('cf-connecting-ip') ||
-        context.request.headers.get('x-forwarded-for')?.split(',')[0]?.trim() ||
-        'unknown'
-    return `${ip}:${suffix}`
+        context.request.headers.get('x-forwarded-for')?.split(',')[0]?.trim()
+    if (!ip && !suffix) return null
+    return `${ip || 'unknown'}:${suffix}`
 }
 
 export function ensureWriteOrigin(context) {

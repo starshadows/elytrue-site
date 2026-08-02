@@ -8,7 +8,7 @@ export function resetMemoryRateLimitsForTests() {
 }
 
 const POLICIES = {
-    register: [5, 60 * 60],
+    register: [20, 60 * 60],
     login: [12, 15 * 60],
     reset: [5, 60 * 60],
     comment: [10, 10 * 60],
@@ -19,6 +19,10 @@ const POLICIES = {
 }
 
 export async function enforceRateLimit(action, identity) {
+    // EdgeOne 未提供客户端 IP 时，不能把所有访客归入同一个 "unknown" 桶，
+    // 否则少量注册尝试就会在当前 Cloud Functions 实例内关闭全站注册。
+    if (!identity) return
+
     const [limit, windowSeconds] = POLICIES[action] || [30, 60]
     const bucket = Math.floor(Date.now() / 1000 / windowSeconds)
     const prefix = `rl_${action}_${sha256(identity).slice(0, 24)}_`

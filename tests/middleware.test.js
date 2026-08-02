@@ -41,7 +41,7 @@ function createContext(pathname, kv, clientIp = '203.0.113.10') {
 
 test('middleware allows requests within the edge rate limit', async () => {
     const kv = new MemoryKV()
-    for (let index = 0; index < 5; index += 1) {
+    for (let index = 0; index < 20; index += 1) {
         const response = await middleware(createContext('/api/user/register', kv))
         assert.equal(response.status, 200)
         assert.equal(await response.text(), 'next')
@@ -50,7 +50,7 @@ test('middleware allows requests within the edge rate limit', async () => {
 
 test('middleware returns the shared API envelope after the edge rate limit', async () => {
     const kv = new MemoryKV()
-    for (let index = 0; index < 5; index += 1) {
+    for (let index = 0; index < 20; index += 1) {
         await middleware(createContext('/api/user/register', kv))
     }
 
@@ -61,6 +61,15 @@ test('middleware returns the shared API envelope after the edge rate limit', asy
         message: '操作过于频繁，请稍后再试',
         data: null,
     })
+})
+
+test('middleware does not create a site-wide registration bucket without a client IP', async () => {
+    const kv = new MemoryKV()
+    for (let index = 0; index < 25; index += 1) {
+        const response = await middleware(createContext('/api/user/register', kv, ''))
+        assert.equal(response.status, 200)
+    }
+    assert.equal(kv.values.size, 0)
 })
 
 test('middleware keeps canonical host redirect ahead of API handling', async () => {

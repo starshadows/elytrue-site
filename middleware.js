@@ -1,5 +1,5 @@
 const RATE_LIMIT_POLICIES = {
-    '/api/user/register': ['register', 5, 60 * 60],
+    '/api/user/register': ['register', 20, 60 * 60],
     '/api/user/login': ['login', 12, 15 * 60],
     '/api/user/resetpassword': ['reset', 5, 60 * 60],
     '/api/comments/post': ['comment', 10, 10 * 60],
@@ -41,7 +41,10 @@ async function enforceEdgeRateLimit(context, pathname) {
 
     const [action, limit, windowSeconds] = policy
     const bucket = Math.floor(Date.now() / 1000 / windowSeconds)
-    const identity = context.clientIp || context.request.headers.get('x-forwarded-for') || 'unknown'
+    const identity = context.clientIp || context.request.headers.get('x-forwarded-for')
+    // 缺少可信客户端 IP 时跳过这一层限流，避免所有访客共享全站注册桶。
+    // Cloud Functions 仍会执行输入校验、唯一索引和可用身份下的二次限流。
+    if (!identity) return null
     const prefix = `rl_edge_${action}_${stableHash(identity)}_`
     const key = `${prefix}${bucket}`
 

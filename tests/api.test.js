@@ -442,6 +442,35 @@ describe('concurrent uniqueness checks', () => {
         assert.equal(storedAdmin.role, 'admin')
     })
 
+    it('keeps registration open for regular users after the first administrator', async () => {
+        const stores = { data: new MemoryStore(), uploads: new MemoryStore() }
+        const first = createState('10.0.2.20')
+        const second = createState('10.0.2.21')
+        first.stores = stores
+        second.stores = stores
+
+        const administrator = await call(first, 'POST', 'user/register', {
+            name: '首位管理员',
+            email: 'first-admin@example.com',
+            password: 'first-admin-password',
+        })
+        const regularUser = await call(second, 'POST', 'user/register', {
+            name: '后续普通用户',
+            email: 'later-regular-user@example.com',
+            password: 'later-user-password',
+        })
+
+        assert.equal(administrator.response.status, 201)
+        assert.equal(administrator.payload.data.role, 'admin')
+        assert.equal(regularUser.response.status, 201)
+        assert.equal(regularUser.payload.data.role, 'user')
+
+        const marker = await stores.data.get('system/admin-bootstrap-closed.json', {
+            type: 'json',
+        })
+        assert.equal(marker.userId, administrator.payload.data.id)
+    })
+
     it('does not promote a later registration in an existing unmarked store', async () => {
         const stores = { data: new MemoryStore(), uploads: new MemoryStore() }
         await stores.data.setJSON('users/legacy-account.json', {

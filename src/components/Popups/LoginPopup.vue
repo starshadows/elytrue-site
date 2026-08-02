@@ -81,7 +81,7 @@
         type="password"
         v-model="regPasswordConfirm"
         autocomplete="new-password"
-        @keypress="(e) => e.key == 'Enter' && canRegister && register()"
+        @keypress="(e) => e.key == 'Enter' && register()"
       />
 
       <p class="altLoginOption" @click="screen = 'login'">
@@ -89,11 +89,7 @@
         ><span class="ui en">Already registered? Log in</span>
       </p>
 
-      <button
-        class="okBtn"
-        :disabled="!canRegister || busy"
-        @click="register()"
-      >
+      <button class="okBtn" :disabled="busy" @click="register()">
         <span class="ui zh">{{ busy ? '正在注册…' : '注册并登录 →' }}</span>
         <span class="ui en">{{
           busy ? 'Registering…' : 'Register and log in →'
@@ -107,6 +103,11 @@
 import FloatMsgs from '../FloatMsgs'
 import XHR from '../../net/xhr'
 import { requireController } from '../../app/controller'
+import {
+  validateEmail,
+  validatePassword,
+  validateUsername,
+} from '../../../shared/validation'
 
 export default {
   data: () => ({
@@ -123,14 +124,6 @@ export default {
   computed: {
     canLogin() {
       return this.loginIdentifier.length > 0 && this.loginPassword.length > 0
-    },
-    canRegister() {
-      return (
-        this.regName.length >= 2 &&
-        this.regEmail.includes('@') &&
-        this.regPassword.length >= 8 &&
-        this.regPassword === this.regPasswordConfirm
-      )
     },
   },
 
@@ -172,7 +165,18 @@ export default {
     },
 
     register() {
-      if (!this.canRegister || this.busy) return
+      if (this.busy) return
+      const validationError =
+        validateUsername(this.regName) ||
+        validateEmail(this.regEmail) ||
+        validatePassword(this.regPassword) ||
+        (this.regPassword !== this.regPasswordConfirm
+          ? '两次输入的密码不一致'
+          : null)
+      if (validationError) {
+        FloatMsgs.show({ type: 'warn', msg: validationError })
+        return
+      }
       this.busy = true
       XHR.post('user/register', {
         name: this.regName,
