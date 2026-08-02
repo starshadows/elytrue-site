@@ -240,7 +240,7 @@ export function insertComment(comment, isKami = false) {
     const displayId = isKami ? comment.id : (comment.displayId ?? comment.id)
     const canReport = !isKami && User.LoggedOnUserId != null && User.LoggedOnUserId != comment.uid
     let commentEl = html2elmnt(/*html*/`
-        <div class="commentBox commentItem${comment.hidden ? ' hidden' : ''}" ${isKami == true ? `data-kamiid="#${comment.id}"` : `id="#${comment.id}"`} data-timestamp="${comment.time}">
+        <div class="commentBox commentItem${comment.hidden ? ' hidden' : ''}" ${isKami == true ? `data-kamiid="#${comment.id}"` : `id="#${comment.id}" data-uid="${htmlEscape(comment.uid)}" data-number="${displayId}"`} data-timestamp="${comment.time}">
             <img class="bg" loading="lazy" src="${msgBgInfo[randBG - 1].src}" ${(comment.hidden == 1) ? 'style="display: none;"' : ''}>
             <div class="bgcover"></div>
             <img class="avatar" loading="lazy" src="${isKami == true ? `https://kami.im/getavatar.php?uid=${comment.uid}` : User.convertAvatarPath(comment.avatar)}">
@@ -341,34 +341,7 @@ export function insertComment(comment, isKami = false) {
 
             const reportBtn = commentEl.querySelector('.btn.report')
             if (reportBtn) {
-                reportBtn.onclick = async () => {
-                    if (!await User.ensureLoggedIn()) return
-                    Popup.show('promptInputPopup', {
-                        title: /*html*/`
-                            <span class="ui zh">举报留言 #${displayId}</span>
-                            <span class="ui en">Report message #${displayId}</span>
-                        `,
-                        subtitle: /*html*/`
-                            <span class="ui zh">请简要描述举报原因,管理员核实后会处理。</span>
-                            <span class="ui en">Please describe the reason briefly. Moderators will review it.</span>
-                        `,
-                        action(reason) {
-                            this.disabled = true
-                            XHR.post('comments/report', { commentId: comment.id, reason }).then(r => {
-                                if (r.code == 1) {
-                                    this.$emit('close')
-                                    FloatMsgs.show({
-                                        type: 'success', persist: true, msg: /*html*/`
-                                        <span class="ui zh">举报已提交,感谢反馈</span>
-                                        <span class="ui en">Report submitted. Thank you.</span>`
-                                    })
-                                }
-                            }).finally(() => {
-                                this.disabled = false
-                            })
-                        },
-                    })
-                }
+                bindReportButton(reportBtn, comment, displayId)
             }
 
             if (comment.replyid) {
@@ -379,6 +352,70 @@ export function insertComment(comment, isKami = false) {
     newComment.init()
 
     commentDiv.insertBefore(commentEl, insertBeforeEl)
+}
+
+/**
+ * 绑定举报按钮(插入时与登录状态变化后的刷新共用)。
+ * @param {HTMLElement} reportBtn
+ * @param {{ id: number, number?: number }} comment
+ * @param {number} displayId
+ */
+export function bindReportButton(reportBtn, comment, displayId) {
+    reportBtn.onclick = async () => {
+        if (!await User.ensureLoggedIn()) return
+        Popup.show('promptInputPopup', {
+            title: /*html*/`
+                <span class="ui zh">举报留言 #${displayId}</span>
+                <span class="ui en">Report message #${displayId}</span>
+            `,
+            subtitle: /*html*/`
+                <span class="ui zh">请简要描述举报原因,管理员核实后会处理。</span>
+                <span class="ui en">Please describe the reason briefly. Moderators will review it.</span>
+            `,
+            action(reason) {
+                this.disabled = true
+                XHR.post('comments/report', { commentId: comment.id, reason }).then(r => {
+                    if (r.code == 1) {
+                        this.$emit('close')
+                        FloatMsgs.show({
+                            type: 'success', persist: true, msg: /*html*/`
+                            <span class="ui zh">举报已提交,感谢反馈</span>
+                            <span class="ui en">Report submitted. Thank you.</span>`
+                        })
+                    }
+                }).finally(() => {
+                    this.disabled = false
+                })
+            },
+        })
+    }
+}
+
+/**
+ * 登录/登出后刷新已渲染留言的举报按钮可见性:
+ * 仅登录且非本人留言显示。
+ */
+export function refreshCommentActions() {
+    Array.from(document.getElementsByClassName('commentItem')).forEach(el => {
+        if (el.hasAttribute('data-kamiid')) return
+        const commentId = Number(String(el.id).replace(/^#/, ''))
+        const uid = el.dataset.uid
+        const displayId = Number(el.dataset.number || commentId)
+        if (!commentId || !uid) return
+        const shouldShow = User.LoggedOnUserId != null && User.LoggedOnUserId != uid
+        const existing = el.querySelector('.btn.report')
+        if (shouldShow && !existing) {
+            const actionEl = el.querySelector('.action')
+            if (!actionEl) return
+            const reportBtn = html2elmnt(
+                '<span class="btn report"><span class="ui zh">举报</span><span class="ui en">Report</span></span>'
+            ).firstElementChild
+            bindReportButton(reportBtn, { id: commentId, number: displayId }, displayId)
+            actionEl.appendChild(reportBtn)
+        } else if (!shouldShow && existing) {
+            existing.remove()
+        }
+    })
 }
 
 /**
@@ -523,9 +560,8 @@ export function getFirstVisibleComment() {
 // new message box
 //
 export const NewMessage = {
-    show() {
-        if (!XHR.token) {
-            Popup.show('loginPopup')
+    async show() {
+        if (!await User.ensureLoggedIn()) {
             FloatMsgs.show({
                 type: 'info',
                 msg: '<span class="ui zh">登录后即可留言、回复和上传图片</span><span class="ui en">Log in to post, reply and upload images</span>',
@@ -560,8 +596,6 @@ export const NewMessage = {
                 </div>
             </div>
         `), commentDiv.firstElementChild)
-
-        loadUserInfo()
 
         document.getElementById('msgText').focus({ preventScroll: true })
 
@@ -601,7 +635,7 @@ export const NewMessage = {
         imgUploadInput.value = ''
     },
 
-    reply(id) {
+    async reply(id) {
         if (document.getElementById('newCommentBox')) {
             /** @type {HTMLDivElement} */
             let msgText = document.getElementById('msgText')
@@ -617,10 +651,10 @@ export const NewMessage = {
 
             initCommentReplyQuote(this.getReplyQuote(), id, { dark: true })
 
-            this.show()
+            await this.show()
 
         } else {
-            newComment()
+            await this.show()
             this.reply(id)
         }
     },
@@ -882,7 +916,8 @@ export const User = {
         // The session token is an HttpOnly cookie and is never exposed to JS.
         XHR.token = ''
         XHR.csrfToken = ''
-        this.loadUserInfo()
+        // 首次初始化即保存 Promise,ready() 复用,避免重复 /user/me
+        this._initPromise = this.loadUserInfo()
     },
 
     /**
@@ -1007,6 +1042,7 @@ export const User = {
                 }
                 userInfo.onclick = () => this.showMe()
                 userInfo.classList.remove('nologin')
+                refreshCommentActions()
                 return true
             }).catch(() => {
             XHR.token = ''
@@ -1023,6 +1059,7 @@ export const User = {
 
             userInfo.onclick = () => Popup.show('loginPopup')
             userInfo.classList.add('nologin')
+            refreshCommentActions()
             return false
         })
     },

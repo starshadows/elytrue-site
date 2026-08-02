@@ -2,6 +2,29 @@ import assert from 'node:assert/strict'
 import { after, before, describe, it } from 'node:test'
 import { handleApiRequest } from '../server/app.js'
 import { MemoryStore } from '../server/storage.js'
+import { sha256 } from '../server/crypto.js'
+import { normalizeUsername } from '../shared/validation.js'
+
+class FlakyStore extends MemoryStore {
+    constructor(failures = {}) {
+        super()
+        this.failures = failures
+    }
+
+    async setJSON(key, value, options = {}) {
+        if (this.failures.setJSON?.(key, options)) throw new Error('injected setJSON failure')
+        return super.setJSON(key, value, options)
+    }
+
+    async delete(key) {
+        if (this.failures.delete?.(key)) throw new Error('injected delete failure')
+        return super.delete(key)
+    }
+}
+
+function nameIndexKey(name) {
+    return `indexes/users/name/${sha256(normalizeUsername(name))}.json`
+}
 
 const origin = 'https://preview.elytrue.test'
 const env = {
@@ -686,5 +709,93 @@ describe('password reset observability and health', () => {
         assert.equal(typeof result.payload.data.version, 'string')
         assert.ok('buildTime' in result.payload.data)
         assert.ok('commitTime' in result.payload.data)
+    })
+})
+
+describe('updateUser index transaction', () => {
+    const origin = 'https://preview.elytrue.test'
+
+    async function registerIn(ip, name, email, password = 'update-secure-password', stores) {
+        const state = createState(ip)
+        state.stores = stores || { data: new MemoryStore(), uploads: new MemoryStore() }
+        await call(state, 'POST', 'user/register', { name, email, password })
+        return state
+    }
+
+    async function loginWorks(ip, stores, identifier, password = 'update-secure-password') {
+        const state = createState(ip)
+        state.stores = stores
+        const result = await call(state, 'POST', 'user/login', { identifier, password })
+        return result.response.status
+    }
+
+    it('rolls back the claimed name index when the user record write fails', async () => {
+        const state = await registerIn('10.0.13.1', '旧名甲', 'tx-a@example.com')
+        const oldKey = nameIndexKey('旧名甲')
+        const originalValues = state.stores.data.values
+        assert.ok(await state.stores.data.get(oldKey, { type: 'json' }))
+
+        state.stores.data = new FlakyStore({ setJSON: key => key.startsWith('users/') })
+        state.stores.data.values = originalValues
+        const failed = await call(state, 'PUT', 'user/update', { name: '新名甲' })
+        assert.equal(failed.response.status, 500)
+
+        // 新索引已回滚,旧索引与旧用户名仍可用
+        assert.equal(await state.stores.data.get(nameIndexKey('新名甲'), { type: 'json' }), null)
+        assert.ok(await state.stores.data.get(oldKey, { type: 'json' }))
+        assert.equal(await loginWorks('10.0.13.2', state.stores, '旧名甲'), 200)
+        assert.equal(await loginWorks('10.0.13.3', state.stores, '新名甲'), 401)
+    })
+
+    it('rolls back the claimed name index when the new email conflicts', async () => {
+        const shared = { data: new MemoryStore(), uploads: new MemoryStore() }
+        await registerIn('10.0.14.1', '他人乙', 'taken@example.com', 'update-secure-password', shared)
+        const state = await registerIn('10.0.14.2', '旧名乙', 'tx-b@example.com', 'update-secure-password', shared)
+
+        const failed = await call(state, 'PUT', 'user/update', {
+            name: '新名乙',
+            email: 'taken@example.com',
+        })
+        assert.equal(failed.response.status, 409)
+        assert.match(failed.payload.message, /邮箱已被注册/u)
+
+        assert.equal(await state.stores.data.get(nameIndexKey('新名乙'), { type: 'json' }), null, '新用户名索引必须回滚')
+        assert.ok(await state.stores.data.get(nameIndexKey('旧名乙'), { type: 'json' }))
+        assert.equal(await loginWorks('10.0.14.3', state.stores, '旧名乙'), 200, '旧用户名仍可登录')
+        assert.equal(await loginWorks('10.0.14.4', state.stores, 'tx-b@example.com'), 200, '旧邮箱仍可登录')
+    })
+
+    it('rolls back the claimed email index when the user record write fails', async () => {
+        const state = await registerIn('10.0.15.1', '邮箱甲', 'tx-c@example.com')
+        const originalValues = state.stores.data.values
+        state.stores.data = new FlakyStore({ setJSON: key => key.startsWith('users/') })
+        state.stores.data.values = originalValues
+        const failed = await call(state, 'PUT', 'user/update', { email: 'new-mail@example.com' })
+        assert.equal(failed.response.status, 500)
+
+        assert.equal(await loginWorks('10.0.15.2', state.stores, 'new-mail@example.com'), 401, '新邮箱索引应回滚')
+        assert.equal(await loginWorks('10.0.15.3', state.stores, 'tx-c@example.com'), 200, '旧邮箱仍可登录')
+    })
+
+    it('logs a structured error when deleting the old index fails after a successful update', async () => {
+        const state = await registerIn('10.0.16.1', '旧名丁', 'tx-d@example.com')
+        const oldKey = nameIndexKey('旧名丁')
+        const originalValues = state.stores.data.values
+        state.stores.data = new FlakyStore({ delete: key => key === oldKey })
+        state.stores.data.values = originalValues
+        const captured = []
+        const original = console.error
+        console.error = (...args) => captured.push(args.join(' '))
+        let result
+        try {
+            result = await call(state, 'PUT', 'user/update', { name: '新名丁' })
+        } finally {
+            console.error = original
+        }
+        assert.equal(result.response.status, 200, '本体写入成功,旧索引删除失败不影响结果')
+        assert.ok(captured.some(text => text.includes('user_old_index_delete_failed')))
+        assert.equal(await loginWorks('10.0.16.2', state.stores, '新名丁'), 200, '新用户名可登录')
+        // 旧索引删除失败 → 旧索引残留指向同一用户(已记日志),旧名仍能登录,待修复任务清理
+        assert.equal(await loginWorks('10.0.16.3', state.stores, '旧名丁'), 200, '旧索引残留,旧名仍可登录(已记录日志)')
     })
 })

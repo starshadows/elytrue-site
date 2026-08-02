@@ -28,13 +28,15 @@ export function newCommentId() {
 
 /**
  * 把「公开编号或内部 ID」解析为内部 ID。
- * 公开编号(小数值)优先查编号索引;旧数据未迁移时回退按内部 ID 直查。
+ * 公开编号(小数值)优先查编号索引;tombstone(硬删除空号)返回 null;
+ * 旧数据未迁移时回退按内部 ID 直查。
  */
 export async function resolveCommentId(data, value) {
     const raw = Number(value)
     if (!Number.isSafeInteger(raw) || raw <= 0) return null
     if (raw >= INTERNAL_ID_THRESHOLD) return raw
     const seat = await getJSON(data, commentNumberKey(raw))
+    if (!seat || seat.tombstone) return null
     if (seat?.commentId) return Number(seat.commentId)
     const legacy = await getJSON(data, commentKey(raw))
     return legacy ? raw : null
@@ -205,17 +207,36 @@ export async function createComment(data, user, body, { idFactory = newCommentId
         throw httpError(500, '留言创建失败，请稍后再试')
     }
 
-    for (const { imageId, alias } of aliases) {
-        if (alias.status !== 'active') {
-            alias.status = 'active'
-            await data.setJSON(`uploads/aliases/comments/${imageId}.json`, alias).catch(error => {
+    // 图片 pending→active 是留言成功条件:任一失败则回滚正文/编号/索引,
+    // 并把本次已激活的图片还原为 pending,保证「被引用 ⇔ active」不变量
+    const activated = []
+    try {
+        for (const { imageId, alias } of aliases) {
+            if (alias.status !== 'active') {
+                alias.status = 'active'
+                await data.setJSON(`uploads/aliases/comments/${imageId}.json`, alias)
+                activated.push({ imageId, alias })
+            }
+        }
+    } catch (error) {
+        await rollbackCommentResources(data, comment.id, { reservationId, number, uid: user.id, date })
+        for (const { imageId, alias } of activated) {
+            alias.status = 'pending'
+            await data.setJSON(`uploads/aliases/comments/${imageId}.json`, alias).catch(rollbackError => {
                 console.error(JSON.stringify({
-                    event: 'comment_alias_active_failed',
+                    event: 'comment_alias_revert_failed',
                     imageId,
-                    error: String(error?.message || error).slice(0, 300),
+                    error: String(rollbackError?.message || rollbackError).slice(0, 300),
                 }))
             })
         }
+        console.error(JSON.stringify({
+            event: 'comment_alias_activation_failed',
+            commentId: comment.id,
+            number,
+            error: String(error?.message || error).slice(0, 300),
+        }))
+        throw httpError(500, '留言创建失败，请稍后再试')
     }
     return comment
 }
@@ -244,6 +265,56 @@ function keyToId(key) {
     return match ? Number(match[1]) : null
 }
 
+function isVisibleFor(comment, viewer) {
+    return !comment.hidden || viewer?.role === 'admin' || viewer?.id === comment.uid
+}
+
+/**
+ * 从升序 ids 中按可见留言数量收集,最多 count 条:
+ * 内部 ID ≈ createdAt*1000(±1 秒),time 参数为 Unix 秒。
+ * 返回 id 降序的可见留言数组。
+ */
+async function collectVisibleComments(data, ids, {
+    count,
+    from,
+    rawCount,
+    beforeTime,
+    viewer,
+    centered,
+}) {
+    let selected = []
+    if (from && rawCount === 1) {
+        const target = await resolveCommentId(data, from)
+        selected = target ? [target] : []
+    } else if (from && rawCount < 0) {
+        selected = ids.filter(id => id > from).reverse()
+    } else if (from) {
+        if (centered && ids.includes(from)) {
+            const index = ids.indexOf(from)
+            selected = ids.slice(Math.max(0, index - Math.floor(count / 2)), index + Math.ceil(count / 2)).reverse()
+        } else {
+            selected = ids.filter(id => id < from).reverse()
+        }
+    } else if (beforeTime) {
+        // id = createdAtMs*1000 + r(0 ≤ r < 1000);time 是 Unix 秒
+        const upperBound = beforeTime * 1_000_000 + 1000
+        selected = ids.filter(id => id <= upperBound).reverse()
+    } else {
+        selected = [...ids].reverse()
+    }
+
+    const comments = []
+    const scanCap = Math.max(200, count * 20 + 200)
+    for (let i = 0; i < selected.length && comments.length < count && i < scanCap; i += 1) {
+        const comment = await getJSON(data, commentKey(selected[i]))
+        if (!comment) continue
+        if (beforeTime && comment.time > beforeTime) continue
+        if (!isVisibleFor(comment, viewer)) continue
+        comments.push(comment)
+    }
+    return comments
+}
+
 export async function listComments(data, query, viewer) {
     const uid = query.get('uid')
     if (uid) return listUserComments(data, query, viewer, uid)
@@ -254,10 +325,11 @@ export async function listComments(data, query, viewer) {
     const count = Math.min(100, Math.max(1, Math.abs(rawCount)))
     const beforeTime = Number(query.get('time') || 0)
 
-    // 按公开编号跳转:number=N 返回该条留言
+    // 按公开编号跳转:number=N 返回该条留言(硬删除 tombstone 返回 404)
     const numberParam = query.get('number')
     if (numberParam) {
         const seat = await getJSON(data, commentNumberKey(Number(numberParam)))
+        if (!seat || seat.tombstone) throw httpError(404, '留言不存在')
         const comment = seat?.commentId
             ? await getJSON(data, commentKey(Number(seat.commentId)))
             : null
@@ -271,42 +343,15 @@ export async function listComments(data, query, viewer) {
     const keys = await listAllCommentKeys(data)
     const ids = keys.map(keyToId).filter(Boolean)
 
-    // 只读窗口内的留言正文,不再全量读取
-    let targetIds = []
-    if (from && rawCount === 1) {
-        const target = await resolveCommentId(data, from)
-        targetIds = target ? [target] : []
-    } else if (from && rawCount < 0) {
-        const idsAbove = ids.filter(id => id > from)
-        targetIds = idsAbove.slice(-count)
-    } else if (from) {
-        const exact = ids.includes(from)
-        if (exact) {
-            const index = ids.indexOf(from)
-            targetIds = ids.slice(Math.max(0, index - Math.floor(count / 2)), index + Math.ceil(count / 2))
-        } else {
-            targetIds = ids.filter(id => id < from).slice(-count)
-        }
-    } else if (beforeTime) {
-        // id ≈ createdAt*1000,上界放宽 1 秒后按 time 精确过滤
-        const upperBound = beforeTime * 1000 + 1000
-        targetIds = ids.filter(id => id <= upperBound).slice(-(count * 2))
-    } else {
-        targetIds = ids.slice(-count)
-    }
-
-    const comments = []
-    for (const id of targetIds) {
-        const comment = await getJSON(data, commentKey(id))
-        if (comment) comments.push(comment)
-    }
-    if (beforeTime) {
-        comments.splice(0, comments.length, ...comments.filter(comment => comment.time <= beforeTime))
-    }
-    const visible = comments
-        .filter(comment => !comment.hidden || viewer?.role === 'admin' || viewer?.id === comment.uid)
-        .sort((a, b) => b.id - a.id)
-        .slice(0, count)
+    // 按可见留言数量收集(count=1 与居中窗口保持跳转语义)
+    const visible = await collectVisibleComments(data, ids, {
+        count,
+        from,
+        rawCount,
+        beforeTime,
+        viewer,
+        centered: Boolean(from && rawCount !== 1 && ids.includes(from)),
+    })
 
     // 旧数据(未迁移)缺少 number 字段时,用 id 顺序作为展示编号
     const needFallback = visible.some(comment => !comment.number)
@@ -330,19 +375,26 @@ async function listUserComments(data, query, viewer, uid) {
         .filter(Boolean)
         .sort((a, b) => b - a)
 
-    let window = ids
-    if (cursor) window = window.filter(id => id < cursor)
-    const hasMore = window.length > offset + count
-    const targetIds = window.slice(offset, offset + count)
+    const window = cursor ? ids.filter(id => id < cursor) : ids
 
-    const comments = []
-    for (const id of targetIds) {
-        const comment = await getJSON(data, commentKey(id))
-        if (comment && (!comment.hidden || viewer?.role === 'admin' || viewer?.id === comment.uid)) {
-            comments.push(comment)
+    // 按可见留言数量分页:扫描到收集够 count 条或窗口结束;
+    // hasMore 只在「窗口内仍有未扫描条目」时为 true,避免末端多发无意义请求
+    const items = []
+    let hasMore = false
+    const scanCap = Math.max(200, count * 20 + 200)
+    let skippedOffset = offset
+    let index = 0
+    for (; index < window.length && items.length < count && index < scanCap; index += 1) {
+        const comment = await getJSON(data, commentKey(window[index]))
+        if (!comment) continue
+        if (!isVisibleFor(comment, viewer)) continue
+        if (skippedOffset > 0) {
+            skippedOffset -= 1
+            continue
         }
+        items.push(comment)
     }
-    const items = await Promise.all(comments.map(comment => getCommentDetail(data, comment, viewer)))
+    hasMore = index < window.length
     return { items, hasMore }
 }
 
@@ -420,7 +472,28 @@ export async function moderateComment(data, commentId, action) {
     if (!comment) throw httpError(404, '留言不存在')
     if (action === 'delete') {
         await data.delete(key)
-        // 公开编号占位永久保留(形成空号,编号不重排)
+        // 公开编号占位转为 tombstone:保留 commentId/number/deletedAt,
+        // 形成空号且不参与编号分配;跳转该编号返回 404
+        if (comment.number) {
+            const seatKey = commentNumberKey(comment.number)
+            const seat = await getJSON(data, seatKey)
+            if (seat) {
+                await data.setJSON(seatKey, {
+                    ...seat,
+                    commentId: comment.id,
+                    number: comment.number,
+                    tombstone: true,
+                    deletedAt: Date.now(),
+                }).catch(error => {
+                    console.error(JSON.stringify({
+                        event: 'comment_seat_tombstone_failed',
+                        commentId,
+                        number: comment.number,
+                        error: String(error?.message || error).slice(0, 300),
+                    }))
+                })
+            }
+        }
         // 日期索引保留:今日留言统计口径为「当天曾发布」(见 docs)
         // likes/reports 保留:作为审计记录,不做清理
         // 用户留言索引删除,避免个人主页分页指向不存在的正文

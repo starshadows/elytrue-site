@@ -37,6 +37,12 @@ const env = {
     ALLOWED_ORIGINS: origin,
 }
 
+function assertIdsDescending(items) {
+    for (let i = 1; i < items.length; i += 1) {
+        assert.ok(items[i - 1].id >= items[i].id, '留言应按 id 降序返回')
+    }
+}
+
 function createState(ip = '127.0.0.1') {
     return {
         ip,
@@ -472,12 +478,19 @@ describe('hard-delete related indexes', () => {
         })
         assert.equal(removed.response.status, 200)
 
-        // 编号占位保留:跳转空号返回 404,新留言从 4 开始
+        // 编号占位保留并转为 tombstone:跳转空号返回 404,新留言从 4 开始
         const jump = await call(state, 'GET', 'comments?number=2')
         assert.equal(jump.response.status, 404)
         const d = await postComment(state, '丁')
         assert.equal(d.number, 4)
-        assert.equal((await state.stores.data.get('indexes/comments/number/2.json', { type: 'json' })).commentId, c2.id)
+        const seat = await state.stores.data.get('indexes/comments/number/2.json', { type: 'json' })
+        assert.equal(seat.commentId, c2.id)
+        assert.equal(seat.tombstone, true)
+        assert.ok(seat.deletedAt)
+
+        // 回复 tombstone 空号 → 404
+        const replyToGap = await call(state, 'POST', 'comments/post', { comment: '回复空号', replyid: 2 })
+        assert.equal(replyToGap.response.status, 404)
 
         // 用户索引已删除:个人主页分页不含被删留言
         const me = await call(state, 'GET', 'user/me')
@@ -491,6 +504,154 @@ describe('hard-delete related indexes', () => {
         const today = shanghaiDateString(Date.now())
         const count = await call(state, 'GET', `comments/count?date=${today}`)
         assert.equal(count.payload.data, 4)
+    })
+})
+
+describe('visible-comment pagination', () => {
+    const state = createState('10.0.11.1')
+    const viewer = createState('10.0.11.2')
+
+    it('pages by visible count on the main list and user list, without duplicates', async () => {
+        await register(state, '分页甲', 'page-a@example.com')
+        viewer.stores = state.stores
+        await register(viewer, '分页丙', 'page-c@example.com')
+        const posts = []
+        for (let i = 1; i <= 6; i += 1) {
+            posts.push(await postComment(state, `留言${i}`))
+        }
+        // 隐藏第 2、4 条
+        await call(state, 'POST', 'admin/bootstrap', undefined, {
+            headers: { 'X-Admin-Bootstrap-Secret': env.ADMIN_BOOTSTRAP_SECRET },
+        })
+        for (const id of [posts[1].id, posts[3].id]) {
+            await call(state, 'POST', 'admin/comments/moderate', { commentId: id, action: 'hide' })
+        }
+
+        // 以普通用户视角分页(同一毫秒发布的留言 id 顺序不保证,按集合+降序断言)
+        const newest = await call(viewer, 'GET', 'comments?count=3')
+        assert.deepEqual(newest.payload.data.map(comment => comment.comment).sort(), ['留言3', '留言5', '留言6'])
+        assertIdsDescending(newest.payload.data)
+
+        const older = await call(viewer, 'GET', `comments?from=${posts[2].id - 1}&count=2`)
+        assert.deepEqual(older.payload.data.map(comment => comment.comment), ['留言1'])
+        const older2 = await call(viewer, 'GET', `comments?from=${posts[0].id - 1}&count=2`)
+        assert.equal(older2.payload.data.length, 0, '已到最旧,无更多内容')
+
+        const me = await call(state, 'GET', 'user/me')
+        const uid = me.payload.data.id
+        const firstPage = await call(viewer, 'GET', `comments?uid=${uid}&count=2`)
+        assert.deepEqual(firstPage.payload.data.items.map(item => item.comment).sort(), ['留言5', '留言6'])
+        assert.equal(firstPage.payload.data.hasMore, true)
+        const secondPage = await call(viewer, 'GET', `comments?uid=${uid}&count=2&cursor=${firstPage.payload.data.items[firstPage.payload.data.items.length - 1].id}`)
+        assert.deepEqual(secondPage.payload.data.items.map(item => item.comment).sort(), ['留言1', '留言3'])
+        assert.equal(secondPage.payload.data.hasMore, false)
+
+        // 管理员可见隐藏留言
+        const adminView = await call(state, 'GET', 'comments?count=6')
+        assert.equal(adminView.payload.data.length, 6)
+    })
+
+    it('keeps scanning past a fully-hidden first page on both lists', async () => {
+        const posts = []
+        for (let i = 1; i <= 4; i += 1) {
+            posts.push(await postComment(state, `乙${i}`))
+        }
+        await call(state, 'POST', 'admin/comments/moderate', { commentId: posts[3].id, action: 'hide' })
+        await call(state, 'POST', 'admin/comments/moderate', { commentId: posts[2].id, action: 'hide' })
+
+        // 最新两页全隐藏,可见内容在更早位置:count=2 应返回后面的可见留言而非空
+        const page = await call(viewer, 'GET', 'comments?count=2')
+        assert.deepEqual(page.payload.data.map(comment => comment.comment).sort(), ['乙1', '乙2'])
+        assertIdsDescending(page.payload.data)
+
+        const me = await call(state, 'GET', 'user/me')
+        const uid = me.payload.data.id
+        // 用户列表同样越过隐藏块,并跨多页不重复、不遗漏
+        const collected = []
+        let cursor
+        for (let round = 0; round < 10; round += 1) {
+            const userPage = await call(viewer, 'GET', `comments?uid=${uid}&count=2${cursor ? `&cursor=${cursor}` : ''}`)
+            collected.push(...userPage.payload.data.items.map(item => item.comment))
+            if (!userPage.payload.data.hasMore) break
+            cursor = userPage.payload.data.items[userPage.payload.data.items.length - 1].id
+        }
+        assert.deepEqual(collected.sort(), ['乙1', '乙2', '留言1', '留言3', '留言5', '留言6'])
+    })
+})
+
+describe('comment image status consistency', () => {
+    const state = createState('10.0.12.1')
+    const png = 'iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mP8/x8AAusB9Wl2nfsAAAAASUVORK5CYII='
+
+    it('refuses to delete images whose status is missing (legacy active)', async () => {
+        await register(state, '旧图用户', 'legacy-img@example.com')
+        const upload = await call(state, 'POST', 'uploads/image', { image: png })
+        const imageId = upload.payload.data.imageId
+        // 模拟 legacy 状态:删除 status 字段
+        const aliasKey = `uploads/aliases/comments/${imageId}.json`
+        const alias = await state.stores.data.get(aliasKey, { type: 'json' })
+        delete alias.status
+        await state.stores.data.setJSON(aliasKey, alias)
+
+        const denied = await call(state, 'DELETE', `uploads/image?imageId=${imageId}`)
+        assert.equal(denied.response.status, 409)
+        assert.ok(await state.stores.data.get(aliasKey, { type: 'json' }), '图片必须保留')
+    })
+
+    it('rolls back the comment and reverts activated aliases when activation fails mid-way', async () => {
+        const data = new FlakyStore({})
+        const firstId = '11111111-1111-4111-8111-111111111111'
+        const secondId = '22222222-2222-4222-8222-222222222222'
+        for (const id of [firstId, secondId]) {
+            await data.setJSON(`uploads/aliases/comments/${id}.json`, {
+                imageId: id,
+                userId: user.id,
+                blobKey: `comments/unit-user/${id}.jpg`,
+                status: 'pending',
+                createdAt: Date.now(),
+            })
+        }
+        // 第二张图片激活失败
+        data.failures = { setJSON: key => key === `uploads/aliases/comments/${secondId}.json` }
+
+        await assert.rejects(
+            () => createComment(data, user, {
+                comment: '激活失败',
+                imageKeys: [firstId, secondId],
+            }, { idFactory: () => 9876543210123555 }),
+            error => error.status === 500,
+        )
+
+        // 留言与索引全部回滚
+        assert.equal((await data.list({ prefix: 'comments/' })).blobs.length, 0)
+        assert.equal((await data.list({ prefix: 'indexes/comments/number/' })).blobs.length, 0)
+        assert.equal((await data.list({ prefix: 'indexes/comments/by-user/' })).blobs.length, 0)
+        // 已激活的第一张被还原为 pending,保持「被引用 ⇔ active」
+        const first = await data.get(`uploads/aliases/comments/${firstId}.json`, { type: 'json' })
+        assert.equal(first.status, 'pending')
+        const second = await data.get(`uploads/aliases/comments/${secondId}.json`, { type: 'json' })
+        assert.equal(second.status, 'pending')
+    })
+
+    it('keeps cleanup away from pending images referenced by existing comments', async () => {
+        await register(state, '引用用户', 'ref-img@example.com')
+        const upload = await call(state, 'POST', 'uploads/image', { image: png })
+        const imageId = upload.payload.data.imageId
+        const posted = await postComment(state, '引用图片', { imageKeys: [imageId] })
+        assert.equal(posted.number, 1)
+
+        // 制造异常状态:把已引用图片的别名改回 pending 且过期
+        const aliasKey = `uploads/aliases/comments/${imageId}.json`
+        const alias = await state.stores.data.get(aliasKey, { type: 'json' })
+        alias.status = 'pending'
+        alias.createdAt = Date.now() - 25 * 60 * 60 * 1000
+        await state.stores.data.setJSON(aliasKey, alias)
+
+        // 触发自动清理(下一次上传)
+        await call(state, 'POST', 'uploads/image', { image: png })
+
+        const after = await state.stores.data.get(aliasKey, { type: 'json' })
+        assert.ok(after, '被留言引用的 pending 图片不得被自动清理')
     })
 })
 
@@ -566,5 +727,43 @@ describe('upload usage accounting', () => {
         assert.equal(after, before - oneImage + oneImage, '旧 pending 被清理,新图计入')
         assert.equal(await state.stores.data.get(`uploads/aliases/comments/${stale}.json`, { type: 'json' }), null)
         assert.ok(fresh)
+    })
+})
+
+describe('timeline time filter', () => {
+    const state = createState('10.0.17.1')
+
+    it('returns comments at or before the given unix-second time, not an empty array', async () => {
+        // id ≈ createdAt*1000;time 为 Unix 秒
+        const oldMs = 1750000000000
+        const oldId = 1750000000000000
+        const newerMs = 1750000002000
+        const newerId = 1750000002000000
+        for (const [id, createdAt, text] of [
+            [oldId, oldMs, '时间轴旧留言'],
+            [newerId, newerMs, '时间轴新留言'],
+        ]) {
+            await state.stores.data.setJSON(`comments/${String(id).padStart(16, '0')}.json`, {
+                id,
+                uid: 'timeline-user',
+                sender: '时间轴用户',
+                comment: text,
+                image: '',
+                hidden: false,
+                createdAt,
+                time: Math.floor(createdAt / 1000),
+            })
+        }
+
+        // 边界前一秒(旧留言的秒值):旧留言应返回,新留言被排除
+        const result = await call(state, 'GET', 'comments?time=1750000001&count=5')
+        assert.equal(result.response.status, 200)
+        assert.ok(result.payload.data.length > 0, '时间轴请求必须返回留言而非空数组')
+        assert.deepEqual(result.payload.data.map(comment => comment.comment), ['时间轴旧留言'])
+        assert.ok(result.payload.data.every(comment => comment.time <= 1750000001))
+
+        // 更早的时间点返回空是正常行为(该时间之前没有留言)
+        const empty = await call(state, 'GET', 'comments?time=1749999999&count=5')
+        assert.equal(empty.payload.data.length, 0)
     })
 })

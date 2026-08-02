@@ -135,21 +135,24 @@ async function readNumberIndexStats(data) {
     const blobs = await listAll(data, 'indexes/comments/number/', Infinity)
     let maxNumber = 0
     let validCount = 0
+    let tombstoneCount = 0
     for (const blob of blobs) {
         const match = /^indexes\/comments\/number\/(\d+)\.json$/u.exec(blob.key)
         const number = match ? Number(match[1]) : null
         const seat = await getJSON(data, blob.key)
         if (number && seat?.commentId != null) {
-            validCount += 1
             maxNumber = Math.max(maxNumber, number)
+            if (seat.tombstone) tombstoneCount += 1
+            else validCount += 1
         }
     }
-    return { count: blobs.length, validCount, maxNumber }
+    return { count: blobs.length, validCount, tombstoneCount, maxNumber }
 }
 
 async function validateIndexes(data, comments) {
     const issues = []
     const byId = new Map(comments.map(entry => [entry.id, entry]))
+    const stats = { activeSeats: 0, tombstoneSeats: 0 }
 
     const numberBlobs = await listAll(data, 'indexes/comments/number/', Infinity)
     const seatByNumber = new Map()
@@ -165,6 +168,15 @@ async function validateIndexes(data, comments) {
             issues.push(`编号索引 ${blob.key} 内容无效`)
             continue
         }
+        if (seat.tombstone) {
+            // 合法 tombstone:硬删除空号,留言本体不应存在
+            stats.tombstoneSeats += 1
+            if (byId.has(Number(seat.commentId))) {
+                issues.push(`编号 ${number} 为 tombstone 但留言 ${seat.commentId} 仍存在`)
+            }
+            continue
+        }
+        stats.activeSeats += 1
         seatByNumber.set(number, Number(seat.commentId))
     }
 
@@ -182,7 +194,7 @@ async function validateIndexes(data, comments) {
     for (const [number, commentId] of seatByNumber) {
         const entry = byId.get(commentId)
         if (!entry) {
-            issues.push(`编号 ${number} 索引指向不存在的留言 ${commentId}`)
+            issues.push(`编号 ${number} 索引指向不存在的留言 ${commentId}(如确已删除应为 tombstone)`)
         } else if (Number(entry.body.number) !== number) {
             issues.push(`留言 ${commentId} 的 number(${entry.body.number}) 与编号索引不一致`)
         }
@@ -206,7 +218,7 @@ async function validateIndexes(data, comments) {
             issues.push(`用户索引 ${byUserKey} 指向错误(${byUserSeat.commentId})`)
         }
     }
-    return issues
+    return { issues, stats }
 }
 
 /**
@@ -268,12 +280,17 @@ async function runMigrationInner(data, options, manifestDir, reportDir, fix, con
         printTable(
             ['前缀', '现有记录数', '应有数量', '差距'],
             [
-                ['indexes/comments/number/', numberStats.validCount, withNumber.length, numberStats.validCount - withNumber.length],
-                ['dates/', dateBlobs.length, comments.length, dateBlobs.length - comments.length],
+                ['indexes/comments/number/(活跃)', numberStats.validCount, withNumber.length, numberStats.validCount - withNumber.length],
+                ['indexes/comments/number/(tombstone)', numberStats.tombstoneCount, '—', '—'],
+                ['dates/', dateBlobs.length, `${comments.length} + 已删(曾发布口径)`, dateBlobs.length < comments.length ? comments.length - dateBlobs.length : 0],
                 ['indexes/comments/by-user/', byUserBlobs.length, comments.length, byUserBlobs.length - comments.length],
             ],
         )
-    
+
+        const numberGap = numberStats.validCount !== withNumber.length
+        const datesGap = dateBlobs.length < comments.length
+        const byUserGap = byUserBlobs.length !== comments.length
+
         const report = {
             generatedAt: new Date().toISOString(),
             mode: fix ? 'fix' : 'report',
@@ -281,6 +298,7 @@ async function runMigrationInner(data, options, manifestDir, reportDir, fix, con
             withNumber: withNumber.length,
             missingNumber: missing.length,
             mixedNumbering: missing.length > 0 && withNumber.length > 0,
+            tombstoneSeats: numberStats.tombstoneCount,
             missingTop: missing.slice(0, 20).map(entry => ({
                 id: entry.id,
                 createdAt: entry.body.createdAt,
@@ -289,18 +307,15 @@ async function runMigrationInner(data, options, manifestDir, reportDir, fix, con
                 commentPreview: previewComment(entry.body),
             })),
             indexes: {
-                number: { count: numberStats.validCount, expected: withNumber.length, gap: numberStats.validCount - withNumber.length },
-                dates: { count: dateBlobs.length, expected: comments.length, gap: dateBlobs.length - comments.length },
+                number: { count: numberStats.validCount, tombstone: numberStats.tombstoneCount, expected: withNumber.length, gap: numberStats.validCount - withNumber.length },
+                dates: { count: dateBlobs.length, expected: comments.length, gap: datesGap ? comments.length - dateBlobs.length : 0 },
                 byUser: { count: byUserBlobs.length, expected: comments.length, gap: byUserBlobs.length - comments.length },
             },
             maxNumber,
             hint,
         }
-    
-        const gaps = missing.length > 0
-            || numberStats.validCount !== withNumber.length
-            || dateBlobs.length !== comments.length
-            || byUserBlobs.length !== comments.length
+
+        const gaps = missing.length > 0 || numberGap || datesGap || byUserGap
     
         if (!fix) {
             await writeReport(report, reportDir)
@@ -329,25 +344,38 @@ async function runMigrationInner(data, options, manifestDir, reportDir, fix, con
             say(`编号范围:${start} – ${start + missing.length - 1}(从现有最大编号 ${maxNumber} + 1 开始)`)
         }
     
-        // 迁移清单:旧内容快照 + 新增索引 key 清单(回滚/审计依据)
+        // 迁移清单:旧内容快照 + 计划候选编号 + 实际分配结果(回滚/审计依据)
+        // 计划候选按 missing 顺序滚动递增;执行遇冲突后以实际结果为准
+        let plannedNumber = maxNumber + 1
         const manifest = {
             generatedAt: new Date().toISOString(),
             note: '--fix 会修改 comments/ 本体(number 字段)。回滚必须恢复运行前的完整备份(含 comments/),仅删除索引不能恢复。',
             comments: comments.map(entry => {
                 const createdAt = commentCreatedAt(entry.body)
-                return {
+                const entryRecord = {
                     key: entry.key,
                     id: entry.id,
                     uid: entry.body.uid,
                     createdAt: new Date(createdAt).toISOString(),
                     numberBefore: entry.body.number ?? null,
                     bodySnapshot: entry.body,
+                    plannedSeatKey: null,
+                    actualSeatKey: null,
+                    actualNumber: null,
                     indexKeys: {
-                        seat: commentNumberKey(entry.body.number ?? maxNumber + 1),
                         date: dateCommentsKey(shanghaiDateString(createdAt), entry.id),
                         byUser: userCommentsKey(entry.body.uid, entry.id),
                     },
                 }
+                if (entry.body.number == null) {
+                    entryRecord.plannedSeatKey = commentNumberKey(plannedNumber)
+                    plannedNumber += 1
+                } else {
+                    entryRecord.plannedSeatKey = commentNumberKey(entry.body.number)
+                    entryRecord.actualSeatKey = commentNumberKey(entry.body.number)
+                    entryRecord.actualNumber = entry.body.number
+                }
+                return entryRecord
             }),
         }
         const manifestPath = resolve(manifestDir, `rebuild-comment-indexes-manifest-${Date.now()}.json`)
@@ -355,7 +383,9 @@ async function runMigrationInner(data, options, manifestDir, reportDir, fix, con
         await writeFile(manifestPath, JSON.stringify(manifest, null, 2))
         say(`迁移清单已写入:${manifestPath}(回滚需另备完整备份)`)
         report.manifestPath = manifestPath
-    
+
+        const manifestByKey = new Map(manifest.comments.map(entry => [entry.key, entry]))
+
         say('\n==== 执行修复 ====')
         const executed = []
         const assigned = []
@@ -375,6 +405,14 @@ async function runMigrationInner(data, options, manifestDir, reportDir, fix, con
                 }
             }
             if (claimed === null) throw new Error(`留言 ${id} 编号分配失败(尝试 2000 次仍冲突)`)
+
+            // 记录实际分配(可能与计划候选不同,如遇编号冲突)
+            const manifestEntry = manifestByKey.get(key)
+            if (manifestEntry) {
+                manifestEntry.actualSeatKey = commentNumberKey(claimed)
+                manifestEntry.actualNumber = claimed
+            }
+
             number += 1
     
             body.number = claimed
@@ -420,13 +458,16 @@ async function runMigrationInner(data, options, manifestDir, reportDir, fix, con
         say('\n==== 修复后校验 ====')
         const postComments = await loadComments(data)
         const validation = await validateIndexes(data, postComments)
-        if (validation.length === 0) {
-            say(`校验通过:${postComments.length} 条留言全部有 number,编号/日期/用户索引完备且一致。`)
+        if (validation.issues.length === 0) {
+            say(`校验通过:${postComments.length} 条留言全部有 number,编号/日期/用户索引完备且一致(${validation.stats.tombstoneSeats} 个 tombstone 空号)。`)
         } else {
-            say(`校验发现问题 ${validation.length} 条:`)
-            for (const issue of validation) say(`  ! ${issue}`)
+            say(`校验发现问题 ${validation.issues.length} 条:`)
+            for (const issue of validation.issues) say(`  ! ${issue}`)
         }
-    
+
+        // 执行完成后重写清单:补上实际分配结果
+        await writeFile(manifestPath, JSON.stringify({ ...manifest, executedAt: new Date().toISOString() }, null, 2))
+
         report.mode = 'fix'
         report.plan = {
             missingCount: missing.length,
@@ -435,9 +476,9 @@ async function runMigrationInner(data, options, manifestDir, reportDir, fix, con
         }
         report.assigned = assigned
         report.executed = executed
-        report.validation = { ok: validation.length === 0, issues: validation }
+        report.validation = { ok: validation.issues.length === 0, issues: validation.issues, tombstoneSeats: validation.stats.tombstoneSeats }
         await writeReport(report, reportDir)
-        return { report, aborted: false, validation, manifestPath }
+        return { report, aborted: false, validation: validation.issues, manifestPath }
     }
     
 async function writeReport(report, reportDir = resolve('exports')) {
@@ -458,8 +499,15 @@ async function main() {
     const fix = args.includes('--fix')
     const confirmProductionMigration = args.includes('--confirm-production-migration')
     const allowMixedNumbering = args.includes('--allow-mixed-numbering')
-    const manifestFlag = args.find(arg => arg.startsWith('--manifest-dir='))
-    const manifestDir = manifestFlag ? manifestFlag.split('=')[1] : resolve('exports')
+    // 同时支持 --manifest-dir exports 与 --manifest-dir=exports
+    let manifestDir = resolve('exports')
+    const manifestFlagIndex = args.indexOf('--manifest-dir')
+    if (manifestFlagIndex >= 0 && args[manifestFlagIndex + 1]) {
+        manifestDir = resolve(args[manifestFlagIndex + 1])
+    } else {
+        const equalsFlag = args.find(arg => arg.startsWith('--manifest-dir='))
+        if (equalsFlag) manifestDir = resolve(equalsFlag.split('=')[1])
+    }
 
     sayError(`连接 Blob 存储 ${DATA_STORE} ...`)
     const data = getStore({ name: DATA_STORE, projectId, token, consistency: 'strong' })

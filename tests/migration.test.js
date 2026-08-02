@@ -174,7 +174,7 @@ describe('comment index migration', () => {
         )
     })
 
-    it('writes a manifest with body snapshots and index key lists before changing data', async () => {
+    it('writes a manifest with body snapshots and planned/actual number keys', async () => {
         const store = new MemoryStore()
         await seedComment(store, { id: 100, createdAt: 1000 })
         const dir = mkdtempSync(join(tmpdir(), 'elytrue-manifest-'))
@@ -189,9 +189,68 @@ describe('comment index migration', () => {
         assert.equal(manifest.comments.length, 1)
         assert.equal(manifest.comments[0].bodySnapshot.comment, '留言100')
         assert.equal(manifest.comments[0].numberBefore, null)
-        assert.ok(manifest.comments[0].indexKeys.seat.includes('indexes/comments/number/'))
+        assert.equal(manifest.comments[0].plannedSeatKey, 'indexes/comments/number/1.json')
+        assert.equal(manifest.comments[0].actualSeatKey, 'indexes/comments/number/1.json')
+        assert.equal(manifest.comments[0].actualNumber, 1)
         assert.ok(manifest.comments[0].indexKeys.date.startsWith('dates/'))
         assert.ok(manifest.comments[0].indexKeys.byUser.startsWith('indexes/comments/by-user/'))
+        assert.ok(manifest.executedAt, '执行完成后应重写清单补上实际结果')
+    })
+
+    it('records distinct planned candidates for multiple missing comments and actual numbers after conflicts', async () => {
+        const store = new MemoryStore()
+        await seedComment(store, { id: 100, createdAt: 1000 })
+        await seedComment(store, { id: 200, createdAt: 2000 })
+        // 预占一个「无效 seat」(不参与 maxNumber 统计),制造实际编号冲突
+        await store.setJSON('indexes/comments/number/1.json', { commentId: null, createdAt: 0 })
+        const dir = mkdtempSync(join(tmpdir(), 'elytrue-manifest-conflict-'))
+        const result = await runCommentIndexMigration(store, {
+            ...FIX_CONFIRM,
+            manifestDir: dir,
+            reportDir: dir,
+        })
+        const manifest = JSON.parse(readFileSync(result.manifestPath, 'utf8'))
+        assert.deepEqual(manifest.comments.map(entry => entry.plannedSeatKey), [
+            'indexes/comments/number/1.json',
+            'indexes/comments/number/2.json',
+        ])
+        assert.deepEqual(manifest.comments.map(entry => entry.actualNumber), [2, 3], '冲突后实际编号应后移')
+        assert.equal(manifest.comments[0].actualSeatKey, 'indexes/comments/number/2.json')
+    })
+
+    it('keeps reports healthy after a hard delete via tombstone seats', async () => {
+        const store = new MemoryStore()
+        await seedMigrated(store, { id: 100, createdAt: 1000, number: 1 })
+        await seedMigrated(store, { id: 200, createdAt: 2000, number: 2 })
+
+        // 模拟硬删除 100:正文删除、seat 转 tombstone、用户索引删除、日期索引保留
+        await store.delete(`comments/${String(100).padStart(16, '0')}.json`)
+        await store.setJSON('indexes/comments/number/1.json', {
+            commentId: 100,
+            number: 1,
+            tombstone: true,
+            deletedAt: 3000,
+            createdAt: 1000,
+        })
+        await store.delete(`indexes/comments/by-user/u1/${String(100).padStart(16, '0')}.json`)
+
+        // 报告模式:不应把 tombstone 判为悬空缺口
+        const report = await runCommentIndexMigration(store, {
+            manifestDir: workDir,
+            reportDir: workDir,
+        })
+        assert.equal(report.report.indexes.number.gap, 0)
+        assert.equal(report.report.indexes.byUser.gap, 0)
+        assert.equal(report.report.tombstoneSeats, 1)
+
+        // 修复模式校验:合法 tombstone 不算问题
+        const fix = await runCommentIndexMigration(store, {
+            ...FIX_CONFIRM,
+            manifestDir: workDir,
+            reportDir: workDir,
+        })
+        assert.equal(fix.aborted, false)
+        assert.equal(fix.validation.length, 0, '合法 tombstone 不应出现在校验问题中')
     })
 
     it('recovers from a mid-migration failure after restoring the partial writes', async () => {

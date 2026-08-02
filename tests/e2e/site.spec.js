@@ -350,3 +350,103 @@ test('个人主页分页：滚动到底加载更多，显示共 N 条留言', as
     }
     await expect(userHome.getByText(/共\s*60\s*条留言/)).toBeVisible()
 })
+
+test('登录竞态：已有 Cookie 立即点击新留言,不弹登录框', async ({ page }) => {
+    await page.goto('/')
+    await expectVisitor(page)
+
+    // 通过 API 注册并写入 cookie
+    const name = unique('竞态旅人')
+    const register = await page.request.post('/api/user/register', {
+        data: { name, email: `race_${Date.now()}@example.com`, password: PASSWORD },
+        headers: { origin: BASE, 'x-forwarded-for': '203.0.113.80' },
+    })
+    expect(register.ok()).toBeTruthy()
+
+    // 延迟 /user/me,制造初始化未完成窗口
+    await page.route('**/api/user/me', async route => {
+        await new Promise(resolve => setTimeout(resolve, 4000))
+        await route.continue()
+    })
+    await page.reload()
+    await liftPanel(page)
+    // 初始化尚未完成时立即点击
+    await page.locator('#newMsg').click()
+    await expect(page.locator('#popups .loginPopup')).toHaveCount(0)
+    await expect(page.locator('#newCommentBox')).toBeVisible({ timeout: 10000 })
+})
+
+test('登录态初始化：首次加载只请求一次 /user/me', async ({ page }) => {
+    let meRequests = 0
+    await page.route('**/api/user/me', async route => {
+        meRequests += 1
+        await route.continue()
+    })
+    await page.goto('/')
+    await expectVisitor(page)
+    await page.waitForTimeout(200)
+    expect(meRequests).toBe(1)
+    // 点击新留言触发 ensureLoggedIn → 复用首次 Promise,不再发 /user/me
+    await liftPanel(page)
+    await page.locator('#newMsg').click()
+    await expect(page.locator('#popups .loginPopup')).toBeVisible()
+    await page.waitForTimeout(200)
+    expect(meRequests).toBe(1)
+})
+
+test('举报按钮：留言先加载、用户后登录时自动出现', async ({ page }) => {
+    await page.goto('/')
+    await expectVisitor(page)
+    await liftPanel(page)
+    await expect(page.locator('#comments .commentItem').first()).toBeVisible()
+    await expect(page.locator('#comments .btn.report')).toHaveCount(0)
+
+    // 第二个用户登录(其没有留言,user1 的留言可见 → 举报按钮出现)
+    const reporter = unique('举报旅人')
+    const register = await page.request.post('/api/user/register', {
+        data: { name: reporter, email: `rp_${Date.now()}@example.com`, password: PASSWORD },
+        headers: { origin: BASE, 'x-forwarded-for': '203.0.113.81' },
+    })
+    expect(register.ok()).toBeTruthy()
+    await page.evaluate(() => loadUserInfo())
+    await expect(page.locator('#userInfoName')).toHaveText(reporter)
+    await expect(page.locator('#comments .btn.report').first()).toBeVisible()
+
+    // 登出后按钮消失
+    await page.evaluate(() => User.logout())
+    await expect(page.locator('#userInfoName')).toHaveText(/访客/)
+    await expect(page.locator('#comments .btn.report')).toHaveCount(0)
+})
+
+test('时间轴：跳转到今天返回留言而非空数组', async ({ page }) => {
+    await page.goto('/')
+    await loginByIdentifier(page, user1Name, PASSWORD)
+    await expectLoggedIn(page, user1Name)
+
+    const me = await page.request.get('/api/user/me', { headers: { origin: BASE } })
+    const csrf = (await me.json()).data.csrfToken
+    const posted = await page.request.post('/api/comments/post', {
+        data: { comment: `时间轴测试 ${Date.now()}` },
+        headers: { origin: BASE, 'x-forwarded-for': '203.0.113.82', 'x-csrf-token': csrf },
+    })
+    expect(posted.ok()).toBeTruthy()
+
+    await liftPanel(page)
+    const responsePromise = page.waitForResponse(
+        response => response.url().includes('/api/comments') && response.url().includes('time='),
+        { timeout: 10000 },
+    )
+    // 注入今天的日期节点并点击时间轴容器(走真实 handler → loadComments({time}))
+    await page.evaluate(() => {
+        const container = document.getElementById('timelineContainer')
+        const el = document.createElement('div')
+        el.dataset.time = new Date().toDateString()
+        container.appendChild(el)
+        el.click()
+        el.remove()
+    })
+    const response = await responsePromise
+    const body = await response.json()
+    expect(body.data.length).toBeGreaterThan(0)
+    await expect(page.locator('#comments .commentItem').first()).toBeVisible()
+})

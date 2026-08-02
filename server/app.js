@@ -335,7 +335,9 @@ async function deleteUploadedImage(context, stores) {
     const aliasKey = `uploads/aliases/comments/${imageId}.json`
     const alias = await getJSON(stores.data, aliasKey)
     if (!alias || alias.userId !== auth.user.id) throw httpError(404, '图片不存在')
-    if (alias.status === 'active') throw httpError(409, '图片已关联留言，无法删除')
+    // 只有明确标记 pending 的临时图片可删除;
+    // status 缺失按 active 处理(旧数据/旧留言图片),禁止删除
+    if (alias.status !== 'pending') throw httpError(409, '图片已关联留言，无法删除')
     // 先删 Blob,再删别名,最后扣减统计;任何一步失败都不扣减,避免重复/错误扣减
     try {
         await stores.uploads.delete(alias.blobKey)
@@ -366,10 +368,38 @@ async function cleanupStalePendingImages(stores, user) {
     const STALE_MS = 24 * 60 * 60 * 1000
     const cutoff = Date.now() - STALE_MS
     const blobs = await listAll(stores.data, 'uploads/aliases/comments/').catch(() => [])
+    // 通过用户留言索引核对引用,避免删除已被留言引用的图片
+    // (正常不变量下被引用 ⇔ active,此处防御 legacy/异常状态)
+    let referencedIds = null
+    const userIndexBlobs = await listAll(stores.data, `indexes/comments/by-user/${user.id}/`).catch(() => [])
+    if (userIndexBlobs.length > 0) {
+        const referenced = new Set()
+        for (const blob of userIndexBlobs) {
+            const match = String(blob.key).match(/\/by-user\/[^/]+\/(\d+)\.json$/u)
+            const id = match ? Number(match[1]) : 0
+            if (!id) continue
+            const comment = await getJSON(stores.data, `comments/${String(id).padStart(16, '0')}.json`).catch(() => null)
+            if (comment?.image) {
+                for (const imageId of String(comment.image).split(',')) {
+                    if (imageId) referenced.add(imageId)
+                }
+            }
+        }
+        referencedIds = referenced
+    }
+
     for (const blob of blobs) {
         const alias = await getJSON(stores.data, blob.key).catch(() => null)
         if (!alias || alias.userId !== user.id || alias.status !== 'pending') continue
         if (Number(alias.createdAt || 0) > cutoff) continue
+        if (referencedIds?.has(alias.imageId)) {
+            console.error(JSON.stringify({
+                event: 'pending_image_cleanup_skipped_referenced',
+                userId: user.id,
+                imageId: alias.imageId,
+            }))
+            continue
+        }
         try {
             await stores.uploads.delete(alias.blobKey)
             await stores.data.delete(blob.key)
