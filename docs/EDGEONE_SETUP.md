@@ -21,6 +21,8 @@ middleware.js：Edge Runtime / Web APIs / ES2023+
 
 `cloudFunctions.nodejs` 只保留平台支持的 `maxDuration` 等字段，不声明 runtime 或 nodeVersion。生产 Functions 始终按平台管理的 Node 20.x 编写。
 
+服务端开发类型固定为 `@types/node@20.19.43`。CI 的 `server-node20` 任务必须继续在 Node 20.x 下依次执行 `npm ci`、`npm run check:server` 和 `npm run test:server`；运行时边界脚本只是补充门禁，不能替代真实 Node 20 类型和执行验证。
+
 ## 2. 环境变量与绑定
 
 仅在 EdgeOne 项目设置保存：
@@ -33,6 +35,8 @@ middleware.js：Edge Runtime / Web APIs / ES2023+
 - `ALLOWED_ORIGINS`：允许的 EdgeOne 预览域与正式域，逗号分隔。
 
 真实值不得写入仓库、构建日志或前端变量。
+
+`PUBLIC_SITE_URL` 也参与会话 Cookie 的 `Secure` 判断。Cloud Function 依次检查边缘转发协议首值、请求 URL 协议和该公开 URL；正式 HTTPS 部署必须配置为 `https://`，本地 HTTP Mock 不配置时仍生成可用的非 Secure Cookie。会话创建、滑动续期、注销和删除 Cookie 共用同一判断。
 
 绑定两个 Pages Blob Store：
 
@@ -70,13 +74,15 @@ npm audit
 
 完整 `npm audit` 可能报告只属于精确锁定 EdgeOne CLI 的传递开发依赖；按 `docs/REFACTOR_AUDIT.md` 逐项复核，不使用 `npm audit fix --force`，也不把 CLI 改成运行时 `npx` 下载。
 
+2026-08-03 本轮维护明确禁止浏览器验证，因此只执行上述非浏览器命令；Playwright/E2E 按任务要求未执行。现有 E2E 与视觉基线保留，日常发布流程仍可在获准环境中执行。
+
 部署预览后检查：
 
 - `GET /api/health` 返回目标 `version`、`buildTime` 和 `commitTime`。
 - 注册、用户名/邮箱登录、刷新恢复、退出与找回密码。
 - 留言发布、回复、点赞、举报、编号跳转和用户主页分页。
 - 桌面/移动背景焦点、主题、音乐恢复、语言、PWA。
-- HTML/API 缓存头、`/assets/*` immutable、`/res/*` 重新验证以及 CSP。
+- HTML/API/图片分类安全头、`/assets/*` immutable、`/res/*` 重新验证、HSTS 以及 HTML CSP。HSTS 必须为 `max-age=31536000; includeSubDomains` 且不含 preload；HTML `script-src` 必须保持仅 `'self'`。
 - Cloud Functions 日志不包含密码、重置 token、完整邮箱密文或 API Key。
 
 ## 5. 域名与回滚
@@ -127,3 +133,4 @@ node --test tests/integration.test.js
 - `usage/uploads.json` 可能因跨实例并发出现偏差；以 alias `size` 重算为准。
 - 图片先 pending，留言成功后 active；清理任务不得删除已被历史留言引用的图片。
 - 留言硬删除永久保留公开编号墓碑和日期“曾发布”记录，避免编号重排。
+- 新数据自动写公开编号反向记录；旧举报仅在字段、本体和反向记录均无法解析时进行每页 100、最多 10 页的有限兼容扫描，并以 5 分钟缓存和渐进回填避免重复扫描。该方案不要求生产数据迁移。

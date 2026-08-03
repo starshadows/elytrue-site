@@ -14,19 +14,19 @@ middleware.js：Edge Runtime / Web APIs / ES2023+
 | Cloud Functions  | `cloud-functions/`、`server/`、服务端可用的 `shared/`   | 平台管理的 Node 20.x、EdgeOne Blob SDK、Web `Request`/`Response` | Node 22 独占 API、Vue/Vite/Playwright、浏览器全局         |
 | Edge Runtime     | 根目录 `middleware.js`                                  | ES2023+、`Request`、`Response`、`URL`、`context.env`、Edge KV    | `node:*`、fs/path、Node crypto、Buffer、process、文件系统 |
 
-`.nvmrc` 是推荐本地构建版本；`package.json#engines.node` 是开发/构建工具链支持范围；`edgeone.json#nodeVersion` 是 EdgeOne 构建版本。三者都不会改变平台管理的 Cloud Functions Node 20.x。
+`.nvmrc` 是推荐本地构建版本；`package.json#engines.node` 是开发/构建工具链支持范围；`edgeone.json#nodeVersion` 是 EdgeOne 构建版本。三者都不会改变平台管理的 Cloud Functions Node 20.x。服务端类型固定解析为 `@types/node@20.19.43`，以 ES2022 target、Node 20 类型和独立 Node 20 CI 共同约束生产能力。
 
 ## 请求与模块流
 
 ```text
 浏览器
   ├─ 静态 HTML、/assets/*、/res/* ──> EdgeOne 静态资源
-  └─ /api/* ──> middleware.js（边缘跳转/限流）
+  └─ /api/* ──> middleware.js（边缘跳转/限流/按内容类型附加安全头）
                   └─ cloud-functions/api/[[default]].js
                        └─ server/app.js + routes/registry.js
                             ├─ middleware/：来源、环境、身份
-                            ├─ services/：认证与留言用例
-                            ├─ repositories/：一致性读取/条件写
+                            ├─ services/：图片、密码重置、举报与管理员用例
+                            ├─ repositories/：图片、用户、举报的一致性存储访问
                             ├─ domain/：Blob key 合同
                             └─ storage.js：elytrue-data / elytrue-uploads
 ```
@@ -35,7 +35,7 @@ EdgeOne 对精确 `/* -> /index.html` 规则先匹配静态资源和 Functions�
 
 ## 前端
 
-`src/app/App.vue` 是唯一根应用。`src/features/` 按 auth、comments、gallery、music、theme、settings、timeline 和 admin 提供 Composition API 边界；现有复杂交互由显式 controller 逐步承接，不再向 `window` 批量暴露模块。关键 class、ID、DOM 顺序、背景顺序/焦点和动画参数由视觉基线保护。
+`src/app/App.vue` 是唯一根应用。`src/features/` 按 auth、comments、gallery、music、theme、settings、timeline 和 admin 提供 Composition API 边界。Auth store 真实持有 `loginState`、`userId` 和 profile，负责单飞初始化、刷新与会话失效；Theme controller 真实持有当前主题、背景、caption、轮播计时器和主题行为。旧 controller 只在 DOM 弹窗与未迁移领域继续作为兼容边界。关键 class、ID、DOM 顺序、背景顺序/焦点和动画参数保持不变。
 
 `src/config/site.ts` 是站点、SEO 和中英文文案来源；`src/config/assets.ts` 是 16 张背景、作者/来源、原图映射和 10 首音乐来源。PWA manifest 在构建前从站点配置生成。
 
@@ -54,17 +54,22 @@ EdgeOne 对精确 `/* -> /index.html` 规则先匹配静态资源和 Functions�
 
 历史数据无需迁移即可读取、更新和删除；代码不依赖 JSON 属性顺序或空白。
 
+新留言会建立按内部留言 ID 指向公开编号的轻量反向记录；新举报同时保存 `commentNumber`。读取历史举报时依次使用举报字段、仍存在的留言本体和反向记录。仅对无法解析且已删除的旧举报执行每页 100、最多 10 页的兼容扫描，结果（含未命中）缓存 5 分钟，命中后渐进回填举报与反向记录；不要求生产全量迁移。
+
 ## 缓存与 CSP
 
 - `/assets/*` 是 Vite hash 或 `elytrue-20260724` 版本目录：`public, max-age=31536000, immutable`。
 - `/res/*` 未 hash：`public, max-age=300, must-revalidate`。
 - HTML、manifest 和其他未版本化资源：`no-cache`；`/api/*`：`no-store`。
-- `script-src 'self'` 已启用；主应用和保留的 `/yumeniwa/` 均无 HTML 内联事件或内联脚本。
+- EdgeOne 配置对所有响应设置 `Strict-Transport-Security: max-age=31536000; includeSubDomains`，暂不使用 preload。
+- Edge Runtime 根据最终 `Content-Type` 管理页面头：HTML 使用 `script-src 'self'`、`X-Frame-Options: DENY` 和 Permissions Policy；API JSON 与图片二进制不附加页面 CSP。
 - `style-src 'self' 'unsafe-inline'` 暂时保留，因为背景焦点、播放器进度、手势位移、图片缩放、弹窗动画以及 Vue `:style` 仍需运行时样式。移除条件见重构审计。
 
 ## 自动化边界
 
-`check:runtime` 同时运行无 Node 类型的 WebWorker/ES2023 middleware 类型检查和导入静态扫描。`check:server` 使用独立 `tsconfig.server.json` 对 Node 20 生产服务端做 `checkJs`；`test:server` 不加载 Vite、Vue SFC 或 Playwright。`check:build` 扫描最终部署资源，证明服务端、测试、EdgeOne CLI 和 Node 专属模块不进入前端 bundle。
+`check:runtime` 同时运行无 Node 类型的 WebWorker/ES2023 middleware 类型检查和导入静态扫描，并阻断 Node 21+ 的 SQLite、`process.getBuiltinModule`、新版 `import.meta` 与文件系统 glob API。`check:server` 使用独立 `tsconfig.server.json` 和 Node 20 类型对生产服务端做 `checkJs`，已启用 `strictNullChecks`、`noUncheckedIndexedAccess`、`alwaysStrict` 等增量严格选项；`test:server` 不加载 Vite、Vue SFC 或 Playwright。`check:build` 扫描最终部署资源，证明服务端、测试、维护脚本、环境文件、source map、EdgeOne CLI 和 Node 专属模块不进入前端 bundle。
+
+2026-08-03 本轮维护未启动浏览器；Playwright/E2E 按任务要求未执行。
 
 ## 平台限制
 

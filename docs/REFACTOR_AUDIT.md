@@ -2,6 +2,39 @@
 
 基线提交：`3b3b69d02869abcbfd20074e1d311e9af2517537`
 
+## 2026-08-03 增量维护
+
+本轮从远端 `main` 的 `901fb29` 开始，保持主题、视觉、动画、DOM、API、Blob key、Cookie、CSRF、密码/邮箱格式和首个注册用户自动成为管理员的行为。
+
+- 会话 Cookie 统一由 `isSecureRequest` 判断：依次读取 `x-forwarded-proto` 首值、请求 URL 协议和 `PUBLIC_SITE_URL`。创建、滑动续期、注销和删除均走同一逻辑；正式 EdgeOne HTTPS 带 `Secure`，未配置 HTTPS 来源的本地 HTTP Mock 不带。
+- `@types/node` 声明与 lockfile 均固定为 `20.19.43`；服务端 target 保持 ES2022，运行时边界阻断 Node 21+ SQLite、`process.getBuiltinModule`、新版 `import.meta` 和文件系统 glob API。Node 20 CI 继续执行 `npm ci`、`check:server`、`test:server`。
+- `tsconfig.server.json` 已启用 `strictNullChecks`、`noUncheckedIndexedAccess`、`alwaysStrict`、`strictBindCallApply`、`strictBuiltinIteratorReturn` 和 `strictFunctionTypes`。`strict`、`noImplicitAny` 暂未整体开启：现有 JS 打开两者仍有 444 个错误，其中 357 个为 TS7006；只开启 `noImplicitAny` 仍有 426 个错误。`skipLibCheck` 暂留，因为此轮只收紧生产 JS，不把第三方声明升级风险混入行为重构；没有用 exclude、`@ts-ignore` 或 `any` 掩盖。
+- `src/index.js` 按仓库物理行从 2410 行降到 2209 行。新增 `features/auth/auth-store.ts`，真实持有登录状态、用户 ID、profile、单飞初始化、刷新和失效；新增 `features/theme/theme-controller.ts`，真实持有主题、背景、caption、定时器、布局与音乐联动。Comments、Music、Timeline、Popup、Viewport/PWA 及留言 DOM/加载/编辑仍是后续迁移债务。
+- `server/app.js` 按仓库物理行从 594 行降到 423 行，主要保留路由匹配、解析、service 调用、响应适配和顶层错误边界。新增 image/user/report repositories，以及 image/password-reset/report/admin services；图片 pending/active、别名与用量、密码重置、举报和管理员流程已移出入口。只做转发的 auth/comment service 已删除。
+- 新留言建立按内部 ID 查询公开编号的轻量反向记录，新举报写 `commentNumber`。读取顺序为举报字段、留言本体、反向记录；只有仍无法解析且已删除的旧举报才每页 100、最多 10 页扫描旧编号座位。命中会渐进回填，命中与未命中均缓存 5 分钟，不要求生产迁移，正常管理请求不再用 `Infinity` 扫编号。
+- 旧外部服务器全屏代理入口、canonical/alternate、iframe、脚本和 4 个文件已彻底删除；生产源码与 `dist` 的路径和内容均有静态门禁，旧路径使用现有 SPA fallback。
+- `edgeone.json` 对所有响应加入一年期、含子域且不含 preload 的 HSTS。Edge Runtime 按 `Content-Type` 只给 HTML 添加页面 CSP、`X-Frame-Options` 与 Permissions Policy；API JSON 和图片二进制无页面 CSP。HTML `script-src` 仅 `'self'`；`style-src 'unsafe-inline'` 暂留给背景焦点、进度、手势、缩放、弹窗动画和 Vue 运行时样式。
+- 本轮没有设置真实 EdgeOne 凭据，没有访问或修改 Blob/KV，没有运行生产迁移，没有创建账号，也没有部署 EdgeOne。Playwright/E2E 按任务要求未执行。
+
+本轮最终非浏览器验收：
+
+| 命令                        | 结果                                                                                                     |
+| --------------------------- | -------------------------------------------------------------------------------------------------------- |
+| `npm ci`                    | 成功；另以真实 Node 20.19.5 + npm 10.9.9 全新安装 912 个包                                               |
+| `npm run lint`              | 成功，0 warning                                                                                          |
+| `npm run format:check`      | 成功                                                                                                     |
+| `npm run check`             | 成功；Vue、测试、Edge Runtime 类型和运行时边界通过                                                       |
+| `npm run check:server`      | 成功；本地默认环境与真实 Node 20.19.5 均通过                                                             |
+| `npm test`                  | 成功；服务端 122 项中 116 通过、6 项真实凭据测试跳过；前端 10 项通过                                     |
+| `npm run test:server`       | 成功；真实 Node 20.19.5 下同为 116 通过、6 跳过                                                          |
+| `npm run check:assets`      | 成功；60 个 `public/` 文件、84.71 MiB、59 个静态引用                                                     |
+| `npm run build:edgeone`     | 成功；Vite 构建与 7 项产物检查通过；无测试/脚本/环境文件/凭据/source map/旧代理标记，API 入口与 SPA 分离 |
+| `npm audit --omit=dev`      | 成功；0 漏洞                                                                                             |
+| `npm audit`                 | 按预期非零；12 moderate、14 high、3 critical                                                             |
+| Playwright / Chromium / E2E | 按任务要求未执行                                                                                         |
+
+完整 audit 的 29 项告警都只由 `edgeone@1.6.19` 本地 Makers CLI 及其传递开发依赖引入，主要来源为内嵌 npm/sigstore/minimatch、COS SDK 的 XML/request 链、旧 esbuild 和 undici。它们不进入 `dist`，也不进入 `server/` 或 `cloud-functions/` 的生产 import graph；`npm audit --omit=dev` 为 0，产物和运行时边界测试均通过。部分传递包存在单独修复版，但当前 registry 最新稳定 EdgeOne CLI 仍为 `1.6.19`，没有可兼容升级的根版本；audit 还明确报告该 CLI 的旧 esbuild/undici 无根级自动修复。未运行 `npm audit fix --force`，继续等待上游发布兼容版本。
+
 ## 基线验证
 
 | 命令                    | 原始结果                                                                                                       |
@@ -146,15 +179,11 @@ Store 名称保持：
 - favicon、社交分享图、字体、默认头像和当前 UI 引用的 SVG。
 - `ASSETS.md`、`NOTICE.md` 及页面中的作者、来源和权利说明。
 
-直接访问保护：
-
-- `public/yumeniwa/` 可由直接 URL 访问，但依赖旧外部服务器；在无法证明用户不依赖前不删除。
-
 ### 第六阶段素材审计结果
 
-- 完整清单见 `docs/ASSET_INVENTORY.md`。当前部署素材为 63 个文件、84.72 MiB；16 张 WebP、16 张原图、10 首音乐和 16 个当前 `res` 文件均由静态引用或类型化配置覆盖。
+- 完整清单见 `docs/ASSET_INVENTORY.md`。该历史阶段部署素材为 63 个文件、84.72 MiB；本轮删除旧代理后为 60 个文件、84.71 MiB，当前 16 张 WebP、16 张原图、10 首音乐和 16 个 `res` 文件仍由静态引用或类型化配置覆盖。
 - 删除 Vercel 配置、旧 API 产物转换器、HLS 辅助页、已关闭主题/旧文案/kami 合并逻辑及隐藏小游戏；同时移除缺失 `xh_mdk` 路径，Vite 不再产生这两项未解析素材警告。
-- `/yumeniwa/` 仍可直接访问且无法证明无历史用户，因此保留其 3 个文件并从主应用 import graph 隔离。
+- 2026-08-03 进一步删除旧外部服务器全屏代理入口及全部 4 个文件，不再保留 allowlist。
 - `scripts/audit-assets.mjs` 检查缺失、孤立、动态路径、大小写、25 MiB、SHA-256 重复文件及重复音乐；当前通过，无重复音乐或超限文件。
 
 ## EdgeOne 与平台约束
@@ -170,7 +199,7 @@ Store 名称保持：
 
 - `server/routes/registry.js` 是声明式 API 合同，逐项记录 method、path/prefix、鉴权、CSRF 和管理员要求；`server/app.js` 只按该表分发，未知 method/path 仍返回原 404 envelope。
 - `server/domain/blob-keys.js` 集中构造生产 Blob key。构造器保留原前缀、16 位内部 ID 补零、`.json` 后缀、编号座位、墓碑、repair marker 和图片别名字符串；已有数据无需迁移。
-- `server/middleware/` 只处理请求来源、环境和客户端标识，`server/services/` 暴露认证/留言用例，`server/repositories/` 固化强一致读取和 `onlyIfNew`，`server/storage.js` 继续持有唯一的 Store 名称与 MemoryStore 注入点，`server/lib/` 保存无业务状态的路由解析。
+- `server/middleware/` 只处理请求来源、环境和客户端标识；`server/services/` 现在真实承担图片、密码重置、举报与管理员用例；`server/repositories/` 封装图片、用户、举报的 Blob 访问；`server/storage.js` 继续持有唯一 Store 名称与 MemoryStore 注入点，`server/lib/` 保存无业务状态的路由解析。
 - `cloud-functions/api/[[default]].js` 入口及默认导出未改；生产代码未引入 Vue、Vite、Playwright、浏览器全局或 Node 22 独占 API。
 - 本阶段 `check:server`、运行时边界检查和全部服务端测试通过；另以 Node 20.19.5 执行服务端测试，87 项通过，真实 EdgeOne 凭据测试未进入该离线命令。
 
@@ -264,13 +293,13 @@ frame-ancestors 'none'
 style-src 'self' 'unsafe-inline'
 ```
 
-严格脚本 CSP 启用前已移除主应用动态编辑器的 `onfocus/onblur` 属性；保留的 `/yumeniwa/` 也把内联脚本和 `onclick` 外置到同源 `main.js`。构建测试扫描 HTML 和 JS 字符串，阻断新的内联事件属性。
+严格脚本 CSP 启用前已移除主应用动态编辑器的 `onfocus/onblur` 属性；旧外部代理入口随后已整体删除。构建测试扫描 HTML 和 JS 字符串，阻断新的内联事件属性。
 
 `style-src 'self' 'unsafe-inline'` 仍然必需，具体位置包括：
 
 - `src/app/shell.html` 的背景焦点、初始显示/透明度与历史 DOM 契约。
 - `src/config/assets.ts` 设置背景 `background-position`。
-- `src/index.js` 的背景懒加载、播放器/时间轴、移动下拉面板、弹窗和状态显示。
+- `src/features/theme/theme-controller.ts` 的背景焦点与轮播，以及 `src/index.js` 仍保留的播放器/时间轴、移动下拉面板、弹窗和状态显示。
 - `src/settings/index.ts` 的页面缩放和 Wallpaper Engine 样式。
 - `ProgressSlider.vue`、`ImgViewer.vue`、`FloatMsgs.vue`、`PullDownRefresh.ts` 的进度、手势、缩放和过渡。
 
@@ -300,7 +329,7 @@ style-src 'self' 'unsafe-inline'
 
 ## 最终验收结果
 
-2026-08-02 从全新安装执行了计划规定的命令：
+以下是 2026-08-02 上一阶段从全新安装执行的历史结果；2026-08-03 本轮结果以本节顶部增量记录和最终提交报告为准：
 
 | 命令                    | 结果                                                              |
 | ----------------------- | ----------------------------------------------------------------- |
@@ -321,7 +350,7 @@ style-src 'self' 'unsafe-inline'
 
 另以真实 Node 20.19.5 调用 npm 11.12.1 完成 `npm ci`，随后只运行 `check:server` 和 `test:server`，均成功。安装阶段对 EdgeOne CLI 的 `ink`、`cli-truncate`、`slice-ansi` 开发依赖报告 Node >=22 警告，但没有关闭 engine 检查且任务未失败；服务端生产 import graph 不加载这些包。Node 20 测试仍为 90 通过、6 个无真实凭据的集成测试跳过。
 
-本次没有设置真实 EdgeOne 凭据、没有访问 Blob/KV、没有运行生产迁移、没有部署或推送。
+上一阶段没有设置真实 EdgeOne 凭据、没有访问 Blob/KV、没有运行生产迁移、没有部署或推送。
 
 ## 风险与回滚
 
@@ -329,7 +358,7 @@ style-src 'self' 'unsafe-inline'
 - API 风险：新增路由与 key 快照，旧测试持续覆盖；任何字段或状态差异均回滚相应提交。
 - 存储风险：不运行迁移、不访问生产；repository 重构前后共享现有 MemoryStore/真实集成测试。
 - 依赖风险：每次只升级一组兼容依赖；Vite 8 无法通过 EdgeOne 构建时回退最近的兼容稳定线。
-- 部署风险：只做本地提交，不推送或部署；每个阶段可用独立提交回退。
+- 部署风险：上一阶段只做本地提交；2026-08-03 本轮按要求直接推送线性 `main` 历史，不执行 EdgeOne 部署。
 
 ## CSP 计划
 
