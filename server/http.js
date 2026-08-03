@@ -1,11 +1,17 @@
-const SECURITY_HEADERS = {
+const TRANSPORT_SECURITY_HEADERS = Object.freeze({
+    'Strict-Transport-Security': 'max-age=31536000; includeSubDomains',
+    'X-Content-Type-Options': 'nosniff',
+})
+
+export const DOCUMENT_SECURITY_HEADERS = Object.freeze({
+    ...TRANSPORT_SECURITY_HEADERS,
     'Content-Security-Policy': [
         "default-src 'self'",
         "img-src 'self' data: blob:",
         "media-src 'self'",
         "font-src 'self' data:",
         "style-src 'self' 'unsafe-inline'",
-        "script-src 'self' 'unsafe-inline'",
+        "script-src 'self'",
         "connect-src 'self'",
         "object-src 'none'",
         "base-uri 'self'",
@@ -13,10 +19,21 @@ const SECURITY_HEADERS = {
         "form-action 'self'",
     ].join('; '),
     'Referrer-Policy': 'strict-origin-when-cross-origin',
-    'X-Content-Type-Options': 'nosniff',
     'X-Frame-Options': 'DENY',
     'Permissions-Policy': 'camera=(), microphone=(), geolocation=()',
-}
+})
+
+export const API_SECURITY_HEADERS = Object.freeze({
+    ...TRANSPORT_SECURITY_HEADERS,
+    'Referrer-Policy': 'no-referrer',
+    'X-Frame-Options': 'DENY',
+    'Permissions-Policy': 'camera=(), microphone=(), geolocation=()',
+})
+
+export const BINARY_SECURITY_HEADERS = Object.freeze({
+    ...TRANSPORT_SECURITY_HEADERS,
+    'Referrer-Policy': 'no-referrer',
+})
 
 /**
  * @param {unknown} [data]
@@ -38,7 +55,7 @@ export function apiResponse(data = null, {
     const responseHeaders = new Headers({
         'Content-Type': 'application/json; charset=UTF-8',
         'Cache-Control': 'no-store',
-        ...SECURITY_HEADERS,
+        ...API_SECURITY_HEADERS,
         ...headers,
     })
     for (const cookie of cookies) responseHeaders.append('Set-Cookie', cookie)
@@ -54,7 +71,7 @@ export function binaryResponse(buffer, contentType, { status = 200, cache = 'pri
         headers: {
             'Content-Type': contentType,
             'Cache-Control': cache,
-            ...SECURITY_HEADERS,
+            ...BINARY_SECURITY_HEADERS,
         },
     })
 }
@@ -111,8 +128,37 @@ export function cookie(name, value, {
     ]
     if (secure) parts.push('Secure')
     if (httpOnly) parts.push('HttpOnly')
-    if (Number.isFinite(maxAge)) parts.push(`Max-Age=${Math.max(0, Math.floor(maxAge))}`)
+    if (typeof maxAge === 'number' && Number.isFinite(maxAge)) {
+        parts.push(`Max-Age=${Math.max(0, Math.floor(maxAge))}`)
+    }
     return parts.join('; ')
+}
+
+/**
+ * EdgeOne can terminate TLS before invoking the Cloud Function, leaving an
+ * internal HTTP request URL. Prefer proxy metadata, then the observable URL,
+ * and finally the configured public origin. Local HTTP stays non-Secure.
+ *
+ * @param {Request} request
+ * @param {Record<string, unknown>} [env]
+ */
+export function isSecureRequest(request, env = {}) {
+    const forwardedProto = request.headers
+        .get('x-forwarded-proto')
+        ?.split(',')[0]
+        ?.trim()
+        .toLowerCase()
+    if (forwardedProto === 'https') return true
+
+    try {
+        if (new URL(request.url).protocol === 'https:') return true
+    } catch {}
+
+    try {
+        return new URL(String(env.PUBLIC_SITE_URL || '')).protocol === 'https:'
+    } catch {
+        return false
+    }
 }
 
 /**

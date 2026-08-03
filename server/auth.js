@@ -8,7 +8,7 @@ import {
     sha256,
     verifyPassword,
 } from './crypto.js'
-import { cookie, httpError, parseCookies, publicUser } from './http.js'
+import { cookie, httpError, isSecureRequest, parseCookies, publicUser } from './http.js'
 import { getJSON, isPreconditionFailure, listAll } from './storage.js'
 import { blobKeys, blobPrefixes } from './domain/blob-keys.js'
 import {
@@ -181,7 +181,7 @@ export async function authenticateUser(data, env, identifier, password) {
     return user
 }
 
-export async function createSession(data, user, request) {
+export async function createSession(data, user, request, env = {}) {
     const token = randomToken(32)
     const csrf = randomToken(24)
     const tokenHash = sha256(token)
@@ -197,7 +197,7 @@ export async function createSession(data, user, request) {
         expiresAt: now + SESSION_SECONDS * 1000,
     }
     await data.setJSON(blobKeys.session(tokenHash), session, { onlyIfNew: true })
-    const secure = new URL(request.url).protocol === 'https:'
+    const secure = isSecureRequest(request, env)
     return {
         session,
         cookies: [
@@ -206,7 +206,7 @@ export async function createSession(data, user, request) {
     }
 }
 
-export async function getSession(data, request, { slide = true } = {}) {
+export async function getSession(data, request, { slide = true, env = {} } = {}) {
     const cookies = parseCookies(request)
     const token = cookies.elytrue_session
     if (!token) return null
@@ -237,7 +237,7 @@ export async function getSession(data, request, { slide = true } = {}) {
         session.lastSeenAt = Date.now()
         session.expiresAt = Date.now() + SESSION_SECONDS * 1000
         shouldPersist = true
-        const secure = new URL(request.url).protocol === 'https:'
+        const secure = isSecureRequest(request, env)
         refreshCookies = [
             cookie('elytrue_session', token, { maxAge: SESSION_SECONDS, secure }),
         ]
@@ -246,8 +246,8 @@ export async function getSession(data, request, { slide = true } = {}) {
     return { session, user, tokenHash, cookies, refreshCookies }
 }
 
-export async function requireSession(data, request, { csrf = true } = {}) {
-    const auth = await getSession(data, request)
+export async function requireSession(data, request, { csrf = true, env = {} } = {}) {
+    const auth = await getSession(data, request, { env })
     if (!auth) throw httpError(401, '请先登录')
     if (csrf) {
         const csrfHeader = request.headers.get('x-csrf-token') || ''
@@ -262,9 +262,9 @@ export async function requireSession(data, request, { csrf = true } = {}) {
     return auth
 }
 
-export async function destroySession(data, request, auth) {
+export async function destroySession(data, request, auth, env = {}) {
     if (auth?.tokenHash) await data.delete(blobKeys.session(auth.tokenHash)).catch(() => {})
-    const secure = new URL(request.url).protocol === 'https:'
+    const secure = isSecureRequest(request, env)
     return [
         cookie('elytrue_session', '', { maxAge: 0, secure }),
     ]

@@ -39,6 +39,41 @@ function createContext(pathname, kv, clientIp = '203.0.113.10') {
     }
 }
 
+test('middleware applies document-only CSP while keeping API and binary responses distinct', async () => {
+    const htmlContext = createContext('/', new MemoryKV())
+    htmlContext.next = () => new Response('<!doctype html>', {
+        headers: { 'content-type': 'text/html; charset=utf-8' },
+    })
+    const html = await middleware(htmlContext)
+    assert.match(html.headers.get('content-security-policy'), /script-src 'self'/u)
+    assert.doesNotMatch(
+        html.headers.get('content-security-policy'),
+        /script-src[^;]*unsafe-inline/u,
+    )
+    assert.equal(html.headers.get('x-frame-options'), 'DENY')
+    assert.equal(
+        html.headers.get('strict-transport-security'),
+        'max-age=31536000; includeSubDomains',
+    )
+
+    const apiContext = createContext('/api/health', new MemoryKV())
+    apiContext.next = () => Response.json({ ok: true })
+    const api = await middleware(apiContext)
+    assert.equal(api.headers.get('content-security-policy'), null)
+    assert.equal(
+        api.headers.get('strict-transport-security'),
+        'max-age=31536000; includeSubDomains',
+    )
+
+    const binaryContext = createContext('/res/defaultAvatar.png', new MemoryKV())
+    binaryContext.next = () => new Response(new Uint8Array([1]), {
+        headers: { 'content-type': 'image/png' },
+    })
+    const binary = await middleware(binaryContext)
+    assert.equal(binary.headers.get('content-security-policy'), null)
+    assert.equal(binary.headers.get('x-content-type-options'), 'nosniff')
+})
+
 test('middleware allows requests within the edge rate limit', async () => {
     const kv = new MemoryKV()
     for (let index = 0; index < 20; index += 1) {
