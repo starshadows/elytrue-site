@@ -39,10 +39,14 @@ onMounted(async () => {
 })
 
 async function toggleLike(): Promise<void> {
-  if (likeBusy.value || !(await ensureLoggedIn())) return
+  if (likeBusy.value) return
   likeBusy.value = true
+  if (!(await ensureLoggedIn())) {
+    likeBusy.value = false
+    return
+  }
   await commentsStore.toggleLike(props.record.id).catch(() => undefined)
-  likeBusy.value = false
+  window.setTimeout(() => (likeBusy.value = false), 1_000)
 }
 
 async function replyToComment(): Promise<void> {

@@ -39,6 +39,7 @@ export function createCommentsStore(api: CommentsApi) {
   })
   const pending = new Map<LoadKind, Promise<void>>()
   const likeLocks = new Map<number, Promise<void>>()
+  const likeCooldowns = new Map<number, number>()
   let generation = 0
 
   function merge(items: CommentRecord[]): void {
@@ -152,8 +153,10 @@ export function createCommentsStore(api: CommentsApi) {
   function toggleLike(id: number): Promise<void> {
     const existing = likeLocks.get(id)
     if (existing) return existing
+    if ((likeCooldowns.get(id) ?? 0) > Date.now()) return Promise.resolve()
     const item = state.items.find((comment) => comment.id === id)
     if (!item) return Promise.resolve()
+    likeCooldowns.set(id, Date.now() + 2_000)
     const before = { liked: item.liked, likes: item.likes }
     item.liked = !item.liked
     item.likes = Math.max(0, item.likes + (item.liked ? 1 : -1))

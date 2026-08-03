@@ -116,6 +116,7 @@ describe('comments store', () => {
 
   test('updates a successful like from the server snapshot', async () => {
     let liked = false
+    let calls = 0
     const store = createCommentsStore(
       apiWith({
         async list(query) {
@@ -128,6 +129,7 @@ describe('comments store', () => {
           return { items: [comment(1)], hasMore: false }
         },
         async like() {
+          calls += 1
           liked = true
         },
       }),
@@ -136,6 +138,8 @@ describe('comments store', () => {
     await store.toggleLike(1)
     await nextTick()
     assert.equal(liked, true)
+    await store.toggleLike(1)
+    assert.equal(calls, 1)
     assert.equal(store.state.items[0]?.liked, true)
     assert.equal(store.state.items[0]?.likes, 3)
   })

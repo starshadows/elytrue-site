@@ -3,7 +3,10 @@
     v-for="name in staticNames"
     v-show="staticEntry(name)"
     :key="name"
-    :class="{ popupContainer: true, closing: staticEntry(name)?.closing }"
+    :class="{
+      popupContainer: Boolean(staticEntry(name)),
+      closing: staticEntry(name)?.closing,
+    }"
   >
     <div class="popupBG" @click="closeStatic(name)"></div>
     <div :id="name" class="popupItem">

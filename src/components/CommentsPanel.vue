@@ -105,7 +105,12 @@ async function loadNewer(): Promise<void> {
 }
 
 function handleScroll(): void {
-  if (scrollPaused || !container.value || !commentsStore.state.items.length)
+  if (
+    scrollPaused ||
+    !container.value ||
+    !commentsStore.state.items.length ||
+    commentsStore.state.jumpNumber !== null
+  )
     return
   updateVisibleTime()
   const element = container.value

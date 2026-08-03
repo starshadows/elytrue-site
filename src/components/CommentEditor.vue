@@ -28,6 +28,10 @@ const avatar = computed(() => avatarPath(authStore.state.profile?.avatar))
 
 onMounted(async () => {
   if (!(await ensureLoggedIn())) {
+    FloatMsgs.show({
+      type: 'warn',
+      msg: '<span class="ui zh">登录后即可留言</span><span class="ui en">Log in to leave a message</span>',
+    })
     emit('close')
     return
   }

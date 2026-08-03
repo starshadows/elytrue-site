@@ -10,8 +10,8 @@ import { BACKGROUNDS } from '../config/assets'
       class="mainbg defaultbg"
       :data-background-id="background.id"
       :data-layout="background.layout"
-      :data-src="background.preview"
-      :data-original="background.original"
+      :data-src="background.preview.slice(1)"
+      :data-original="background.original.slice(1)"
       :data-credit-url="background.creditUrl"
     >
       <div :style="{ backgroundPosition: background.focus }"></div>
