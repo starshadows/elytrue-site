@@ -1,23 +1,23 @@
 import { computed } from 'vue'
-import { requireController } from '../../app/controller'
+import { authStore, type ProfileAction } from './auth-store'
 
-export type ProfileAction =
-  | 'changeName'
-  | 'changeAvatar'
-  | 'changeEmail'
-  | 'changePassword'
-  | 'showMe'
-  | 'logout'
-  | 'resetToken'
+export type { LoginState, ProfileAction, UserProfile } from './auth-store'
 
 export function useAuth() {
-  const loggedIn = computed(
-    () => requireController().User.LoggedOnUserId !== null,
-  )
+  const loggedIn = authStore.authenticated
+  const loginState = computed(() => authStore.state.loginState)
+  const profile = computed(() => authStore.state.profile)
+  const userId = computed(() => authStore.state.userId)
 
   function runProfileAction(action: ProfileAction): void {
-    requireController().User[action]()
+    authStore.runProfileAction(action)
   }
 
-  return { loggedIn, runProfileAction }
+  return {
+    loggedIn,
+    loginState,
+    profile,
+    runProfileAction,
+    userId,
+  }
 }

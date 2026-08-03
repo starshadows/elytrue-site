@@ -11,6 +11,8 @@ import ProgressSlider from './components/controls/ProgressSlider.vue'
 import { GallerySwipeController } from './components/controls/GallerySwiper'
 import { toQueryString } from './lib/query'
 import { ApiError } from './lib/api-client'
+import { authStore } from './features/auth/auth-store'
+import { createThemeController } from './features/theme/theme-controller'
 import {
   BACKGROUNDS,
   BACKGROUND_GROUPS,
@@ -802,26 +804,41 @@ try {
 } catch (error) {
   logErr(error, 'failed to init popup')
 }
+authStore.configure({
+  loadProfile: () =>
+    XHR.get('user/me', void 0, {
+      silentStatuses: [401],
+    }),
+  clearSession: () => {
+    XHR.token = ''
+    XHR.csrfToken = ''
+  },
+  runProfileAction: (action) => User[action](),
+})
 const User = {
-  LoggedOnUserId: null,
-  /** 'loading' | 'authenticated' | 'unauthenticated' */
-  loginState: 'loading',
-  _initPromise: null,
+  get LoggedOnUserId() {
+    return authStore.state.userId
+  },
+  get loginState() {
+    return authStore.state.loginState
+  },
   init() {
     XHR.token = ''
     XHR.csrfToken = ''
-    this._initPromise = this.loadUserInfo()
+    return this.loadUserInfo(true)
   },
   /**
    * 登录状态初始化完成前的等待点。
    * 单飞:多次调用复用同一个 /user/me 请求。
    */
   ready() {
-    if (!this._initPromise) this._initPromise = this.loadUserInfo()
-    return this._initPromise
+    return this.loadUserInfo(true)
   },
   async ensureLoggedIn() {
-    if (this.loginState === 'loading') await this.ready()
+    if (!(await authStore.ensureAuthenticated())) {
+      Popup.show('loginPopup')
+      return false
+    }
     if (!this.LoggedOnUserId) {
       Popup.show('loginPopup')
       return false
@@ -885,6 +902,7 @@ const User = {
                                 <span class="ui zh">\u90AE\u7BB1\u4FEE\u6539\u6210\u529F\uFF0C\u8BF7\u786E\u8BA4\u65B0\u90AE\u7BB1\u957F\u671F\u53EF\u7528</span>
                                 <span class="ui en">Email updated successfully</span>`,
                 })
+                loadUserInfo()
               }
               context.setDisabled(false)
             })
@@ -912,43 +930,15 @@ const User = {
       ? `/api/data/images/avatars/` + encodeURIComponent(avatar)
       : `/res/defaultAvatar.png`
   },
-  loadUserInfo() {
+  loadUserInfo(initialize = false) {
     var userInfo = document.getElementById('userInfo')
     var avatar = document.getElementById('userInfoAvatar')
     var name = document.getElementById('userInfoName')
-    return User.getMe()
-      .then((r) => {
-        XHR.token = 'session'
-        this.LoggedOnUserId = r.id
-        this.loginState = 'authenticated'
-        avatar.src = User.convertAvatarPath(r.avatar)
-        name.textContent = r.name
-        try {
-          document.getElementById('msgPopupAvatar').src =
-            User.convertAvatarPath(r.avatar)
-          document.getElementById('senderText').textContent = r.name
-        } catch (error) {
-          void error
-        }
-        try {
-          Popup.VuePopups.getAllPopups().forEach((v) => {
-            if (v.$el.classList.contains('userHome')) {
-              v.getUser()
-            }
-          })
-        } catch (error) {
-          logErr(error, 'Failed to access popup instances')
-        }
-        userInfo.onclick = () => this.showMe()
-        userInfo.classList.remove('nologin')
-        refreshCommentActions()
-        return true
-      })
-      .catch(() => {
-        XHR.token = ''
-        XHR.csrfToken = ''
-        this.LoggedOnUserId = null
-        this.loginState = 'unauthenticated'
+    const profileRequest = initialize
+      ? authStore.initialize()
+      : authStore.refresh()
+    return profileRequest.then((r) => {
+      if (!r) {
         avatar.src = User.convertAvatarPath('')
         name.innerHTML =
           '<span class="ui zh">\u8BBF\u5BA2</span><span class="ui en">Anonymous</span>'
@@ -964,20 +954,43 @@ const User = {
         userInfo.classList.add('nologin')
         refreshCommentActions()
         return false
-      })
+      }
+      XHR.token = 'session'
+      avatar.src = User.convertAvatarPath(r.avatar)
+      name.textContent = r.name
+      try {
+        document.getElementById('msgPopupAvatar').src = User.convertAvatarPath(
+          r.avatar,
+        )
+        document.getElementById('senderText').textContent = r.name
+      } catch (error) {
+        void error
+      }
+      try {
+        Popup.VuePopups.getAllPopups().forEach((v) => {
+          if (v.$el.classList.contains('userHome')) {
+            v.getUser()
+          }
+        })
+      } catch (error) {
+        logErr(error, 'Failed to access popup instances')
+      }
+      userInfo.onclick = () => this.showMe()
+      userInfo.classList.remove('nologin')
+      refreshCommentActions()
+      return true
+    })
   },
   logout() {
     XHR.post('user/logout').finally(() => {
-      XHR.token = ''
-      XHR.csrfToken = ''
+      authStore.clear()
       closePopup()
       setTimeout(loadUserInfo, 0)
     })
   },
   resetToken() {
     XHR.post('user/resettoken').finally(() => {
-      XHR.token = ''
-      XHR.csrfToken = ''
+      authStore.clear()
       closePopup()
       setTimeout(loadUserInfo, 0)
     })
@@ -989,227 +1002,13 @@ try {
 } catch (error) {
   logErr(error, 'failed to init user')
 }
-const Theme = {
-  elements: {
-    bgs: document.getElementsByClassName('mainbg'),
-    captionContainer: document.getElementById('mainCaptions'),
-    captions: document.getElementById('mainCaptions').children,
-    themeIndicators: document.getElementById('currentTheme').children,
-    listSelectors: document.querySelectorAll('#themeList>div[data-theme]'),
-    lowerPanel: document.getElementById('lowerPanel'),
-  },
-  timers: {
-    timeouts: [],
-    intervals: [],
-    setTimeout(f, timeout) {
-      while (this.timeouts.length >= 100) this.timeouts.shift()
-      this.timeouts.push(setTimeout(() => f(), timeout))
-    },
-    setInterval(f, timeout) {
-      this.intervals.push(setInterval(() => f(), timeout))
-    },
-    clear() {
-      this.timeouts.forEach((i) => {
-        clearTimeout(i)
-      })
-      this.intervals.forEach((i) => {
-        clearInterval(i)
-      })
-      this.timeouts = []
-      this.intervals = []
-    },
-  },
-  themes: {
-    '#default-theme': 'default',
-  },
-  theme: '',
-  currentBG: -1,
-  currentCaption: -1,
-  init() {
-    this.prepareVisitOrder()
-    this.setTheme(this.themes[location.hash])
-    const layoutQuery = window.matchMedia('(max-width: 720px)')
-    const relayout = () => {
-      this.prepareVisitOrder()
-      this.setTheme()
-    }
-    layoutQuery.addEventListener
-      ? layoutQuery.addEventListener('change', relayout)
-      : layoutQuery.addListener(relayout)
-    setInterval(() => {
-      let newAutoTheme = this.getAutoTheme()
-      if (this.lastAutoTheme && this.lastAutoTheme != newAutoTheme)
-        this.setTheme()
-      this.lastAutoTheme = newAutoTheme
-    }, 1e3)
-    Array.from(this.elements.listSelectors).forEach((e) => {
-      e.onclick = () => {
-        this.setTheme(e.dataset.theme)
-        closePopup()
-      }
-    })
-  },
-  prepareVisitOrder() {
-    Array.from(document.querySelectorAll('.mainbg[data-layout]')).forEach(
-      (background) => {
-        background.classList.add('defaultbg')
-      },
-    )
-    const useMobileBackgrounds = window.matchMedia('(max-width: 720px)').matches
-    const activeLayout = useMobileBackgrounds ? 'portrait' : 'landscape'
-    const allBackgrounds = Array.from(
-      document.querySelectorAll('.mainbg.defaultbg'),
-    )
-    const backgrounds = allBackgrounds.filter(
-      (background) => background.dataset.layout == activeLayout,
-    )
-    allBackgrounds
-      .filter((background) => background.dataset.layout != activeLayout)
-      .forEach((background) => background.classList.remove('defaultbg'))
-    shuffleArray(backgrounds)
-    backgrounds.forEach((background) => {
-      background.dataset.activeSrc = background.dataset.src
-      this.elements.captionContainer.before(background)
-    })
-    const firstBackground = backgrounds[0]?.dataset.activeSrc
-    if (firstBackground) {
-      const preload = document.createElement('link')
-      preload.rel = 'preload'
-      preload.as = 'image'
-      preload.type = 'image/webp'
-      preload.href = firstBackground
-      preload.fetchPriority = 'high'
-      document.head.appendChild(preload)
-    }
-    const blocks = []
-    Array.from(document.getElementsByClassName('defaultCaption')).forEach(
-      (caption) => {
-        const group = caption.dataset.sequenceGroup || ''
-        const lastBlock = blocks[blocks.length - 1]
-        if (group && lastBlock?.group == group) {
-          lastBlock.items.push(caption)
-        } else {
-          blocks.push({ group, items: [caption] })
-        }
-      },
-    )
-    shuffleArray(blocks)
-    blocks
-      .flatMap((block) => block.items)
-      .forEach((caption) => {
-        this.elements.captionContainer.appendChild(caption)
-      })
-  },
-  getAutoTheme() {
-    return 'default'
-  },
-  setTheme(theme) {
-    if (!theme) theme = this.getAutoTheme()
-    Array.from(this.elements.bgs).forEach((el) => {
-      el.classList.remove('ready', 'animating', 'visible')
-    })
-    Array.from(this.elements.captions).forEach((el) => {
-      el.classList.remove('visible')
-    })
-    Array.from(this.elements.themeIndicators).forEach((el) => {
-      el.classList.remove('visible')
-    })
-    try {
-      document.getElementById(`themeTxt-${theme}`).classList.add('visible')
-    } catch (error) {
-      logErr(error, 'theme indicator text not defined')
-    }
-    this.timers.clear()
-    this.theme = theme
-    this.currentBG = this.getCurrentBgCount() - 1
-    this.currentCaption = -1
-    this.getCurrentBgs()[0].classList.add('bgzoom')
-    this.elements.captionContainer.style.opacity = 0
-    setOneTimeCSS(this.elements.captionContainer, { transition: 'none' })
-    this.nextImg()
-    this.nextCaption()
-    if (this.getCurrentBgCount() > 1) {
-      this.timers.setInterval(() => this.nextImg(), 8e3)
-      this.timers.setInterval(() => this.nextCaption(), 8e3)
-    }
-    this.elements.lowerPanel.classList.add('animating')
-    this.timers.setTimeout(
-      () => this.elements.lowerPanel.classList.remove('animating'),
-      1700,
-    )
-    try {
-      MusicPlayer.setActiveSong(this.getThemeMusic())
-      if (!MusicPlayer.userPaused) MusicPlayer.play()
-    } catch (error) {
-      void error
-    }
-  },
-  getThemeMusic() {
-    return 'Elysian Realm'
-  },
-  getCurrentBgs() {
-    return document.querySelectorAll(`.mainbg.${this.theme}bg`)
-  },
-  getCurrentBgCount() {
-    return document.getElementsByClassName(`${this.theme}bg`).length
-  },
-  nextImg() {
-    let prev = this.currentBG
-    this.currentBG = prev + 1 < this.getCurrentBgCount() ? prev + 1 : 0
-    let next =
-      this.currentBG + 1 < this.getCurrentBgCount() ? this.currentBG + 1 : 0
-    let bgs = document.getElementsByClassName(`${this.theme}bg`)
-    try {
-      bgs[prev].classList.remove('visible')
-      bgs[this.currentBG].classList.add('ready', 'animating', 'visible')
-      const currentSource =
-        bgs[this.currentBG].dataset.activeSrc || bgs[this.currentBG].dataset.src
-      bgs[this.currentBG].firstElementChild.style.backgroundImage =
-        `url("${currentSource}")`
-      if (prev == this.currentBG) return
-      this.timers.setTimeout(() => {
-        bgs[prev].classList.remove('ready', 'animating')
-        bgs[next].classList.add('ready')
-        bgs[next].classList.remove('bgzoom')
-        const nextSource = bgs[next].dataset.activeSrc || bgs[next].dataset.src
-        bgs[next].firstElementChild.style.backgroundImage =
-          `url("${nextSource}")`
-      }, 2500)
-    } catch (error) {
-      logErr(error, 'failed to show next image')
-    }
-  },
-  nextCaption() {
-    try {
-      var themeCaptions = document.getElementsByClassName(
-        `${this.theme}Caption`,
-      )
-    } catch (error) {
-      logErr(error, 'failed to select caption')
-      return
-    }
-    if (themeCaptions.length == 1) {
-      this.timers.setTimeout(() => {
-        themeCaptions[0].classList.add('visible')
-        this.elements.captionContainer.style.opacity = 1
-      }, 500)
-      return
-    }
-    this.elements.captionContainer.style.opacity = 0
-    this.timers.setTimeout(() => {
-      for (var i = 0; i < themeCaptions.length; i++) {
-        themeCaptions[i].classList.remove('visible')
-      }
-      if (this.currentCaption < themeCaptions.length - 1) {
-        this.currentCaption++
-      } else {
-        this.currentCaption = 0
-      }
-      themeCaptions[this.currentCaption].classList.add('visible')
-      this.elements.captionContainer.style.opacity = 1
-    }, 1500)
-  },
-}
+const Theme = createThemeController({
+  closePopup,
+  getMusicPlayer: () => MusicPlayer,
+  logError: logErr,
+  setOneTimeCss: setOneTimeCSS,
+  shuffle: shuffleArray,
+})
 try {
   Theme.init()
 } catch (error) {

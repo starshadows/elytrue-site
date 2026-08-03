@@ -1,4 +1,5 @@
 import type XHR from './net/xhr'
+import type { LoginState, UserProfile } from './features/auth/auth-store'
 
 export interface FloatMessageOptions {
   readonly type: 'success' | 'info' | 'warn' | 'error'
@@ -12,7 +13,8 @@ export interface PopupController {
 }
 
 export interface UserController {
-  LoggedOnUserId: string | null
+  readonly LoggedOnUserId: string | null
+  readonly loginState: LoginState
   changeName(): void
   changeAvatar(): void
   changeEmail(): void
@@ -20,7 +22,7 @@ export interface UserController {
   showMe(): void
   logout(): void
   resetToken(): void
-  getMe(): Promise<unknown>
+  getMe(): Promise<UserProfile>
   convertAvatarPath(path?: string): string
 }
 
