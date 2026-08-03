@@ -1,6 +1,9 @@
+import { ref } from 'vue'
 import { getConfig, setConfig } from './config'
 import { lang, changeLang } from './lang'
 import { elementFromHtml } from '../lib/dom'
+
+const pinnedHidden = ref(false)
 
 const Settings = {
   elements: {},
@@ -11,6 +14,7 @@ const Settings = {
 
   load() {
     changeLang(getConfig('lang'))
+    pinnedHidden.value = getConfig('hideTopComment') === 'true'
 
     if (Settings.graphicsMode != 'high') {
       Settings.graphicsMode = Settings.graphicsMode
@@ -52,6 +56,14 @@ const Settings = {
   set lang(value) {
     changeLang(value)
     setConfig('lang', value)
+  },
+
+  get pinnedHidden() {
+    return pinnedHidden.value
+  },
+  set pinnedHidden(value) {
+    pinnedHidden.value = value
+    setConfig('hideTopComment', value)
   },
 
   get graphicsMode() {

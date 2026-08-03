@@ -1,11 +1,14 @@
 <script setup lang="ts">
-import { ref } from 'vue'
+import { computed, ref } from 'vue'
 import { getConfig, setConfig } from '../../settings/config'
 import Settings from '../../settings'
 import GraphicsMode from '../GraphicsMode.vue'
 
 const showTimeline = ref(getConfig('showTimeline') !== 'false')
-const hideTopComment = ref(getConfig('hideTopComment') === 'true')
+const hideTopComment = computed({
+  get: () => Settings.pinnedHidden,
+  set: (value: boolean) => (Settings.pinnedHidden = value),
+})
 const showHidden = ref(Settings.showHidden)
 const zoom = ref(Math.round(Settings.pageScale * 100))
 
@@ -17,13 +20,6 @@ function toggleTimeline(): void {
   document
     .getElementById('comments')
     ?.classList.toggle('noscrollbar', showTimeline.value)
-}
-
-function togglePinned(): void {
-  setConfig('hideTopComment', hideTopComment.value)
-  document
-    .getElementById('topComment')
-    ?.style.setProperty('display', hideTopComment.value ? 'none' : '')
 }
 
 function toggleHidden(): void {
@@ -60,11 +56,7 @@ function updateZoom(delta = 0): void {
           ><span
             ><span class="ui zh">隐藏置顶说明</span
             ><span class="ui en">Hide pinned notice</span></span
-          ><input
-            id="hideTopComment"
-            v-model="hideTopComment"
-            type="checkbox"
-            @change="togglePinned"
+          ><input id="hideTopComment" v-model="hideTopComment" type="checkbox"
         /></label>
       </li>
       <li>

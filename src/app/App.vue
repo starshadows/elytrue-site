@@ -110,7 +110,6 @@ async function installPwa(): Promise<void> {
 }
 
 onMounted(() => {
-  Settings.init()
   theme.init()
   timeline.init()
   pwa.init()
@@ -155,7 +154,7 @@ onBeforeUnmount(() => {
     @fullscreen="viewport.toggleFullscreen()"
     @install="installPwa"
   />
-  <PopupHost />
+  <div id="popups"><PopupHost /></div>
   <ImageViewer />
   <div id="floatMsgs"><FloatMessages /></div>
 </template>

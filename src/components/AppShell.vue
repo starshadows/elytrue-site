@@ -1,7 +1,11 @@
 <script setup lang="ts">
 import { computed } from 'vue'
 import Popups from './Popups'
-import { avatarPath, runProfileAction } from '../features/auth/auth-actions'
+import {
+  avatarPath,
+  initializeAuth,
+  runProfileAction,
+} from '../features/auth/auth-actions'
 import { useAuth, type ProfileAction } from '../features/auth/useAuth'
 
 const auth = useAuth()
@@ -9,7 +13,8 @@ const avatar = computed(() => avatarPath(auth.profile.value?.avatar))
 const name = computed(() => auth.profile.value?.name ?? '')
 const homeUrl = `${window.location.origin}${window.location.pathname}`
 
-function openUser(): void {
+async function openUser(): Promise<void> {
+  if (auth.loginState.value === 'loading') await initializeAuth()
   if (auth.loggedIn.value) runProfileAction('showMe')
   else Popups.show('loginPopup')
 }

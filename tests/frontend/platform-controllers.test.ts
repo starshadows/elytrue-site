@@ -5,6 +5,7 @@ import {
   getTimelineSelectionTime,
   getTimelineStartDate,
   getTimelineYears,
+  parseTimelineDay,
 } from '../../src/features/timeline/timeline-controller'
 import {
   createPwaController,
@@ -140,6 +141,19 @@ describe('timeline date calculations', () => {
       ),
       augustFirst,
     )
+  })
+
+  test('accepts generated Unix timestamps and the legacy E2E date value', () => {
+    const date = new Date(2026, 7, 3)
+    assert.equal(
+      parseTimelineDay(String(date.getTime() / 1_000))?.getTime(),
+      date.getTime(),
+    )
+    assert.equal(
+      parseTimelineDay(date.toDateString())?.getTime(),
+      date.getTime(),
+    )
+    assert.equal(parseTimelineDay('not-a-date'), undefined)
   })
 })
 

@@ -35,7 +35,7 @@ EdgeOne 对精确 `/* -> /index.html` 规则先匹配静态资源和 Functions�
 
 ## 前端
 
-`src/app/App.vue` 是唯一根应用。`src/features/` 按 auth、comments、gallery、music、theme、settings、timeline 和 admin 提供 Composition API 边界。Auth store 真实持有 `loginState`、`userId` 和 profile，负责单飞初始化、刷新与会话失效；Theme controller 真实持有当前主题、背景、caption、轮播计时器和主题行为。旧 controller 只在 DOM 弹窗与未迁移领域继续作为兼容边界。关键 class、ID、DOM 顺序、背景顺序/焦点和动画参数保持不变。
+`src/app/App.vue` 是唯一根应用，统一渲染站点外壳、留言、弹窗、图片查看器和浮动消息。`src/features/` 按 auth、comments、gallery、music、pwa、settings、theme、timeline、viewport 和 admin 划分类型化边界：store 持有共享响应式状态和 API 流程，controller 持有音乐、主题、时间轴及浏览器生命周期。组件只保留模板内交互和局部 DOM 布局行为；弹窗、浮动消息和图片查看器不再创建独立 Vue 应用。关键 class、ID、DOM 顺序、背景顺序/焦点和动画参数保持不变。
 
 `src/config/site.ts` 是站点、SEO 和中英文文案来源；`src/config/assets.ts` 是 16 张背景、作者/来源、原图映射和 10 首音乐来源。PWA manifest 在构建前从站点配置生成。
 

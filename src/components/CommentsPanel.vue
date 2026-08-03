@@ -1,5 +1,12 @@
 <script setup lang="ts">
-import { nextTick, onBeforeUnmount, onMounted, ref, useTemplateRef } from 'vue'
+import {
+  computed,
+  nextTick,
+  onBeforeUnmount,
+  onMounted,
+  ref,
+  useTemplateRef,
+} from 'vue'
 import CommentCard from './CommentCard.vue'
 import CommentEditor from './CommentEditor.vue'
 import FloatMsgs from './FloatMsgs'
@@ -7,14 +14,15 @@ import Popups from './Popups'
 import TimelinePanel from './TimelinePanel.vue'
 import ToolsPanel from './ToolsPanel.vue'
 import { commentsStore } from '../features/comments/comments-store'
-import { getConfig, setConfig } from '../settings/config'
+import Settings from '../settings'
+import { getConfig } from '../settings/config'
 
 const emit = defineEmits<{ fullscreen: []; install: [] }>()
 const container = useTemplateRef<HTMLDivElement>('container')
 const panel = useTemplateRef<HTMLDivElement>('panel')
 const editorOpen = ref(false)
 const replyNumber = ref<number>()
-const pinnedHidden = ref(getConfig('hideTopComment') === 'true')
+const pinnedHidden = computed(() => Settings.pinnedHidden)
 let scrollPaused = false
 let pauseTimer: number | undefined
 let scrollTimer: number | undefined
@@ -136,11 +144,11 @@ function closeEditor(): void {
   editorOpen.value = false
   replyNumber.value = undefined
   document.body.classList.remove('touchKeyboardShowing')
+  forceLowerPanelDown()
 }
 
 function hidePinned(): void {
-  pinnedHidden.value = true
-  setConfig('hideTopComment', true)
+  Settings.pinnedHidden = true
   FloatMsgs.show({
     type: 'success',
     persist: true,

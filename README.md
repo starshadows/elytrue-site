@@ -21,7 +21,7 @@ middleware.js：Edge Runtime / Web APIs / ES2023+
 
 ## 目录
 
-- `src/app/`、`src/features/`、`src/components/`：Vue 根应用、功能 composable 与组件；Auth 和 Theme 已拥有真实响应式状态及行为。
+- `src/app/`、`src/features/`、`src/components/`：唯一 Vue 根应用、功能 store/controller 与组件；留言、认证、主题、音乐、时间轴、PWA 和视口行为均由类型化模块持有。
 - `src/config/`：站点、SEO、背景、作者、原图和音乐的类型化配置。
 - `src/lib/api-client.ts`、`src/net/`：同源 `/api/*` 客户端、CSRF、超时与错误 envelope。
 - `cloud-functions/api/[[default]].js`：稳定的 EdgeOne Cloud Functions 入口。

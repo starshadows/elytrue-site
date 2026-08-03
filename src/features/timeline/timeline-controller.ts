@@ -102,6 +102,17 @@ export function getTimelineSelectionTime(
   return Math.min(selectedTime / 1_000, maxUnixSeconds)
 }
 
+export function parseTimelineDay(value: string): Date | undefined {
+  const numericTime = Number(value)
+  const time =
+    Number.isFinite(numericTime) && value.trim() !== ''
+      ? numericTime * 1_000
+      : Date.parse(value)
+  if (!Number.isFinite(time)) return undefined
+  const date = new Date(time)
+  return Number.isNaN(date.getTime()) ? undefined : date
+}
+
 export interface TimelineControllerCallbacks {
   clearComments(keepPinned?: number): void
   getCurrentCommentTime(): number | undefined
@@ -275,8 +286,8 @@ class TimelineControllerImpl implements TimelineController {
         selection = { type: 'month', year, month }
       }
     } else if (target.dataset.time) {
-      const date = new Date(Number(target.dataset.time) * 1_000)
-      if (!Number.isNaN(date.getTime())) {
+      const date = parseTimelineDay(target.dataset.time)
+      if (date) {
         selection = {
           type: 'day',
           year: date.getFullYear(),

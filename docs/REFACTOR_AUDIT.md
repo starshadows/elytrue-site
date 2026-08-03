@@ -9,7 +9,7 @@
 - 会话 Cookie 统一由 `isSecureRequest` 判断：依次读取 `x-forwarded-proto` 首值、请求 URL 协议和 `PUBLIC_SITE_URL`。创建、滑动续期、注销和删除均走同一逻辑；正式 EdgeOne HTTPS 带 `Secure`，未配置 HTTPS 来源的本地 HTTP Mock 不带。
 - `@types/node` 声明与 lockfile 均固定为 `20.19.43`；服务端 target 保持 ES2022，运行时边界阻断 Node 21+ SQLite、`process.getBuiltinModule`、新版 `import.meta` 和文件系统 glob API。Node 20 CI 继续执行 `npm ci`、`check:server`、`test:server`。
 - `tsconfig.server.json` 已启用 `strictNullChecks`、`noUncheckedIndexedAccess`、`alwaysStrict`、`strictBindCallApply`、`strictBuiltinIteratorReturn` 和 `strictFunctionTypes`。`strict`、`noImplicitAny` 暂未整体开启：现有 JS 打开两者仍有 444 个错误，其中 357 个为 TS7006；只开启 `noImplicitAny` 仍有 426 个错误。`skipLibCheck` 暂留，因为此轮只收紧生产 JS，不把第三方声明升级风险混入行为重构；没有用 exclude、`@ts-ignore` 或 `any` 掩盖。
-- `src/index.js` 按仓库物理行从 2410 行降到 2209 行。新增 `features/auth/auth-store.ts`，真实持有登录状态、用户 ID、profile、单飞初始化、刷新和失效；新增 `features/theme/theme-controller.ts`，真实持有主题、背景、caption、定时器、布局与音乐联动。Comments、Music、Timeline、Popup、Viewport/PWA 及留言 DOM/加载/编辑仍是后续迁移债务。
+- 前端迁移已收尾：删除旧命令式入口、类型垫片、外壳模板和兼容控制层。`App.vue` 现在是唯一 Vue 根应用；Comments store 负责留言查询、分页、跳转、计数和点赞，Auth store 负责登录状态，Theme/Music/Timeline/PWA/Viewport controller 负责各自生命周期。留言卡片、编辑器、时间轴、工具栏、弹窗、浮动消息和图片查看器均由根应用组件树渲染，不再导入即挂载子应用。
 - `server/app.js` 按仓库物理行从 594 行降到 423 行，主要保留路由匹配、解析、service 调用、响应适配和顶层错误边界。新增 image/user/report repositories，以及 image/password-reset/report/admin services；图片 pending/active、别名与用量、密码重置、举报和管理员流程已移出入口。只做转发的 auth/comment service 已删除。
 - 新留言建立按内部 ID 查询公开编号的轻量反向记录，新举报写 `commentNumber`。读取顺序为举报字段、留言本体、反向记录；只有仍无法解析且已删除的旧举报才每页 100、最多 10 页扫描旧编号座位。命中会渐进回填，命中与未命中均缓存 5 分钟，不要求生产迁移，正常管理请求不再用 `Infinity` 扫编号。
 - 旧外部服务器全屏代理入口、canonical/alternate、iframe、脚本和 4 个文件已彻底删除；生产源码与 `dist` 的路径和内容均有静态门禁，旧路径使用现有 SPA fallback。
@@ -25,7 +25,7 @@
 | `npm run format:check`      | 成功                                                                                                     |
 | `npm run check`             | 成功；Vue、测试、Edge Runtime 类型和运行时边界通过                                                       |
 | `npm run check:server`      | 成功；本地默认环境与真实 Node 20.19.5 均通过                                                             |
-| `npm test`                  | 成功；服务端 122 项中 116 通过、6 项真实凭据测试跳过；前端 10 项通过                                     |
+| `npm test`                  | 成功；服务端 122 项中 116 通过、6 项真实凭据测试跳过；前端 25 项通过                                     |
 | `npm run test:server`       | 成功；真实 Node 20.19.5 下同为 116 通过、6 跳过                                                          |
 | `npm run check:assets`      | 成功；60 个 `public/` 文件、84.71 MiB、59 个静态引用                                                     |
 | `npm run build:edgeone`     | 成功；Vite 构建与 7 项产物检查通过；无测试/脚本/环境文件/凭据/source map/旧代理标记，API 入口与 SPA 分离 |
@@ -297,11 +297,11 @@ style-src 'self' 'unsafe-inline'
 
 `style-src 'self' 'unsafe-inline'` 仍然必需，具体位置包括：
 
-- `src/app/shell.html` 的背景焦点、初始显示/透明度与历史 DOM 契约。
+- `BackgroundLayer.vue` 与 `App.vue` 的背景焦点、初始显示/透明度和根布局契约。
 - `src/config/assets.ts` 设置背景 `background-position`。
-- `src/features/theme/theme-controller.ts` 的背景焦点与轮播，以及 `src/index.js` 仍保留的播放器/时间轴、移动下拉面板、弹窗和状态显示。
+- Theme、Music、Timeline 和 Viewport controller 的背景焦点、轮播、播放器进度、时间轴及移动下拉面板状态。
 - `src/settings/index.ts` 的页面缩放和 Wallpaper Engine 样式。
-- `ProgressSlider.vue`、`ImgViewer.vue`、`FloatMsgs.vue`、`PullDownRefresh.ts` 的进度、手势、缩放和过渡。
+- `ProgressSlider.vue`、`CommentsPanel.vue`、`ImgViewer.vue` 和 `FloatMsgs.vue` 的进度、手势、缩放和过渡。
 
 移除条件：把静态 style 迁移为已验证的样式类，把连续动态值改为受限 CSS 自定义属性或 nonce/hash 方案，并在桌面/移动视觉基线、主题、背景焦点、动画、图片缩放和播放器测试全部通过后再删除 `'unsafe-inline'`。
 
