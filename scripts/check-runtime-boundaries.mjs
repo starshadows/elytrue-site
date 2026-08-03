@@ -1,8 +1,9 @@
 import { readdir, readFile } from 'node:fs/promises'
-import { extname, join, relative, resolve, sep } from 'node:path'
+import { extname, join, relative, sep } from 'node:path'
 import process from 'node:process'
+import { fileURLToPath } from 'node:url'
 
-const ROOT = resolve(import.meta.dirname, '..')
+const ROOT = fileURLToPath(new URL('../', import.meta.url))
 const SOURCE_EXTENSIONS = new Set([
   '.js',
   '.mjs',
@@ -34,7 +35,7 @@ const RULES = [
         'node:sqlite is not part of the supported Node 20 Cloud Functions baseline',
       ],
       [
-        /\bprocess\.getBuiltinModule\b|\bimport\.meta\.(?:dirname|filename)\b|\bfs\.(?:glob|globSync)\b/,
+        /\bprocess\.getBuiltinModule\b|\bimport\.meta\.(?:dirname|filename)\b|\b(?:fs|fsPromises)\.(?:glob|globSync)\b|import\s*\{[^}]*\bglob(?:Sync)?\b[^}]*\}\s*from\s*['"]node:fs(?:\/promises)?['"]/,
         'production server code uses an API outside the Node 20 compatibility baseline',
       ],
     ],

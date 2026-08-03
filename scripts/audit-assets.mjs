@@ -17,6 +17,23 @@ const textExtensions = new Set([
   '.vue',
 ])
 const sourceRoots = ['index.html', 'src', 'public/index.manifest.json']
+const deployedSourceRoots = [
+  'index.html',
+  'src',
+  'public',
+  'server',
+  'cloud-functions',
+  'shared',
+  'middleware.js',
+  'edgeone.json',
+  'vite.config.ts',
+]
+const forbiddenLegacyMarkers = [
+  ['yume', 'niwa'].join(''),
+  ['haojiezhe12345', '.top'].join(''),
+  ['madohomu', '.love'].join(''),
+  ['yume', 'niwa.', 'madohomu', '.love'].join(''),
+]
 const failures = []
 const notices = []
 
@@ -81,7 +98,6 @@ function addReference(raw) {
 
 for (const entry of sourceRoots) {
   for (const file of await sourceFiles(entry)) {
-    if (file.includes(`${sep}public${sep}yumeniwa${sep}`)) continue
     const source = await readFile(file, 'utf8')
     for (const match of source.matchAll(
       /(?:src|href|content|data-src|data-original)\s*=\s*["']([^"']+)["']/giu,
@@ -97,6 +113,19 @@ for (const entry of sourceRoots) {
       /["'`](\/?(?:assets|res)\/[^"'`\s)]+)["'`]/giu,
     )) {
       addReference(match[1])
+    }
+  }
+}
+
+for (const entry of deployedSourceRoots) {
+  for (const file of await sourceFiles(entry)) {
+    const source = await readFile(file, 'utf8')
+    for (const marker of forbiddenLegacyMarkers) {
+      if (source.toLowerCase().includes(marker)) {
+        failures.push(
+          `forbidden legacy marker in deployed source: ${relative(root, file).split(sep).join('/')}`,
+        )
+      }
     }
   }
 }
@@ -129,16 +158,9 @@ for (const reference of references) {
   )
 }
 
-const protectedDirectRoutes = new Set([
-  'yumeniwa/README.md',
-  'yumeniwa/index.html',
-  'yumeniwa/link.png',
-  'yumeniwa/main.js',
-])
 const entryAssets = new Set(['index.manifest.json', 'social-share.jpg'])
 const orphaned = [...publicByPath.keys()]
   .filter((path) => !references.has(path))
-  .filter((path) => !protectedDirectRoutes.has(path))
   .filter((path) => !entryAssets.has(path))
   .sort()
 if (orphaned.length > 0) {
