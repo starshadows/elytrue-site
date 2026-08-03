@@ -18,6 +18,10 @@ describe('historical Blob key contract', () => {
     assert.equal(blobKeys.comment(123), 'comments/0000000000000123.json')
     assert.equal(blobKeys.commentNumber(7), 'indexes/comments/number/7.json')
     assert.equal(
+      blobKeys.commentNumberReverse(123),
+      'indexes/comments/by-id/0000000000000123.json',
+    )
+    assert.equal(
       blobKeys.commentByUser('u-1', 123),
       'indexes/comments/by-user/u-1/0000000000000123.json',
     )

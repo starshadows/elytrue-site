@@ -48,10 +48,16 @@ export class MemoryStore {
     async list(options = {}) {
         const prefix = options.prefix ?? ''
         const keys = [...this.values.keys()].filter(key => key.startsWith(prefix)).sort()
-        const sliced = Number.isFinite(options.limit) ? keys.slice(0, options.limit) : keys
+        const start = options.paginate === false ? Number(options.cursor || 0) : 0
+        const limit = Number.isFinite(options.limit) ? options.limit : keys.length
+        const sliced = keys.slice(start, start + limit)
+        const nextOffset = start + sliced.length
         return {
             blobs: sliced.map(key => ({ key, etag: 'memory' })),
             directories: [],
+            ...(options.paginate === false && nextOffset < keys.length
+                ? { cursor: String(nextOffset) }
+                : {}),
         }
     }
 }

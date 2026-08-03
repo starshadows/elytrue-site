@@ -1,29 +1,22 @@
-import { randomUUID } from 'node:crypto'
 import {
     authenticateUser,
     createSession,
     destroySession,
     findUserById,
     findUserByIdentifier,
-    getAppSecret,
     getSession,
     privateProfile,
     registerUser,
     requireSession,
     revokeAllSessions,
     updateUser,
-} from './services/auth-service.js'
+} from './auth.js'
 import {
     createComment,
-    createReport,
     countComments,
     listComments,
-    listReports,
-    moderateComment,
     setLike,
-} from './services/comment-service.js'
-import { sha256, randomToken, hashPassword, decryptEmail } from './crypto.js'
-import { sendPasswordResetEmail } from './email.js'
+} from './comments.js'
 import {
     apiResponse,
     binaryResponse,
@@ -31,10 +24,8 @@ import {
     httpError,
     readJSON,
 } from './http.js'
-import { contentTypeForKey, decodeBase64Image, validateImage } from './images.js'
 import { enforceRateLimit } from './rate-limit.js'
-import { createStores, getJSON, isPreconditionFailure, listAll } from './storage.js'
-import { blobKeys, blobPrefixes } from './domain/blob-keys.js'
+import { createStores } from './storage.js'
 import {
     clientIdentity,
     ensureWriteOrigin,
@@ -42,7 +33,24 @@ import {
 } from './middleware/request-context.js'
 import { matchApiRoute } from './routes/registry.js'
 import { apiRoutePath } from './lib/routing.js'
-import { validatePassword } from '../shared/validation.js'
+import {
+    cleanupStalePendingImages,
+    deletePendingImage,
+    loadImage,
+    saveImage,
+} from './services/image-service.js'
+import {
+    completePasswordReset as completePasswordResetFlow,
+    requestPasswordReset as requestPasswordResetFlow,
+} from './services/password-reset-service.js'
+import { createReport } from './services/report-service.js'
+import {
+    authorizeAdmin,
+    bootstrapAdministrator,
+    getAdminReports,
+    getAdminUsage,
+    moderateAdminComment,
+} from './services/admin-service.js'
 
 // server/build-info.js 由 scripts/gen-build-info.mjs 在构建时生成(被 gitignore),
 // 本地测试/开发时不存在,回退为 dev 默认值。
@@ -60,12 +68,6 @@ async function loadBuildInfo() {
     return buildInfoPromise
 }
 
-const MAX_AVATAR_BYTES = 1024 * 1024
-const MAX_COMMENT_IMAGE_BYTES = 2 * 1024 * 1024
-const BLOB_FREE_BYTES = 1024 * 1024 * 1024
-const UPLOAD_STOP_BYTES = Math.floor(BLOB_FREE_BYTES * 0.9)
-const UPLOAD_WARNING_BYTES = Math.floor(BLOB_FREE_BYTES * 0.8)
-
 function authenticatedProfile(user, env, session) {
     return {
         ...privateProfile(user, env),
@@ -73,72 +75,9 @@ function authenticatedProfile(user, env, session) {
     }
 }
 
-// 进程内按 key 串行化 usage/uploads.json 的读-改-写,减少并发覆盖;
-// 跨实例并发仍是最终一致(可运行 scripts/rebuild-usage.mjs 重算)。
-const usageWriteQueue = new Map()
-function enqueueUsageWrite(key, task) {
-    const previous = usageWriteQueue.get(key) || Promise.resolve()
-    const next = previous.then(task, task)
-    usageWriteQueue.set(key, next.then(() => {}, () => {}))
-    return next
-}
-
-async function adjustUploadUsage(data, delta) {
-    const key = blobKeys.uploadUsage
-    return enqueueUsageWrite(key, async () => {
-        const current = await getJSON(data, key) || { uploadedBytes: 0 }
-        const uploadedBytes = Math.max(0, Math.round(Number(current.uploadedBytes || 0) + delta))
-        const next = { ...current, uploadedBytes, updatedAt: Date.now() }
-        next.warning = uploadedBytes >= UPLOAD_WARNING_BYTES
-        await data.setJSON(key, next)
-        return uploadedBytes
-    })
-}
-
-async function saveImage({ data, uploads }, user, base64, kind) {
-    const maxBytes = kind === 'avatar' ? MAX_AVATAR_BYTES : MAX_COMMENT_IMAGE_BYTES
-    const buffer = decodeBase64Image(base64, maxBytes)
-    const image = validateImage(buffer, maxBytes)
-    const usage = (await getJSON(data, blobKeys.uploadUsage)) || { uploadedBytes: 0 }
-    if (Number(usage.uploadedBytes || 0) + buffer.length >= UPLOAD_STOP_BYTES) {
-        throw httpError(507, '图片存储空间接近免费额度上限，已暂停新图片上传')
-    }
-
-    const imageId = randomUUID()
-    const blobKey = blobKeys.uploadBlob(kind, user.id, imageId, image.ext)
-    await uploads.set(blobKey, buffer.buffer.slice(buffer.byteOffset, buffer.byteOffset + buffer.byteLength))
-    const aliasKey = blobKeys.imageAlias(kind, imageId)
-    await data.setJSON(aliasKey, {
-        imageId,
-        userId: user.id,
-        blobKey,
-        contentType: image.type,
-        width: image.width,
-        height: image.height,
-        size: buffer.length,
-        status: kind === 'avatar' ? 'active' : 'pending',
-        createdAt: Date.now(),
-    }, { onlyIfNew: true })
-
-    const uploadedBytes = await adjustUploadUsage(data, buffer.length)
-    if (uploadedBytes >= UPLOAD_WARNING_BYTES) {
-        console.warn('Elytrue Blob usage has reached the 80% warning threshold.')
-    }
-    return { imageId, blobKey, size: buffer.length }
-}
-
 async function serveImage(stores, kind, imageId) {
-    const alias = await getJSON(
-        stores.data,
-        blobKeys.imageAlias(kind, imageId),
-    )
-    if (!alias?.blobKey) return errorResponse(404, '图片不存在')
-    const buffer = await stores.uploads.get(alias.blobKey, {
-        type: 'arrayBuffer',
-        consistency: 'strong',
-    })
-    if (!buffer) return errorResponse(404, '图片不存在')
-    return binaryResponse(buffer, alias.contentType || contentTypeForKey(alias.blobKey), {
+    const image = await loadImage(stores, kind, imageId)
+    return binaryResponse(image.buffer, image.contentType, {
         cache: 'public, max-age=31536000, immutable',
     })
 }
@@ -152,7 +91,12 @@ async function register(context, stores) {
         email: body.email,
         password: body.password,
     })
-    const { session, cookies } = await createSession(stores.data, user, context.request)
+    const { session, cookies } = await createSession(
+        stores.data,
+        user,
+        context.request,
+        environmentFor(context),
+    )
     return apiResponse(authenticatedProfile(user, environmentFor(context), session), {
         status: 201,
         message: '注册成功',
@@ -171,7 +115,12 @@ async function login(context, stores) {
         identifier,
         body.password || '',
     )
-    const { session, cookies } = await createSession(stores.data, user, context.request)
+    const { session, cookies } = await createSession(
+        stores.data,
+        user,
+        context.request,
+        environmentFor(context),
+    )
     return apiResponse(authenticatedProfile(user, environmentFor(context), session), {
         message: '登录成功',
         cookies,
@@ -180,14 +129,24 @@ async function login(context, stores) {
 
 async function logout(context, stores, allDevices = false) {
     await ensureWriteOrigin(context)
-    const auth = await requireSession(stores.data, context.request)
+    const auth = await requireSession(stores.data, context.request, {
+        env: environmentFor(context),
+    })
     if (allDevices) await revokeAllSessions(stores.data, auth.user)
-    const cookies = await destroySession(stores.data, context.request, auth)
+    const cookies = await destroySession(
+        stores.data,
+        context.request,
+        auth,
+        environmentFor(context),
+    )
     return apiResponse(null, { message: '已退出登录', cookies })
 }
 
 async function getMe(context, stores) {
-    const auth = await requireSession(stores.data, context.request, { csrf: false })
+    const auth = await requireSession(stores.data, context.request, {
+        csrf: false,
+        env: environmentFor(context),
+    })
     return apiResponse(authenticatedProfile(auth.user, environmentFor(context), auth.session), {
         cookies: auth.refreshCookies,
     })
@@ -217,7 +176,9 @@ async function findUsers(context, stores) {
 
 async function updateProfile(context, stores) {
     await ensureWriteOrigin(context)
-    const auth = await requireSession(stores.data, context.request)
+    const auth = await requireSession(stores.data, context.request, {
+        env: environmentFor(context),
+    })
     const body = await readJSON(context.request, 2 * 1024 * 1024)
     const updates = {}
     if (body.name !== undefined) updates.name = body.name
@@ -236,7 +197,12 @@ async function updateProfile(context, stores) {
         updates,
     )
     const cookies = body.password !== undefined
-        ? await destroySession(stores.data, context.request, auth)
+        ? await destroySession(
+            stores.data,
+            context.request,
+            auth,
+            environmentFor(context),
+        )
         : []
     return apiResponse(privateProfile(user, environmentFor(context)), {
         message: body.password !== undefined ? '密码已更新，请重新登录' : '资料已更新',
@@ -252,30 +218,7 @@ async function requestPasswordReset(context, stores) {
         : {}
     const identifier = body.identifier || body.email || url.searchParams.get('email') || ''
     await enforceRateLimit('reset', clientIdentity(context, String(identifier).toLowerCase()))
-    const user = await findUserByIdentifier(stores.data, environmentFor(context), identifier)
-    if (user) {
-        const token = randomToken(32)
-        await stores.data.setJSON(blobKeys.passwordReset(sha256(token)), {
-            userId: user.id,
-            expiresAt: Date.now() + 30 * 60 * 1000,
-            createdAt: Date.now(),
-        }, { onlyIfNew: true })
-        const result = await sendPasswordResetEmail(environmentFor(context), {
-            email: decryptEmail(getAppSecret(environmentFor(context)), user.emailCipher),
-            username: user.name,
-            token,
-        })
-        const logEntry = {
-            event: 'password_reset_email',
-            success: result.ok,
-            userId: user.id,
-            provider: 'resend',
-        }
-        if (result.emailId) logEntry.emailId = result.emailId
-        if (result.status !== undefined) logEntry.status = result.status
-        if (result.error) logEntry.error = String(result.error).slice(0, 500)
-        console[result.ok ? 'log' : 'error'](JSON.stringify(logEntry))
-    }
+    await requestPasswordResetFlow(stores.data, environmentFor(context), identifier)
     return apiResponse(null, {
         message: '如果账号存在，重置邮件会发送到注册邮箱',
     })
@@ -286,36 +229,15 @@ async function completePasswordReset(context, stores) {
     const body = await readJSON(context.request, 32 * 1024)
     const token = String(body.id || body.token || '')
     const password = body.data ?? body.password
-    const passwordError = validatePassword(password)
-    if (!token || passwordError) throw httpError(400, passwordError || '重置链接无效')
-    const tokenHash = sha256(token)
-    const key = blobKeys.passwordReset(tokenHash)
-    const reset = await getJSON(stores.data, key)
-    if (!reset || reset.expiresAt <= Date.now()) throw httpError(400, '重置链接无效或已使用')
-    const user = await findUserById(stores.data, reset.userId)
-    if (!user) throw httpError(400, '重置链接无效或已使用')
-
-    // 原子认领:同一 token 只允许一个请求继续,并发/重复使用在此被拒绝。
-    // 认领标记与原始记录都是 token 的哈希,不落 token 本身。
-    const claimKey = blobKeys.passwordResetClaim(tokenHash)
-    try {
-        await stores.data.setJSON(claimKey, { claimedAt: Date.now() }, { onlyIfNew: true })
-    } catch (error) {
-        if (isPreconditionFailure(error)) throw httpError(400, '重置链接无效或已使用')
-        throw error
-    }
-
-    user.passwordHash = await hashPassword(password)
-    user.sessionVersion = Number(user.sessionVersion || 0) + 1
-    user.updatedAt = Date.now()
-    await stores.data.setJSON(blobKeys.user(user.id), user)
-    await stores.data.delete(key)
+    await completePasswordResetFlow(stores.data, token, password)
     return apiResponse(null, { message: '密码已重置，请重新登录' })
 }
 
 async function uploadCommentImage(context, stores) {
     await ensureWriteOrigin(context)
-    const auth = await requireSession(stores.data, context.request)
+    const auth = await requireSession(stores.data, context.request, {
+        env: environmentFor(context),
+    })
     await enforceRateLimit('upload', clientIdentity(context, auth.user.id))
     const body = await readJSON(context.request, 3 * 1024 * 1024)
     const saved = await saveImage(stores, auth.user, body.image, 'comment')
@@ -325,106 +247,20 @@ async function uploadCommentImage(context, stores) {
 
 async function deleteUploadedImage(context, stores) {
     await ensureWriteOrigin(context)
-    const auth = await requireSession(stores.data, context.request)
+    const auth = await requireSession(stores.data, context.request, {
+        env: environmentFor(context),
+    })
     await enforceRateLimit('upload', clientIdentity(context, auth.user.id))
     const imageId = String(new URL(context.request.url).searchParams.get('imageId') || '')
-    if (!/^[a-f0-9-]{36}$/iu.test(imageId)) throw httpError(400, '图片编号无效')
-    const aliasKey = blobKeys.imageAlias('comments', imageId)
-    const alias = await getJSON(stores.data, aliasKey)
-    if (!alias || alias.userId !== auth.user.id) throw httpError(404, '图片不存在')
-    // 只有明确标记 pending 的临时图片可删除;
-    // status 缺失按 active 处理(旧数据/旧留言图片),禁止删除
-    if (alias.status !== 'pending') throw httpError(409, '图片已关联留言，无法删除')
-    // 先删 Blob,再删别名,最后扣减统计;任何一步失败都不扣减,避免重复/错误扣减
-    try {
-        await stores.uploads.delete(alias.blobKey)
-    } catch (error) {
-        console.error(JSON.stringify({
-            event: 'upload_delete_blob_failed',
-            imageId,
-            error: String(error?.message || error).slice(0, 300),
-        }))
-        throw httpError(500, '图片删除失败，请稍后再试')
-    }
-    try {
-        await stores.data.delete(aliasKey)
-    } catch (error) {
-        console.error(JSON.stringify({
-            event: 'upload_alias_delete_failed',
-            imageId,
-            error: String(error?.message || error).slice(0, 300),
-        }))
-        throw httpError(500, '图片删除失败，请稍后再试')
-    }
-    await adjustUploadUsage(stores.data, -Number(alias.size || 0))
+    await deletePendingImage(stores, auth.user, imageId)
     return apiResponse(null, { message: '图片已删除' })
-}
-
-/** 清理本人超过 24 小时仍未关联留言的 pending 图片;失败只记日志,不抛错 */
-async function cleanupStalePendingImages(stores, user) {
-    const STALE_MS = 24 * 60 * 60 * 1000
-    const cutoff = Date.now() - STALE_MS
-    const blobs = await listAll(stores.data, blobPrefixes.commentAliases).catch(() => [])
-    // 通过用户留言索引核对引用,避免删除已被留言引用的图片
-    // (正常不变量下被引用 ⇔ active,此处防御 legacy/异常状态)
-    let referencedIds = null
-    const userIndexBlobs = await listAll(
-        stores.data,
-        blobKeys.commentsByUserPrefix(user.id),
-    ).catch(() => [])
-    if (userIndexBlobs.length > 0) {
-        const referenced = new Set()
-        for (const blob of userIndexBlobs) {
-            const match = String(blob.key).match(/\/by-user\/[^/]+\/(\d+)\.json$/u)
-            const id = match ? Number(match[1]) : 0
-            if (!id) continue
-            const comment = await getJSON(stores.data, blobKeys.comment(id)).catch(() => null)
-            if (comment?.image) {
-                for (const imageId of String(comment.image).split(',')) {
-                    if (imageId) referenced.add(imageId)
-                }
-            }
-        }
-        referencedIds = referenced
-    }
-
-    for (const blob of blobs) {
-        const alias = await getJSON(stores.data, blob.key).catch(() => null)
-        if (!alias || alias.userId !== user.id || alias.status !== 'pending') continue
-        if (Number(alias.createdAt || 0) > cutoff) continue
-        if (referencedIds?.has(alias.imageId)) {
-            console.error(JSON.stringify({
-                event: 'pending_image_cleanup_skipped_referenced',
-                userId: user.id,
-                imageId: alias.imageId,
-            }))
-            continue
-        }
-        try {
-            await stores.uploads.delete(alias.blobKey)
-            await stores.data.delete(blob.key)
-            await adjustUploadUsage(stores.data, -Number(alias.size || 0))
-            console.log(JSON.stringify({
-                event: 'pending_image_cleanup',
-                success: true,
-                userId: user.id,
-                imageId: alias.imageId,
-            }))
-        } catch (error) {
-            console.error(JSON.stringify({
-                event: 'pending_image_cleanup',
-                success: false,
-                userId: user.id,
-                imageId: alias.imageId,
-                error: String(error?.message || error).slice(0, 300),
-            }))
-        }
-    }
 }
 
 async function postComment(context, stores) {
     await ensureWriteOrigin(context)
-    const auth = await requireSession(stores.data, context.request)
+    const auth = await requireSession(stores.data, context.request, {
+        env: environmentFor(context),
+    })
     await enforceRateLimit('comment', clientIdentity(context, auth.user.id))
     const body = await readJSON(context.request, 64 * 1024)
     const comment = await createComment(stores.data, auth.user, body)
@@ -432,7 +268,9 @@ async function postComment(context, stores) {
 }
 
 async function getComments(context, stores) {
-    const auth = await getSession(stores.data, context.request)
+    const auth = await getSession(stores.data, context.request, {
+        env: environmentFor(context),
+    })
     const url = new URL(context.request.url)
     const result = await listComments(stores.data, url.searchParams, auth?.user)
     // 用户列表:{ items, hasMore, nextCursor };主列表:数组(scanCap 截断时返回 { items, hasMore })
@@ -450,7 +288,9 @@ async function commentsCount(context, stores) {
 
 async function likeComment(context, stores, liked) {
     await ensureWriteOrigin(context)
-    const auth = await requireSession(stores.data, context.request)
+    const auth = await requireSession(stores.data, context.request, {
+        env: environmentFor(context),
+    })
     await enforceRateLimit('like', clientIdentity(context, auth.user.id))
     const commentId = Number(new URL(context.request.url).searchParams.get('commentId'))
     if (!Number.isSafeInteger(commentId)) throw httpError(400, '留言编号无效')
@@ -460,7 +300,9 @@ async function likeComment(context, stores, liked) {
 
 async function reportComment(context, stores) {
     await ensureWriteOrigin(context)
-    const auth = await requireSession(stores.data, context.request)
+    const auth = await requireSession(stores.data, context.request, {
+        env: environmentFor(context),
+    })
     await enforceRateLimit('report', clientIdentity(context, auth.user.id))
     const body = await readJSON(context.request, 16 * 1024)
     const commentId = Number(body.commentId || new URL(context.request.url).searchParams.get('commentId'))
@@ -469,57 +311,44 @@ async function reportComment(context, stores) {
 }
 
 async function requireAdmin(context, stores) {
-    const auth = await requireSession(stores.data, context.request, {
-        csrf: !['GET', 'HEAD'].includes(context.request.method.toUpperCase()),
-    })
-    if (auth.user.role !== 'admin') throw httpError(403, '无管理权限')
-    await enforceRateLimit('admin', clientIdentity(context, auth.user.id))
-    return auth
+    return authorizeAdmin(
+        stores.data,
+        context.request,
+        environmentFor(context),
+        user => enforceRateLimit('admin', clientIdentity(context, user.id)),
+    )
 }
 
 async function bootstrapAdmin(context, stores) {
     await ensureWriteOrigin(context)
-    const auth = await requireSession(stores.data, context.request)
-    const configured = environmentFor(context).ADMIN_BOOTSTRAP_SECRET
-    const supplied = context.request.headers.get('x-admin-bootstrap-secret')
-    if (!configured || supplied !== configured) throw httpError(403, '初始化凭据无效')
-    const markerKey = blobKeys.adminBootstrapClosed
-    const marker = await getJSON(stores.data, markerKey)
-    if (marker) throw httpError(410, '管理员初始化入口已永久关闭')
-    auth.user.role = 'admin'
-    auth.user.updatedAt = Date.now()
-    await stores.data.setJSON(blobKeys.user(auth.user.id), auth.user)
-    await stores.data.setJSON(markerKey, {
-        userId: auth.user.id,
-        closedAt: Date.now(),
-    }, { onlyIfNew: true })
+    const auth = await requireSession(stores.data, context.request, {
+        env: environmentFor(context),
+    })
+    await bootstrapAdministrator(
+        stores.data,
+        auth.user,
+        environmentFor(context).ADMIN_BOOTSTRAP_SECRET,
+        context.request.headers.get('x-admin-bootstrap-secret'),
+    )
     return apiResponse(null, { message: '唯一管理员已初始化，入口已永久关闭' })
 }
 
 async function adminReports(context, stores) {
     await requireAdmin(context, stores)
-    return apiResponse(await listReports(stores.data))
+    return apiResponse(await getAdminReports(stores.data))
 }
 
 async function adminModerate(context, stores) {
     await ensureWriteOrigin(context)
     await requireAdmin(context, stores)
     const body = await readJSON(context.request, 16 * 1024)
-    await moderateComment(stores.data, Number(body.commentId), body.action)
+    await moderateAdminComment(stores.data, Number(body.commentId), body.action)
     return apiResponse(null, { message: '管理操作已完成' })
 }
 
 async function adminUsage(context, stores) {
     await requireAdmin(context, stores)
-    const usage = (await getJSON(stores.data, blobKeys.uploadUsage)) || {
-        uploadedBytes: 0,
-    }
-    return apiResponse({
-        ...usage,
-        warningAt: UPLOAD_WARNING_BYTES,
-        uploadsStopAt: UPLOAD_STOP_BYTES,
-        freeQuotaReference: BLOB_FREE_BYTES,
-    })
+    return apiResponse(await getAdminUsage(stores))
 }
 
 const routeHandlers = Object.freeze({

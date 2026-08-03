@@ -2,6 +2,8 @@ import { randomUUID } from 'node:crypto'
 import { httpError } from './http.js'
 import { getJSON, listAll, isPreconditionFailure } from './storage.js'
 import { blobKeys, blobPrefixes } from './domain/blob-keys.js'
+import { createReportRepository } from './repositories/report-repository.js'
+import { preserveCommentNumberBeforeDelete } from './services/report-service.js'
 import { sanitizePlainText, validateComment } from '../shared/validation.js'
 const INTERNAL_ID_THRESHOLD = 1e12
 
@@ -98,6 +100,9 @@ async function rollbackCommentResources(data, commentId, { reservationId, number
             .delete(blobKeys.commentByDate(date, commentId))
             .catch(error => failures.push(`dateIndex:${error?.message || error}`))
     }
+    await createReportRepository(data)
+        .deleteNumberReverse(commentId)
+        .catch(error => failures.push(`numberReverse:${error?.message || error}`))
     if (failures.length > 0) {
         console.error(JSON.stringify({
             event: 'comment_rollback_failed',
@@ -213,6 +218,7 @@ export async function createComment(data, user, body, { idFactory = newCommentId
             commentId: comment.id,
             createdAt,
         })
+        await createReportRepository(data).setNumberReverse(comment.id, number)
     } catch (error) {
         await rollbackCommentResources(data, comment.id, { reservationId, number, uid: user.id, date })
         console.error(JSON.stringify({
@@ -390,7 +396,7 @@ export async function listComments(data, query, viewer) {
 
     const items = await Promise.all(collected.items.map(comment => getCommentDetail(data, {
         ...comment,
-        number: comment.number ?? fallbackRanks.get(comment.id) ?? comment.id,
+        number: comment.number ?? fallbackRanks?.get(comment.id) ?? comment.id,
     }, viewer)))
     return { items, hasMore: collected.truncated }
 }
@@ -474,87 +480,6 @@ export async function setLike(data, commentId, user, liked) {
     }
 }
 
-export async function createReport(data, commentId, user, reason) {
-    const comment = await getJSON(data, blobKeys.comment(commentId))
-    if (!comment) throw httpError(404, '留言不存在')
-    if (comment.uid === user.id) throw httpError(403, '不能举报自己的留言')
-    const cleanReason = sanitizePlainText(reason || '用户举报').slice(0, 500)
-    const key = blobKeys.commentReport(commentId, user.id)
-    try {
-        await data.setJSON(key, {
-            id: randomUUID(),
-            commentId,
-            commentNumber: validPublicNumber(comment.number),
-            userId: user.id,
-            reason: cleanReason,
-            createdAt: Date.now(),
-            status: 'open',
-        }, { onlyIfNew: true })
-    } catch (error) {
-        if (isPreconditionFailure(error)) throw httpError(409, '已举报过该留言')
-        throw error
-    }
-}
-
-function validPublicNumber(value) {
-    const number = Number(value)
-    return Number.isSafeInteger(number) && number > 0 && number < INTERNAL_ID_THRESHOLD
-        ? number
-        : null
-}
-
-async function findTombstoneNumbers(data, commentIds) {
-    const unresolved = new Set(commentIds)
-    const result = new Map()
-    if (unresolved.size === 0) return result
-
-    const seats = await listAll(data, blobPrefixes.commentNumbers, Infinity)
-    for (const blob of seats) {
-        const seat = await getJSON(data, blob.key).catch(() => null)
-        const commentId = Number(seat?.commentId)
-        if (!seat?.tombstone || !unresolved.has(commentId)) continue
-
-        const keyNumber = Number(blob.key.slice(blobPrefixes.commentNumbers.length, -5))
-        const number = validPublicNumber(seat.number) ?? validPublicNumber(keyNumber)
-        if (!number) continue
-        result.set(commentId, number)
-        unresolved.delete(commentId)
-        if (unresolved.size === 0) break
-    }
-    return result
-}
-
-export async function listReports(data) {
-    const blobs = await listAll(data, blobPrefixes.reports, Infinity)
-    const reports = []
-    const unresolvedDeletedIds = new Set()
-    for (const blob of blobs) {
-        const report = await getJSON(data, blob.key)
-        if (!report) continue
-        const comment = await getJSON(data, blobKeys.comment(report.commentId)).catch(() => null)
-        const displayId =
-            validPublicNumber(comment?.number) ??
-            validPublicNumber(report.commentNumber)
-        const internalId = Number(report.commentId)
-        if (!comment && !displayId && Number.isSafeInteger(internalId)) {
-            unresolvedDeletedIds.add(internalId)
-        }
-        reports.push({
-            ...report,
-            displayId,
-            deleted: !comment,
-        })
-    }
-
-    const tombstoneNumbers = await findTombstoneNumbers(data, unresolvedDeletedIds)
-    for (const report of reports) {
-        if (!report.displayId && report.deleted) {
-            report.displayId = tombstoneNumbers.get(Number(report.commentId)) ?? null
-        }
-    }
-    return reports.sort((a, b) => b.createdAt - a.createdAt)
-}
-
 export async function moderateComment(data, commentId, action) {
     const key = blobKeys.comment(commentId)
     const comment = await getJSON(data, key)
@@ -563,6 +488,7 @@ export async function moderateComment(data, commentId, action) {
         // 可恢复顺序:先写 tombstone(失败则中止,状态未变)→ 删正文 → 删用户索引。
         // 用户索引删除失败:写 repair marker(repairs/comment-delete/{id}.json)供迁移/修复任务处理,
         // 不能无标记返回成功。
+        await preserveCommentNumberBeforeDelete(data, comment)
         if (comment.number) {
             const seatKey = blobKeys.commentNumber(comment.number)
             const seat = await getJSON(data, seatKey)

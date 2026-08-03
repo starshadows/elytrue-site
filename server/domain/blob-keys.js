@@ -29,6 +29,8 @@ export const blobKeys = Object.freeze({
 
     comment: commentId => `${blobPrefixes.comments}${paddedCommentId(commentId)}.json`,
     commentNumber: number => `${blobPrefixes.commentNumbers}${Number(number)}.json`,
+    commentNumberReverse: commentId =>
+        `indexes/comments/by-id/${paddedCommentId(commentId)}.json`,
     commentsByUserPrefix: userId => `${blobPrefixes.commentUsers}${userId}/`,
     commentByUser: (userId, commentId) =>
         `${blobPrefixes.commentUsers}${userId}/${paddedCommentId(commentId)}.json`,
