@@ -1,6 +1,6 @@
 <template>
   <div
-    v-for="item in msgs"
+    v-for="item in FloatMsgs.messages"
     :key="item.id"
     :ref="`msg-${item.id}`"
     :class="{
@@ -9,132 +9,78 @@
       persist: item.persist,
       closing: item.closing,
     }"
-    @touchstart="item.touchstartHandler"
-    @touchmove.prevent="item.touchmoveHandler"
-    @touchend="item.touchendHandler"
+    @touchstart="touchStart($event, item.id)"
+    @touchmove.prevent="touchMove($event, item.id)"
+    @touchend="touchEnd($event, item.id)"
   >
     <i v-if="item.type == 'info'">💡</i>
     <i v-if="item.type == 'success'">✅</i>
     <i v-if="item.type == 'warn'">⚠️</i>
     <i v-if="item.type == 'error'">❌</i>
     <span v-html="item.msg"></span>
-    <i v-if="item.persist" class="closeBtn" @click="item.close()"></i>
+    <i
+      v-if="item.persist"
+      class="closeBtn"
+      @click="FloatMsgs.close(item.id)"
+    ></i>
   </div>
 </template>
 
-<script lang="ts">
-interface MsgPublic {
-  type: 'info' | 'success' | 'warn' | 'error'
-  msg: string
-  persist?: boolean
-  timeout?: number
+<script setup lang="ts">
+import { nextTick } from 'vue'
+import FloatMsgs from './index'
+
+interface SwipeState {
+  element: HTMLDivElement
+  startTime: number
+  startX: number
+  x: number
 }
 
-interface MsgPrivate extends MsgPublic {
-  id: number
-  readonly el: HTMLDivElement
-  close: () => void
-  closing?: boolean
-  touchstartHandler: (e: TouchEvent) => void
-  touchmoveHandler: (e: TouchEvent) => void
-  touchendHandler: (e: TouchEvent) => void
+const swipes = new Map<number, SwipeState>()
+
+function touchStart(event: TouchEvent, id: number): void {
+  const touch = event.touches[0]
+  const element = event.currentTarget
+  if (!touch || !(element instanceof HTMLDivElement)) return
+  swipes.set(id, {
+    element,
+    startTime: event.timeStamp,
+    startX: touch.clientX,
+    x: 0,
+  })
 }
 
-export default {
-  data() {
-    return {
-      count: 0,
-      msgs: [] as MsgPrivate[],
-    }
-  },
+function touchMove(event: TouchEvent, id: number): void {
+  const swipe = swipes.get(id)
+  const touch = event.touches[0]
+  if (!swipe || !touch) return
+  swipe.x = touch.clientX - swipe.startX
+  swipe.element.style.transform = `translate(${swipe.x}px)`
+  swipe.element.style.opacity = String(
+    1 - Math.abs(swipe.x) / swipe.element.clientWidth,
+  )
+}
 
-  methods: {
-    show(msg: MsgPublic | string) {
-      const id = this.count++
-
-      let el: HTMLDivElement | undefined
-      const getEl = () => {
-        if (el) return el
-        else {
-          el = (this.$refs[`msg-${id}`] as HTMLDivElement[])[0]
-          return el
-        }
-      }
-
-      let startX: number
-      let startTime: number
-      let swipeX: number
-
-      this.msgs.push({
-        ...(typeof msg == 'string' ? { type: 'info', msg: msg } : msg),
-        id,
-
-        get el() {
-          return getEl()
-        },
-
-        close: () => {
-          self.closing = true
-
-          const elHeight = self.el.getBoundingClientRect().height
-          setTimeout(() => {
-            self.el.style.marginBottom = `-${elHeight}px`
-          }, 200)
-
-          setTimeout(() => {
-            this.msgs = this.msgs.filter((x) => x.id != id)
-          }, 500)
-        },
-
-        touchstartHandler: (e) => {
-          startX = e.touches[0].clientX
-          startTime = e.timeStamp
-          swipeX = 0
-        },
-        touchmoveHandler: (e) => {
-          swipeX = e.touches[0].clientX - startX
-          self.el.style.transform = `translate(${swipeX}px)`
-          self.el.style.opacity = (
-            1 -
-            Math.abs(swipeX) / self.el.clientWidth
-          ).toString()
-        },
-        touchendHandler: (e) => {
-          const swipeSpeed = Math.abs(swipeX) / (e.timeStamp - startTime)
-          // console.log(swipeSpeed)
-          if (Math.abs(swipeX) > self.el.clientWidth / 2 || swipeSpeed > 0.5) {
-            this.$nextTick(() => {
-              self.el.style.transform = `translate(${swipeX < 0 ? '-' : ''}100%)`
-              self.el.style.opacity = '0'
-              self.el.style.animation = 'none'
-            })
-            self.close()
-          } else {
-            self.el.style.removeProperty('transform')
-            self.el.style.removeProperty('opacity')
-            if (swipeX) {
-              self.el.style.transition = 'transform 0.2s, opacity 0.2s'
-              setTimeout(() => {
-                self.el.style.removeProperty('transition')
-              }, 200)
-            }
-          }
-        },
-      })
-
-      const self = this.msgs.find((x) => x.id == id)!
-
-      if (!self.persist) {
-        setTimeout(() => {
-          self.close()
-        }, self.timeout || 4000)
-      }
-    },
-
-    close(id: number) {
-      this.msgs.find((x) => x.id == id)?.close()
-    },
-  },
+function touchEnd(event: TouchEvent, id: number): void {
+  const swipe = swipes.get(id)
+  if (!swipe) return
+  swipes.delete(id)
+  const elapsed = Math.max(1, event.timeStamp - swipe.startTime)
+  if (
+    Math.abs(swipe.x) > swipe.element.clientWidth / 2 ||
+    Math.abs(swipe.x) / elapsed > 0.5
+  ) {
+    void nextTick(() => {
+      swipe.element.style.transform = `translate(${swipe.x < 0 ? '-' : ''}100%)`
+      swipe.element.style.opacity = '0'
+      swipe.element.style.animation = 'none'
+    })
+    FloatMsgs.close(id)
+    return
+  }
+  swipe.element.style.removeProperty('transform')
+  swipe.element.style.removeProperty('opacity')
 }
 </script>
 

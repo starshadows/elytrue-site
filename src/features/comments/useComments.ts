@@ -1,25 +1,23 @@
-import { requireController } from '../../app/controller'
+import { commentsStore } from './comments-store'
 
 export function useComments() {
   function refresh(): void {
-    const controller = requireController()
-    controller.clearComments()
-    void controller.loadComments()
+    void commentsStore.refresh()
   }
 
   function seek(direction: -1 | 1): void {
-    requireController().seekComment(direction)
+    document.dispatchEvent(
+      new CustomEvent('elytrue:seek-comment', { detail: direction }),
+    )
   }
 
   function openEditor(): void {
-    void requireController().newComment()
+    document.dispatchEvent(new Event('elytrue:open-comment-editor'))
   }
 
   function gotoNumber(number: string | number): void {
-    const controller = requireController()
-    controller.clearComments(1)
-    void controller.loadComments({ number })
+    void commentsStore.gotoNumber(number)
   }
 
-  return { gotoNumber, openEditor, refresh, seek }
+  return { gotoNumber, openEditor, refresh, seek, state: commentsStore.state }
 }

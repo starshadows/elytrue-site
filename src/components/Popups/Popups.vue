@@ -1,14 +1,26 @@
 <template>
   <div
-    v-for="(item, index) in popups"
+    v-for="name in staticNames"
+    v-show="staticEntry(name)"
+    :key="name"
+    :class="{ popupContainer: true, closing: staticEntry(name)?.closing }"
+  >
+    <div class="popupBG" @click="closeStatic(name)"></div>
+    <div :id="name" class="popupItem">
+      <component :is="components[name]"></component>
+      <button class="closeBtn" @click="closeStatic(name)"></button>
+    </div>
+  </div>
+  <div
+    v-for="item in dynamicPopups"
     :key="item.id"
     :class="{ popupContainer: true, closing: item.closing }"
   >
     <div class="popupBG" @click="close(item.id)"></div>
     <div class="popupItem">
       <component
-        :ref="`popup-${index}`"
-        :is="item.component"
+        :id="item.name"
+        :is="components[item.name]"
         v-bind="item.props"
         @close="close(item.id)"
       ></component>
@@ -17,61 +29,53 @@
   </div>
 </template>
 
-<script lang="ts">
-import type { ComponentPublicInstance } from 'vue'
-import { logFrontendError } from '../../app/controller'
+<script setup lang="ts">
+import { computed } from 'vue'
+import AdminPanel from './AdminPanel.vue'
+import BackgroundGalleryPopup from './BackgroundGalleryPopup.vue'
+import DisplaySettingsPopup from './DisplaySettingsPopup.vue'
+import InputPopup from './InputPopup.vue'
+import LoginPopup from './LoginPopup.vue'
+import SetAvatarPopup from './SetAvatarPopup.vue'
+import SetPasswordPopup from './SetPasswordPopup.vue'
+import ThemeMusicPopup from './ThemeMusicPopup.vue'
+import UserHome from './UserHome.vue'
+import Popups, { type PopupName } from './index'
 
-interface Popup {
-  id: number
-  component: string
-  props?: object
-  closing?: boolean
+const components: Record<PopupName, object> = {
+  adminPanel: AdminPanel,
+  displaySettings: DisplaySettingsPopup,
+  getImgPopup: BackgroundGalleryPopup,
+  loginPopup: LoginPopup,
+  promptInputPopup: InputPopup,
+  setAvatarPopup: SetAvatarPopup,
+  setPasswordPopup: SetPasswordPopup,
+  themeSelectorPopup: ThemeMusicPopup,
+  userHome: UserHome,
 }
 
-export default {
-  data() {
-    return {
-      popups: [] as Popup[],
-      count: 0,
-    }
-  },
+const staticNames = [
+  'getImgPopup',
+  'themeSelectorPopup',
+  'displaySettings',
+] as const satisfies readonly PopupName[]
+const dynamicPopups = computed(() =>
+  Popups.popups.filter(
+    (item) => !staticNames.some((name) => name === item.name),
+  ),
+)
 
-  methods: {
-    show(component: string, props?: object) {
-      if (component in this.$.appContext.components) {
-        this.popups.push({ component, props, id: this.count++ })
-      } else {
-        logFrontendError(undefined, `Cannot find a popup named "${component}"`)
-      }
-    },
+function staticEntry(name: PopupName) {
+  return Popups.popups.find((item) => item.name === name)
+}
 
-    close(id?: number) {
-      if (id != null) {
-        const popupToClose = this.popups.find((x) => x.id == id)
-        if (!popupToClose) return
-        popupToClose.closing = true
-        setTimeout(() => {
-          this.popups = this.popups.filter((x) => x != popupToClose)
-        }, 150)
-      } else {
-        const popupsToClose = [...this.popups]
-        popupsToClose.forEach((x) => (x.closing = true))
-        setTimeout(() => {
-          this.popups = this.popups.filter((x) => !popupsToClose.includes(x))
-        }, 150)
-      }
-    },
+function closeStatic(name: PopupName): void {
+  const entry = staticEntry(name)
+  if (entry) Popups.close(entry.id)
+}
 
-    getAllPopups() {
-      const popups = []
-      for (const key in this.$refs) {
-        const value = this.$refs[key] as ComponentPublicInstance[] | null
-        if (value && value.length && key.startsWith('popup-'))
-          popups.push(value[0])
-      }
-      return popups
-    },
-  },
+function close(id: number): void {
+  Popups.close(id)
 }
 </script>
 

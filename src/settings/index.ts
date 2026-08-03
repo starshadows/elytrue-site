@@ -1,6 +1,5 @@
 import { getConfig, setConfig } from './config'
 import { lang, changeLang } from './lang'
-import { logFrontendError } from '../app/controller'
 import { elementFromHtml } from '../lib/dom'
 
 const Settings = {
@@ -73,12 +72,6 @@ const Settings = {
     } else return
     setConfig('graphicsMode', mode)
   },
-}
-
-try {
-  Settings.init()
-} catch (error) {
-  logFrontendError(error, 'failed to init settings')
 }
 
 export default Settings

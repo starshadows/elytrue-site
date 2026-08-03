@@ -101,8 +101,9 @@
 
 <script lang="ts">
 import FloatMsgs from '../FloatMsgs'
+import Popups from './index'
 import XHR from '../../net/xhr'
-import { requireController } from '../../app/controller'
+import { refreshAuth } from '../../features/auth/auth-actions'
 import {
   validateEmail,
   validatePassword,
@@ -129,20 +130,18 @@ export default {
 
   methods: {
     finish(message: string) {
-      return requireController()
-        .loadUserInfo()
-        .then((loggedIn) => {
-          if (!loggedIn) {
-            FloatMsgs.show({
-              type: 'error',
-              msg: '<span class="ui zh">登录状态未能保存，请重试</span><span class="ui en">The session could not be saved. Please try again.</span>',
-            })
-            return false
-          }
-          this.$emit('close')
-          FloatMsgs.show({ type: 'success', msg: message })
-          return true
-        })
+      return refreshAuth().then((loggedIn) => {
+        if (!loggedIn) {
+          FloatMsgs.show({
+            type: 'error',
+            msg: '<span class="ui zh">登录状态未能保存，请重试</span><span class="ui en">The session could not be saved. Please try again.</span>',
+          })
+          return false
+        }
+        this.$emit('close')
+        FloatMsgs.show({ type: 'success', msg: message })
+        return true
+      })
     },
 
     login() {
@@ -196,7 +195,7 @@ export default {
     },
 
     forgotPassword() {
-      requireController().Popup.show('promptInputPopup', {
+      Popups.show('promptInputPopup', {
         title:
           '<span class="ui zh">找回密码</span><span class="ui en">Reset password</span>',
         subtitle: `

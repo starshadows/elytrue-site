@@ -21,7 +21,6 @@ interface MutableAuthState {
 export interface AuthAdapter {
   loadProfile(): Promise<UserProfile>
   clearSession(): void
-  runProfileAction?(action: ProfileAction): void
 }
 
 export type ProfileAction =
@@ -112,12 +111,6 @@ export function createAuthStore(initialAdapter?: AuthAdapter) {
     return mutableState.userId !== null
   }
 
-  function runProfileAction(action: ProfileAction): void {
-    const run = requireAdapter().runProfileAction
-    if (!run) throw new Error('Auth profile actions are not configured')
-    run(action)
-  }
-
   return {
     authenticated: computed(
       () =>
@@ -130,7 +123,6 @@ export function createAuthStore(initialAdapter?: AuthAdapter) {
     initialize,
     ready,
     refresh,
-    runProfileAction,
     state: readonly(mutableState),
   }
 }

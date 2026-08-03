@@ -1,15 +1,8 @@
-import { reactive, readonly } from 'vue'
-
-interface ThemeMusicController {
-  readonly userPaused: boolean
-  play(): void
-  setActiveSong(name: string): void
-}
+import { reactive, readonly, type InjectionKey } from 'vue'
 
 interface ThemeControllerDependencies {
-  closePopup(): void
-  getMusicPlayer(): ThemeMusicController
   logError(error: unknown, message: string): void
+  onThemeMusicChanged(name: string): void
   setOneTimeCss(element: HTMLElement, styles: Record<string, string>): void
   shuffle<T>(items: T[]): T[]
 }
@@ -19,7 +12,6 @@ interface ThemeElements {
   captionContainer: HTMLElement
   captions: HTMLCollection
   themeIndicators: HTMLCollection
-  listSelectors: NodeListOf<HTMLElement>
   lowerPanel: HTMLElement
 }
 
@@ -72,6 +64,7 @@ export interface ThemeController {
   getCurrentBgCount(): number
   getCurrentBgs(): NodeListOf<HTMLElement>
   getThemeMusic(): string
+  dispose(): void
   init(): void
   nextCaption(): void
   nextImg(): void
@@ -82,23 +75,25 @@ export interface ThemeController {
 
 class ThemeControllerImpl implements ThemeController {
   private readonly dependencies: ThemeControllerDependencies
-  private readonly elements: ThemeElements
+  private elements!: ThemeElements
   private readonly timers = new TimerCollection()
   private readonly themes: Record<string, string> = {
     '#default-theme': 'default',
   }
   private lastAutoTheme: string | undefined
+  private layoutQuery?: MediaQueryList
+  private relayout?: () => void
 
   constructor(dependencies: ThemeControllerDependencies) {
     this.dependencies = dependencies
-    this.elements = {
+  }
+
+  private resolveElements(): ThemeElements {
+    return {
       bgs: document.getElementsByClassName('mainbg'),
       captionContainer: this.requireElement('mainCaptions'),
       captions: this.requireElement('mainCaptions').children,
       themeIndicators: this.requireElement('currentTheme').children,
-      listSelectors: document.querySelectorAll<HTMLElement>(
-        '#themeList>div[data-theme]',
-      ),
       lowerPanel: this.requireElement('lowerPanel'),
     }
   }
@@ -122,31 +117,39 @@ class ThemeControllerImpl implements ThemeController {
   }
 
   init(): void {
+    this.elements = this.resolveElements()
     this.prepareVisitOrder()
     this.setTheme(this.themes[location.hash])
-    const layoutQuery = window.matchMedia('(max-width: 720px)')
-    const relayout = () => {
+    this.layoutQuery = window.matchMedia('(max-width: 720px)')
+    this.relayout = () => {
       this.prepareVisitOrder()
       this.setTheme()
     }
-    if (layoutQuery.addEventListener) {
-      layoutQuery.addEventListener('change', relayout)
+    if (this.layoutQuery.addEventListener) {
+      this.layoutQuery.addEventListener('change', this.relayout)
     } else {
-      layoutQuery.addListener(relayout)
+      this.layoutQuery.addListener(this.relayout)
     }
-    window.setInterval(() => {
+    this.timers.setInterval(() => {
       const newAutoTheme = this.getAutoTheme()
       if (this.lastAutoTheme && this.lastAutoTheme !== newAutoTheme) {
         this.setTheme()
       }
       this.lastAutoTheme = newAutoTheme
     }, 1_000)
-    this.elements.listSelectors.forEach((element) => {
-      element.onclick = () => {
-        this.setTheme(element.dataset.theme)
-        this.dependencies.closePopup()
+  }
+
+  dispose(): void {
+    this.timers.clear()
+    if (this.layoutQuery && this.relayout) {
+      if (this.layoutQuery.removeEventListener) {
+        this.layoutQuery.removeEventListener('change', this.relayout)
+      } else {
+        this.layoutQuery.removeListener(this.relayout)
       }
-    })
+    }
+    this.layoutQuery = undefined
+    this.relayout = undefined
   }
 
   prepareVisitOrder(): void {
@@ -244,13 +247,7 @@ class ThemeControllerImpl implements ThemeController {
       () => this.elements.lowerPanel.classList.remove('animating'),
       1_700,
     )
-    try {
-      const musicPlayer = this.dependencies.getMusicPlayer()
-      musicPlayer.setActiveSong(this.getThemeMusic())
-      if (!musicPlayer.userPaused) musicPlayer.play()
-    } catch {
-      // Music initializes after the first theme render.
-    }
+    this.dependencies.onThemeMusicChanged(this.getThemeMusic())
   }
 
   getThemeMusic(): string {
@@ -338,18 +335,11 @@ class ThemeControllerImpl implements ThemeController {
   }
 }
 
-let activeThemeController: ThemeController | undefined
-
 export function createThemeController(
   dependencies: ThemeControllerDependencies,
 ): ThemeController {
-  activeThemeController = new ThemeControllerImpl(dependencies)
-  return activeThemeController
+  return new ThemeControllerImpl(dependencies)
 }
 
-export function selectTheme(theme: string): void {
-  if (!activeThemeController) {
-    throw new Error('Theme controller is not ready')
-  }
-  activeThemeController.setTheme(theme)
-}
+export const themeControllerKey: InjectionKey<ThemeController> =
+  Symbol('theme-controller')

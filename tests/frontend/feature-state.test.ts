@@ -66,24 +66,6 @@ describe('auth feature state', () => {
     assert.equal(store.state.profile, null)
   })
 
-  test('profile behavior is registered on the feature store', () => {
-    const actions: string[] = []
-    const store = createAuthStore({
-      clearSession() {},
-      async loadProfile() {
-        return profile
-      },
-      runProfileAction(action) {
-        actions.push(action)
-      },
-    })
-
-    store.runProfileAction('changeName')
-    store.runProfileAction('logout')
-
-    assert.deepEqual(actions, ['changeName', 'logout'])
-  })
-
   test('a stale initialization cannot overwrite a newer refresh', async () => {
     const resolvers: Array<(value: UserProfile) => void> = []
     const store = createAuthStore({

@@ -43,7 +43,8 @@
 <script lang="ts">
 import FloatMsgs from '../FloatMsgs'
 import XHR from '../../net/xhr'
-import { requireController } from '../../app/controller'
+import { refreshAuth } from '../../features/auth/auth-actions'
+import { authStore } from '../../features/auth/auth-store'
 
 export default {
   props: ['passwordResetToken'],
@@ -76,7 +77,8 @@ export default {
             this.$emit('close')
             XHR.token = ''
             XHR.csrfToken = ''
-            void requireController().loadUserInfo()
+            authStore.clear()
+            void refreshAuth()
             FloatMsgs.show({
               type: 'success',
               msg: '<span class="ui zh">密码修改成功，请重新登录</span><span class="ui en">Password updated. Please log in again.</span>',

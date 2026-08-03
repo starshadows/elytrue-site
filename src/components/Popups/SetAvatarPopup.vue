@@ -14,9 +14,15 @@
 
 <script setup lang="ts">
 import { onMounted, useTemplateRef } from 'vue'
-import { requireController, viewImage } from '../../app/controller'
+import {
+  avatarPath,
+  getCurrentUser,
+  refreshAuth,
+} from '../../features/auth/auth-actions'
+import { resizeImage } from '../../lib/image'
 import XHR from '../../net/xhr'
 import FloatMsgs from '../FloatMsgs'
+import ImgViewer from '../ImgViewer'
 
 const emit = defineEmits<{ close: [] }>()
 const preview = useTemplateRef<HTMLImageElement>('preview')
@@ -25,12 +31,12 @@ const input = useTemplateRef<HTMLInputElement>('input')
 async function previewAvatar(): Promise<void> {
   const file = input.value?.files?.[0]
   if (!file || !preview.value) return
-  const result = await requireController().resizeImg(file, 1, 200 * 200)
+  const result = await resizeImage(file, 1, 200 * 200)
   if (typeof result === 'string') preview.value.src = result
 }
 
 function viewPreview(): void {
-  if (preview.value?.src) viewImage(preview.value.src)
+  if (preview.value?.src) ImgViewer.view(preview.value.src)
 }
 
 async function uploadAvatar(): Promise<void> {
@@ -46,15 +52,14 @@ async function uploadAvatar(): Promise<void> {
       type: 'success',
       msg: '<span class="ui zh">上传成功</span><span class="ui en">Uploaded successfully</span>',
     })
-    await requireController().loadUserInfo()
+    await refreshAuth()
   }
 }
 
 onMounted(async () => {
-  const controller = requireController()
-  const user = (await controller.User.getMe()) as { avatar: string }
+  const user = await getCurrentUser()
   if (preview.value) {
-    preview.value.src = controller.User.convertAvatarPath(user.avatar)
+    preview.value.src = avatarPath(user.avatar)
   }
 })
 </script>

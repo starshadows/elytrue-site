@@ -9,7 +9,7 @@
           <span>
             <span class="ui zh">注册时间: </span
             ><span class="ui en">Joined </span>
-            {{ new Date(user.create_time * 1000).toLocaleDateString() }}
+            {{ new Date((user.create_time ?? 0) * 1000).toLocaleDateString() }}
           </span>
         </div>
       </div>
@@ -86,17 +86,14 @@
 
 <script setup lang="ts">
 import { onMounted, ref } from 'vue'
-import { requireController, viewImage } from '../../app/controller'
+import { avatarPath, runProfileAction } from '../../features/auth/auth-actions'
+import { authStore, type UserProfile } from '../../features/auth/auth-store'
+import { commentsApi } from '../../features/comments/comments-api'
+import { commentsStore } from '../../features/comments/comments-store'
 import XHR from '../../net/xhr'
 import FloatMsgs from '../FloatMsgs'
-
-interface UserProfile {
-  id: string
-  name: string
-  avatar: string
-  create_time: number
-  role?: 'admin' | 'user'
-}
+import ImgViewer from '../ImgViewer'
+import Popups from './index'
 
 interface UserComment {
   id: number
@@ -108,12 +105,6 @@ interface UserComment {
   comment: string
   image?: string
   images: string[]
-}
-
-interface CommentPage {
-  items: Omit<UserComment, 'images'>[]
-  hasMore: boolean
-  nextCursor: number | null
 }
 
 const props = defineProps<{
@@ -135,15 +126,15 @@ const toEnd = ref(false)
 const nextCursor = ref<number | null>(null)
 
 function convertAvatarPath(path: string): string {
-  return requireController().User.convertAvatarPath(path)
+  return avatarPath(path)
 }
 
 function viewUserAvatar(): void {
-  viewImage(convertAvatarPath(user.value.avatar))
+  ImgViewer.view(convertAvatarPath(user.value.avatar))
 }
 
 function viewImageUrl(url: string): void {
-  viewImage(url)
+  ImgViewer.view(url)
 }
 
 function userAction(
@@ -155,29 +146,29 @@ function userAction(
     | 'logout'
     | 'resetToken',
 ): void {
-  requireController().User[action]()
+  runProfileAction(action)
 }
 
 function openAdmin(): void {
-  requireController().Popup.show('adminPanel', undefined)
+  Popups.show('adminPanel')
 }
 
 async function getComments(): Promise<void> {
   scrollPaused.value = true
   try {
-    const response = await XHR.get<CommentPage | UserComment[]>('comments', {
-      uid: user.value.id,
-      count: 50,
-      cursor: nextCursor.value ?? undefined,
-    })
-    const page: CommentPage = Array.isArray(response)
-      ? { items: response, hasMore: false, nextCursor: null }
-      : response
+    const page = await commentsApi.listUser(
+      user.value.id,
+      nextCursor.value ?? undefined,
+    )
 
     for (const raw of page.items) {
       const date = new Date(raw.time * 1000)
       comments.value.push({
-        ...raw,
+        id: raw.id,
+        number: raw.number,
+        comment: raw.comment,
+        image: raw.image,
+        time: raw.time,
         timeStr: `${date.toLocaleDateString()} ${date.toLocaleTimeString()}`,
         images: raw.image ? raw.image.split(',') : [],
       })
@@ -213,7 +204,7 @@ async function getUser(): Promise<void> {
     return
   }
   user.value = profile
-  showAction.value = profile.id === requireController().User.LoggedOnUserId
+  showAction.value = profile.id === authStore.state.userId
   await getComments()
 }
 
@@ -228,10 +219,8 @@ function handleScroll(event: Event): void {
 function gotoComment(index: number): void {
   const comment = comments.value[index]
   if (!comment) return
-  const controller = requireController()
-  controller.clearComments(1)
-  void controller.loadComments({ number: comment.number ?? comment.id })
-  controller.closePopup()
+  void commentsStore.gotoNumber(comment.number ?? comment.id)
+  Popups.close()
 }
 
 onMounted(() => {

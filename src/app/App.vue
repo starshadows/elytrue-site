@@ -1,154 +1,161 @@
 <script setup lang="ts">
-import { onMounted } from 'vue'
-import { applyBackgroundMetadata } from '../config/assets'
-import { useAuth, type ProfileAction } from '../features/auth/useAuth'
-import { useComments } from '../features/comments/useComments'
+import { onBeforeUnmount, onMounted, provide, useTemplateRef, watch } from 'vue'
+import AppShell from '../components/AppShell.vue'
+import BackgroundLayer from '../components/BackgroundLayer.vue'
+import CommentsPanel from '../components/CommentsPanel.vue'
+import FloatMessages from '../components/FloatMsgs/FloatMsgs.vue'
+import ImageViewer from '../components/ImgViewer/ImgViewer.vue'
+import PopupHost from '../components/Popups/Popups.vue'
+import FloatMsgs from '../components/FloatMsgs'
+import ImgViewer from '../components/ImgViewer'
+import Popups from '../components/Popups'
+import { initializeAuth } from '../features/auth/auth-actions'
+import { commentsStore } from '../features/comments/comments-store'
+import { musicController } from '../features/music/music-controller'
+import { createPwaController } from '../features/pwa/pwa-controller'
 import {
-  useSiteSettings,
-  type SupportedLanguage,
-} from '../features/settings/useSiteSettings'
-import {
-  bindControllerEvents,
-  registerController,
-  requireController,
-} from './controller'
+  createThemeController,
+  themeControllerKey,
+} from '../features/theme/theme-controller'
+import { createTimelineController } from '../features/timeline/timeline-controller'
+import { createViewportController } from '../features/viewport/viewport-controller'
+import Settings from '../settings'
+import { setConfig } from '../settings/config'
+import { logFrontendError } from './app-events'
 
-const auth = useAuth()
-const comments = useComments()
-const siteSettings = useSiteSettings()
+const commentsPanel =
+  useTemplateRef<InstanceType<typeof CommentsPanel>>('commentsPanel')
 
-onMounted(async () => {
-  applyBackgroundMetadata()
-  const controller = await import('../index')
-  registerController(controller)
-  bindControllerEvents()
-  await import('../components')
-  document.documentElement.dataset.appReady = 'true'
+function shuffle<T>(items: T[]): T[] {
+  for (let index = items.length - 1; index > 0; index -= 1) {
+    const target = Math.floor(Math.random() * (index + 1))
+    const current = items[index]
+    const replacement = items[target]
+    if (current === undefined || replacement === undefined) continue
+    items[index] = replacement
+    items[target] = current
+  }
+  return items
+}
+
+const theme = createThemeController({
+  logError: logFrontendError,
+  onThemeMusicChanged(name) {
+    try {
+      musicController.setActiveSong(name)
+      if (!musicController.userPaused) musicController.play()
+    } catch {
+      // Music mounts with the static popup host immediately after the theme scene.
+    }
+  },
+  setOneTimeCss(element, styles) {
+    Object.assign(element.style, styles)
+    window.setTimeout(() => {
+      Object.keys(styles).forEach((name) => element.style.removeProperty(name))
+    }, 35)
+  },
+  shuffle,
+})
+provide(themeControllerKey, theme)
+
+const pwa = createPwaController()
+const timeline = createTimelineController({
+  clearComments() {},
+  getCurrentCommentTime: () =>
+    commentsStore.state.currentVisibleTime ?? undefined,
+  getMaxTimelineTime: () =>
+    commentsStore.state.items[0]?.time ?? Date.now() / 1_000,
+  isFullscreen: () => viewport.isFullscreen,
+  loadComments: (query) =>
+    query ? commentsStore.loadAtTime(query.time) : commentsStore.refresh(),
+  logError: logFrontendError,
+  persistVisibility: (visible) => setConfig('showTimeline', visible),
+  setCommentsScrollbarHidden: (hidden) =>
+    document
+      .getElementById('comments')
+      ?.classList.toggle('noscrollbar', hidden),
+})
+const viewport = createViewportController({
+  closeImageViewer: ImgViewer.close,
+  closePopup: Popups.close,
+  forceLowerPanelDown: () => commentsPanel.value?.forceLowerPanelDown(),
+  getPageScale: () => Settings.pageScale,
+  isImageViewerOpen: ImgViewer.isOpen,
+  isPopupOpen: Popups.isOpen,
+  pauseCommentsScroll: (milliseconds) =>
+    commentsPanel.value?.pauseScroll(milliseconds),
+  setMusicVolume: (volume) => {
+    try {
+      musicController.setVolume(volume)
+    } catch {
+      // The host may set Wallpaper Engine properties before audio mounts.
+    }
+  },
+  setPageScale: (scale) => (Settings.pageScale = scale),
+  updateTimelineActiveMonth: (scroll) => timeline.setActiveDate(scroll),
 })
 
-function showPopup(id: string): void {
-  requireController().showPopup(id, undefined)
-}
-
-function userAction(
-  action: Extract<
-    ProfileAction,
-    'changeName' | 'changeAvatar' | 'changeEmail' | 'showMe' | 'logout'
-  >,
-): void {
-  auth.runProfileAction(action)
-}
-
-function hidePinnedNotice(): void {
-  const controller = requireController()
-  controller.hideTopCommentElmnt?.click()
-  controller.FloatMsgs.show({
-    type: 'success',
-    persist: true,
-    msg: `
-      <span class="ui zh">隐藏成功。可在【工具】→【显示设置】中重新打开</span>
-      <span class="ui en">Hidden. Can be displayed again via [Tools] → [Display settings]</span>
-    `,
-  })
-}
-
-function refreshComments(): void {
-  comments.refresh()
-}
-
-function seekComment(direction: -1 | 1): void {
-  comments.seek(direction)
-}
-
-function newComment(): void {
-  comments.openEditor()
-}
-
-function installPwa(): void {
-  const controller = requireController()
-  const prompt = controller.installPrompt as {
-    prompt: () => Promise<void>
-  } | null
-  if (prompt) {
-    void prompt.prompt()
-  } else if (controller.isInStandaloneMode) {
-    controller.FloatMsgs.show({
+async function installPwa(): Promise<void> {
+  if (await pwa.prompt()) return
+  if (pwa.isStandalone) {
+    FloatMsgs.show({
       type: 'info',
       msg: '<span class="ui zh">你已安装过App</span><span class="ui en">App already installed</span>',
     })
-  } else {
-    window.alert(
-      '你的浏览器不支持安装PWA App\n\n建议使用谷歌Chrome/微软Edge浏览器\n\n你也可以从浏览器菜单手动添加到桌面\n\nYour browser does not seem to support PWA Apps.\nWe recommend using Google Chrome or Microsoft Edge to do this.',
-    )
+    return
   }
-}
-
-function setLanguage(language: SupportedLanguage): void {
-  siteSettings.setLanguage(language)
-}
-
-function gotoComment(): void {
-  const value = document.querySelector<HTMLInputElement>('#goto')?.value
-  if (!value) return
-  comments.gotoNumber(value)
-}
-
-function toggleFullscreen(): void {
-  requireController().toggleFullscreen()
-}
-
-function toggleTimeline(): void {
-  requireController().toggleTimeline()
-}
-
-function toggleTopComment(): void {
-  requireController().toggleTopComment()
-}
-
-function toggleHidden(event: Event): void {
-  siteSettings.setShowHidden((event.currentTarget as HTMLInputElement).checked)
-}
-
-function updateZoom(value: number): void {
-  if (value >= 50 && value <= 500) {
-    siteSettings.setZoom(value)
-  }
-}
-
-function changeZoom(event: Event): void {
-  updateZoom(
-    Number.parseInt((event.currentTarget as HTMLInputElement).value, 10),
+  window.alert(
+    '你的浏览器不支持安装PWA App\n\n建议使用谷歌Chrome/微软Edge浏览器\n\n你也可以从浏览器菜单手动添加到桌面\n\nYour browser does not seem to support PWA Apps.\nWe recommend using Google Chrome or Microsoft Edge to do this.',
   )
 }
 
-function adjustZoom(delta: number): void {
-  const input = document.querySelector<HTMLInputElement>('#pageZoomController')
-  if (!input) return
-  const value = Math.min(
-    500,
-    Math.max(50, Number.parseInt(input.value, 10) + delta),
-  )
-  input.value = String(value)
-  updateZoom(value)
-}
+onMounted(() => {
+  Settings.init()
+  theme.init()
+  timeline.init()
+  pwa.init()
+  viewport.init()
+  void initializeAuth()
+  if (location.hash.startsWith('#resetpassword=')) {
+    Popups.show('setPasswordPopup', {
+      passwordResetToken: location.hash.replace('#resetpassword=', ''),
+    })
+  } else if (location.hash.startsWith('#popup-')) {
+    const popup = location.hash.slice(7)
+    if (popup === 'loginPopup') Popups.show('loginPopup')
+  }
+  document.documentElement.dataset.appReady = 'true'
+})
 
-defineExpose({
-  adjustZoom,
-  changeZoom,
-  gotoComment,
-  hidePinnedNotice,
-  installPwa,
-  newComment,
-  refreshComments,
-  seekComment,
-  setLanguage,
-  showPopup,
-  toggleFullscreen,
-  toggleHidden,
-  toggleTimeline,
-  toggleTopComment,
-  userAction,
+watch(
+  () => commentsStore.state.currentVisibleTime,
+  () => timeline.setActiveDate(),
+)
+watch(
+  () => commentsStore.state.items[0]?.time,
+  (time) => {
+    if (time) timeline.render(time)
+  },
+)
+
+onBeforeUnmount(() => {
+  viewport.dispose()
+  pwa.dispose()
+  timeline.dispose()
+  theme.dispose()
+  delete document.documentElement.dataset.appReady
 })
 </script>
 
-<template src="./shell.html"></template>
+<template>
+  <BackgroundLayer />
+  <AppShell />
+  <CommentsPanel
+    ref="commentsPanel"
+    @fullscreen="viewport.toggleFullscreen()"
+    @install="installPwa"
+  />
+  <PopupHost />
+  <ImageViewer />
+  <div id="floatMsgs"><FloatMessages /></div>
+</template>

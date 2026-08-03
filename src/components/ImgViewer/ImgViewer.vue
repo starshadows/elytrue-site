@@ -1,7 +1,7 @@
 <template>
   <div
-    v-show="showing"
-    :class="{ 'img-viewer-overlay': true, closing: pendingClose }"
+    v-show="viewerState.showing"
+    :class="{ 'img-viewer-overlay': true, closing: viewerState.pendingClose }"
     ref="overlay"
     @mousedown.prevent="mouseDownHandler"
     @mouseup="mouseUpHandler"
@@ -15,6 +15,7 @@
     <div class="img-viewer-wrapper" ref="wrapper">
       <img
         ref="viewer"
+        :src="viewerState.source"
         draggable="false"
         style="transform: translateX(0px) translateY(0px) scale(1)"
       />
@@ -23,7 +24,8 @@
 </template>
 
 <script lang="ts">
-import { logFrontendError } from '../../app/controller'
+import { logFrontendError } from '../../app/app-events'
+import ImgViewer from './index'
 import { setOneTimeStyles } from '../../lib/dom'
 import {
   calcNewOffset,
@@ -60,16 +62,12 @@ export default {
         typeof createPinchZoomController
       > | null,
 
-      showing: false,
-      pendingClose: false,
+      viewerState: ImgViewer.state,
     }
   },
   methods: {
     view(src: string) {
-      this.elements.viewer.src = src
-      this.showing = true
-      this.pendingClose = false
-      window.location.hash = 'view-img'
+      ImgViewer.view(src)
 
       this.imgViewerOffsetX = 0
       this.imgViewerOffsetY = 0
@@ -80,23 +78,13 @@ export default {
     },
 
     close() {
-      if (location.hash == '#view-img') {
-        history.back()
-        return
-      }
-
-      this.pendingClose = true
+      ImgViewer.close()
       setOneTimeStyles(this.elements.overlay, { animation: 'none' })
       setOneTimeStyles(this.elements.wrapper, { animation: 'none' })
-      setTimeout(() => {
-        if (this.pendingClose) {
-          this.showing = false
-        }
-      }, 200)
     },
 
     isOpen() {
-      return this.showing == true && this.pendingClose == false
+      return ImgViewer.isOpen()
     },
 
     normalizePosition() {
@@ -252,12 +240,14 @@ export default {
     touchStartHandler(e: TouchEvent) {
       this.disableTransition()
       if (e.touches.length == 1) {
-        this.lastTouchPoint = createPointFromTouch(e.touches[0])
+        const touch = e.touches.item(0)
+        if (touch) this.lastTouchPoint = createPointFromTouch(touch)
       } else if (e.touches.length == 2) {
-        this.pinchZoomController = createPinchZoomController(
-          e.touches[0],
-          e.touches[1],
-        )
+        const first = e.touches.item(0)
+        const second = e.touches.item(1)
+        if (first && second) {
+          this.pinchZoomController = createPinchZoomController(first, second)
+        }
       }
     },
 
@@ -265,7 +255,9 @@ export default {
       this.disableTransition()
       if (e.touches.length == 1) {
         if (!this.lastTouchPoint) return
-        const newPoint = createPointFromTouch(e.touches[0])
+        const touch = e.touches.item(0)
+        if (!touch) return
+        const newPoint = createPointFromTouch(touch)
 
         const vector = newPoint.subtract(this.lastTouchPoint)
         this.imgViewerOffsetX += vector.x
@@ -275,7 +267,10 @@ export default {
         this.lastTouchPoint = newPoint
       } else if (e.touches.length == 2) {
         if (!this.pinchZoomController) return
-        this.pinchZoomController.calcZoom(e.touches[0], e.touches[1])
+        const first = e.touches.item(0)
+        const second = e.touches.item(1)
+        if (!first || !second) return
+        this.pinchZoomController.calcZoom(first, second)
 
         let { x, y } = calcNewOffset(
           this.imgViewerOffsetX,
@@ -298,7 +293,9 @@ export default {
         this.enableTransition()
         this.normalizePosition()
       } else if (e.touches.length == 1 || e.touches.length == 2) {
-        this.lastTouchPoint = createPointFromTouch(e.touches[0])
+        const first = e.touches.item(0)
+        if (!first) return
+        this.lastTouchPoint = createPointFromTouch(first)
 
         if (!this.pinchZoomController) return
 
@@ -319,10 +316,10 @@ export default {
 
         // ensure smooth transition from 3+ fingers to 2-finger
         if (e.touches.length == 2) {
-          this.pinchZoomController = createPinchZoomController(
-            e.touches[0],
-            e.touches[1],
-          )
+          const second = e.touches.item(1)
+          if (second) {
+            this.pinchZoomController = createPinchZoomController(first, second)
+          }
         }
       }
     },
