@@ -7,7 +7,7 @@ import {
 } from './comments-api'
 import type { CommentRecord } from './comment-types'
 
-type LoadKind = 'initial' | 'newer' | 'older' | 'jump'
+type LoadKind = 'initial' | 'newer' | 'older' | 'replacement'
 
 interface CommentsState {
   items: CommentRecord[]
@@ -17,6 +17,8 @@ interface CommentsState {
   reachedNewest: boolean
   reachedOldest: boolean
   jumpNumber: number | null
+  jumping: boolean
+  likePendingIds: Set<number>
   currentVisibleTime: number | null
   todayCount: number
 }
@@ -34,12 +36,13 @@ export function createCommentsStore(api: CommentsApi) {
     reachedNewest: false,
     reachedOldest: false,
     jumpNumber: null,
+    jumping: false,
+    likePendingIds: new Set<number>(),
     currentVisibleTime: null,
     todayCount: 0,
   })
   const pending = new Map<LoadKind, Promise<void>>()
   const likeLocks = new Map<number, Promise<void>>()
-  const likeCooldowns = new Map<number, number>()
   let generation = 0
 
   function merge(items: CommentRecord[]): void {
@@ -49,7 +52,8 @@ export function createCommentsStore(api: CommentsApi) {
   }
 
   function setLoading(kind: LoadKind, loading: boolean): void {
-    if (kind === 'initial' || kind === 'jump') state.loadingInitial = loading
+    if (kind === 'initial' || kind === 'replacement')
+      state.loadingInitial = loading
     else if (kind === 'newer') state.loadingNewer = loading
     else state.loadingOlder = loading
   }
@@ -76,7 +80,7 @@ export function createCommentsStore(api: CommentsApi) {
           const requested = Math.abs(query.count ?? 30)
           state.reachedOldest = !page.hasMore && page.items.length < requested
         }
-        if (kind === 'jump') {
+        if (kind === 'replacement') {
           state.reachedNewest = false
           state.reachedOldest = !page.hasMore && page.items.length === 0
         }
@@ -94,18 +98,17 @@ export function createCommentsStore(api: CommentsApi) {
   }
 
   async function refresh(): Promise<void> {
-    generation += 1
-    pending.clear()
-    state.items = []
-    state.reachedNewest = false
-    state.reachedOldest = false
-    state.jumpNumber = null
+    resetForReplacement()
     await Promise.all([load('initial', {}, true), refreshTodayCount()])
   }
 
   function initialize(): Promise<void> {
     if (state.items.length > 0 || state.loadingInitial) {
-      return pending.get('initial') ?? Promise.resolve()
+      return (
+        pending.get('initial') ??
+        pending.get('replacement') ??
+        Promise.resolve()
+      )
     }
     return Promise.all([load('initial', {}, true), refreshTodayCount()]).then(
       () => undefined,
@@ -113,55 +116,76 @@ export function createCommentsStore(api: CommentsApi) {
   }
 
   function loadNewer(count = 10): Promise<void> {
-    if (state.reachedNewest) return Promise.resolve()
+    if (state.jumping || state.reachedNewest) return Promise.resolve()
     const newest = state.items[0]
     return load('newer', newest ? { from: newest.id + 1, count: -count } : {})
   }
 
   function loadOlder(count = 30): Promise<void> {
-    if (state.reachedOldest) return Promise.resolve()
+    if (state.jumping || state.reachedOldest) return Promise.resolve()
     const oldest = state.items.at(-1)
     return load('older', oldest ? { from: oldest.id - 1, count } : { count })
   }
 
-  function resetForJump(number: number | null): void {
+  function resetForReplacement(): void {
     generation += 1
     pending.clear()
-    state.jumpNumber = number
+    state.loadingInitial = false
+    state.loadingNewer = false
+    state.loadingOlder = false
+    state.jumpNumber = null
+    state.jumping = false
     state.items = []
     state.reachedNewest = false
     state.reachedOldest = false
+    state.currentVisibleTime = null
+  }
+
+  function finishJump(): void {
+    state.jumpNumber = null
+    state.jumping = false
   }
 
   function gotoNumber(value: number | string): Promise<void> {
     const number = Number(value)
     if (!Number.isInteger(number) || number < 1) return Promise.resolve()
-    resetForJump(number)
-    return load('jump', { number }, true)
+    resetForReplacement()
+    state.jumpNumber = number
+    state.jumping = true
+    const jumpGeneration = generation
+    return load('replacement', { number }, true).catch((error: unknown) => {
+      if (jumpGeneration === generation && state.jumpNumber === number) {
+        finishJump()
+      }
+      throw error
+    })
   }
 
   function loadAtTime(time: number): Promise<void> {
     if (!Number.isFinite(time)) return Promise.resolve()
-    resetForJump(null)
-    return load('jump', { time }, true)
+    resetForReplacement()
+    return load('replacement', { time }, true)
   }
 
   function setCurrentVisibleTime(time: number | null): void {
     state.currentVisibleTime = time
   }
 
+  function isLikePending(id: number): boolean {
+    return state.likePendingIds.has(id)
+  }
+
   function toggleLike(id: number): Promise<void> {
     const existing = likeLocks.get(id)
     if (existing) return existing
-    if ((likeCooldowns.get(id) ?? 0) > Date.now()) return Promise.resolve()
     const item = state.items.find((comment) => comment.id === id)
     if (!item) return Promise.resolve()
-    likeCooldowns.set(id, Date.now() + 2_000)
+    state.likePendingIds.add(id)
     const before = { liked: item.liked, likes: item.likes }
     item.liked = !item.liked
     item.likes = Math.max(0, item.likes + (item.liked ? 1 : -1))
-    const request = api
-      .like(id, before.liked)
+    const request = Promise.resolve()
+      .then(() => api.like(id, before.liked))
       .then(async () => {
         const current = await getComment(api, id)
         if (!current) return
@@ -170,18 +194,23 @@ export function createCommentsStore(api: CommentsApi) {
       })
       .catch((error: unknown) => {
         const target = state.items.find((comment) => comment.id === id)
-        if (target) Object.assign(target, before)
+        if (target === item) Object.assign(target, before)
         throw error
       })
-      .finally(() => likeLocks.delete(id))
+      .finally(() => {
+        likeLocks.delete(id)
+        state.likePendingIds.delete(id)
+      })
     likeLocks.set(id, request)
     return request
   }
 
   return {
     hasItems: computed(() => state.items.length > 0),
+    finishJump,
     gotoNumber,
     initialize,
+    isLikePending,
     loadAtTime,
     loadNewer,
     loadOlder,

@@ -6,6 +6,7 @@ import {
   onMounted,
   ref,
   useTemplateRef,
+  watch,
 } from 'vue'
 import CommentCard from './CommentCard.vue'
 import CommentEditor from './CommentEditor.vue'
@@ -109,7 +110,7 @@ function handleScroll(): void {
     scrollPaused ||
     !container.value ||
     !commentsStore.state.items.length ||
-    commentsStore.state.jumpNumber !== null
+    commentsStore.state.jumping
   )
     return
   updateVisibleTime()
@@ -126,6 +127,35 @@ function handleScroll(): void {
   if (end <= threshold && !commentsStore.state.reachedOldest)
     void commentsStore.loadOlder()
 }
+
+watch(
+  () =>
+    [
+      commentsStore.state.jumping,
+      commentsStore.state.jumpNumber,
+      commentsStore.state.loadingInitial,
+      commentsStore.state.items,
+    ] as const,
+  async ([jumping, number, loadingInitial]) => {
+    if (!jumping || number === null || loadingInitial) return
+    await nextTick()
+    if (
+      !commentsStore.state.jumping ||
+      commentsStore.state.jumpNumber !== number ||
+      commentsStore.state.loadingInitial
+    )
+      return
+    container.value
+      ?.querySelector<HTMLElement>(`[data-number="${number}"]`)
+      ?.scrollIntoView({
+        behavior: 'smooth',
+        block: 'center',
+        inline: 'center',
+      })
+    commentsStore.finishJump()
+  },
+  { flush: 'post' },
+)
 
 function handleWheel(event: WheelEvent): void {
   if (document.body.classList.contains('fullscreen') || event.deltaX) return

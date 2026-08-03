@@ -13,7 +13,7 @@ import { BACKGROUNDS } from '../config/assets'
 const props = defineProps<{ record: CommentRecord }>()
 const emit = defineEmits<{ lift: []; reply: [number: number] }>()
 const reply = ref<CommentRecord | null>(null)
-const likeBusy = ref(false)
+const likePending = computed(() => commentsStore.isLikePending(props.record.id))
 const images = computed(() =>
   props.record.image ? props.record.image.split(',').filter(Boolean) : [],
 )
@@ -39,14 +39,8 @@ onMounted(async () => {
 })
 
 async function toggleLike(): Promise<void> {
-  if (likeBusy.value) return
-  likeBusy.value = true
-  if (!(await ensureLoggedIn())) {
-    likeBusy.value = false
-    return
-  }
+  if (likePending.value || !(await ensureLoggedIn())) return
   await commentsStore.toggleLike(props.record.id).catch(() => undefined)
-  window.setTimeout(() => (likeBusy.value = false), 1_000)
 }
 
 async function replyToComment(): Promise<void> {
@@ -72,7 +66,9 @@ function openImage(image: string): void {
 
 function openReply(): void {
   if (reply.value)
-    void commentsStore.gotoNumber(reply.value.number ?? reply.value.displayId)
+    void commentsStore
+      .gotoNumber(reply.value.number ?? reply.value.displayId)
+      .catch(() => undefined)
 }
 
 function report(): void {
@@ -164,7 +160,7 @@ function report(): void {
     <div class="action">
       <span
         class="btn like"
-        :class="{ liked: record.liked, busy: likeBusy }"
+        :class="{ liked: record.liked, busy: likePending }"
         @click="toggleLike"
       >
         <span

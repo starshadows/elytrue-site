@@ -1,6 +1,7 @@
 import assert from 'node:assert/strict'
 import { describe, test } from 'node:test'
 import {
+  createTimelineController,
   getTimelineDays,
   getTimelineSelectionTime,
   getTimelineStartDate,
@@ -89,6 +90,93 @@ class TestClassList implements ViewportClassList {
   remove(...tokens: string[]): void {
     tokens.forEach((token) => this.values.delete(token))
   }
+
+  toggle(token: string, force?: boolean): boolean {
+    const enabled = force ?? !this.values.has(token)
+    if (enabled) this.values.add(token)
+    else this.values.delete(token)
+    return enabled
+  }
+}
+
+class TimelineElement {
+  readonly children: TimelineElement[] = []
+  readonly classList = new TestClassList()
+  readonly dataset: Record<string, string> = {}
+  parentElement: TimelineElement | null = null
+  textContent = ''
+  private readonly listeners = new Map<
+    string,
+    Set<EventListenerOrEventListenerObject>
+  >()
+
+  constructor(readonly tagName: string) {}
+
+  get firstElementChild(): TimelineElement | null {
+    return this.children[0] ?? null
+  }
+
+  addEventListener(
+    type: string,
+    callback: EventListenerOrEventListenerObject | null,
+  ): void {
+    if (!callback) return
+    const callbacks = this.listeners.get(type) ?? new Set()
+    callbacks.add(callback)
+    this.listeners.set(type, callbacks)
+  }
+
+  appendChild(child: TimelineElement): TimelineElement {
+    child.parentElement = this
+    this.children.push(child)
+    return child
+  }
+
+  emit(type: string, target: TimelineElement): void {
+    const event = { target } as unknown as Event
+    for (const callback of this.listeners.get(type) ?? []) {
+      if (typeof callback === 'function') callback(event)
+      else callback.handleEvent(event)
+    }
+  }
+
+  querySelector(selector: string): TimelineElement | null {
+    for (const child of this.children) {
+      if (selector === 'strong' && child.tagName === 'STRONG') return child
+      const nested = child.querySelector(selector)
+      if (nested) return nested
+    }
+    return null
+  }
+
+  removeEventListener(
+    type: string,
+    callback: EventListenerOrEventListenerObject | null,
+  ): void {
+    if (callback) this.listeners.get(type)?.delete(callback)
+  }
+
+  replaceChildren(...children: TimelineElement[]): void {
+    this.children.splice(0)
+    children.forEach((child) => this.appendChild(child))
+  }
+}
+
+class TimelineDocument {
+  readonly calendar = new TimelineElement('DIV')
+  readonly container = new TimelineElement('DIV')
+  readonly timeline = new TimelineElement('DIV')
+
+  createElement(tagName: string): TimelineElement {
+    return new TimelineElement(tagName.toUpperCase())
+  }
+
+  getElementById(id: string): TimelineElement | null {
+    if (id === 'timelineContainer') return this.container
+    if (id === 'timeline') return this.timeline
+    if (id === 'hoverCalendar') return this.calendar
+    return null
+  }
 }
 
 describe('timeline date calculations', () => {
@@ -154,6 +242,82 @@ describe('timeline date calculations', () => {
       date.getTime(),
     )
     assert.equal(parseTimelineDay('not-a-date'), undefined)
+  })
+
+  test('routes latest, year, month, and day clicks through explicit callbacks', () => {
+    const originalHTMLElement = globalThis.HTMLElement
+    Object.defineProperty(globalThis, 'HTMLElement', {
+      configurable: true,
+      value: TimelineElement,
+      writable: true,
+    })
+    try {
+      const documentObject = new TimelineDocument()
+      const loadedTimes: number[] = []
+      let refreshes = 0
+      const maxTime = new Date(2027, 0, 15).getTime() / 1_000
+      const controller = createTimelineController(
+        {
+          getCurrentCommentTime: () => undefined,
+          getMaxTimelineTime: () => maxTime,
+          isFullscreen: () => false,
+          loadCommentsAtTime: (time) => {
+            loadedTimes.push(time)
+          },
+          logError() {},
+          persistVisibility() {},
+          refreshComments: () => {
+            refreshes += 1
+          },
+          setCommentsScrollbarHidden() {},
+        },
+        { document: documentObject as unknown as Document },
+      )
+      controller.init()
+
+      const latest = documentObject.timeline.children[0]?.firstElementChild
+      const previousYear =
+        documentObject.timeline.children[1]?.firstElementChild
+      const month = documentObject.timeline.children[1]?.children[1]
+      assert.ok(latest)
+      assert.ok(previousYear)
+      assert.ok(month)
+      documentObject.container.emit('click', latest)
+      documentObject.container.emit('click', previousYear)
+      documentObject.container.emit('click', month)
+
+      const day = new TimelineElement('DIV')
+      const dayStart = new Date(2026, 7, 3).getTime() / 1_000
+      day.dataset.time = String(dayStart)
+      documentObject.container.emit('click', day)
+
+      assert.equal(refreshes, 1)
+      assert.deepEqual(loadedTimes, [
+        getTimelineSelectionTime(
+          { type: 'year', year: Number(previousYear.textContent) },
+          maxTime,
+        ),
+        getTimelineSelectionTime(
+          {
+            type: 'month',
+            year: Number(previousYear.textContent),
+            month: Number(month.textContent),
+          },
+          maxTime,
+        ),
+        getTimelineSelectionTime(
+          { type: 'day', year: 2026, month: 8, day: 3 },
+          maxTime,
+        ),
+      ])
+      controller.dispose()
+    } finally {
+      Object.defineProperty(globalThis, 'HTMLElement', {
+        configurable: true,
+        value: originalHTMLElement,
+        writable: true,
+      })
+    }
   })
 })
 

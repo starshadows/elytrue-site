@@ -60,16 +60,15 @@ provide(themeControllerKey, theme)
 
 const pwa = createPwaController()
 const timeline = createTimelineController({
-  clearComments() {},
   getCurrentCommentTime: () =>
     commentsStore.state.currentVisibleTime ?? undefined,
   getMaxTimelineTime: () =>
     commentsStore.state.items[0]?.time ?? Date.now() / 1_000,
   isFullscreen: () => viewport.isFullscreen,
-  loadComments: (query) =>
-    query ? commentsStore.loadAtTime(query.time) : commentsStore.refresh(),
+  loadCommentsAtTime: (time) => commentsStore.loadAtTime(time),
   logError: logFrontendError,
   persistVisibility: (visible) => setConfig('showTimeline', visible),
+  refreshComments: () => commentsStore.refresh(),
   setCommentsScrollbarHidden: (hidden) =>
     document
       .getElementById('comments')

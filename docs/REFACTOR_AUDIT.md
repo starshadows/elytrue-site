@@ -2,6 +2,17 @@
 
 基线提交：`3b3b69d02869abcbfd20074e1d311e9af2517537`
 
+## 2026-08-03 交互状态收尾
+
+本次从同步后的远端 `main` 提交 `9348c77` 开始，只修复前端交互状态，不改变 API、Cookie、CSRF、数据格式、存储或管理员初始化行为。
+
+- 公开编号跳转现在以 `jumping`、`jumpNumber` 和 `finishJump()` 表达开始、数据返回、DOM 定位和结束。失败、刷新、时间轴加载及后续跳转会使旧结果失效并释放分页锁；`CommentsPanel` 只通过 Vue `watch` 与 `nextTick` 定位目标，不使用延时猜测。
+- 点赞 pending 状态集中在 Comments store 的响应式集合；组件本地 busy timer 和 store cooldown 已删除。进行中的同留言请求去重，结束后立即允许下一次操作，失败仍回滚乐观状态。
+- Timeline 删除旧的空清理回调，只保留 `refreshComments` 和 `loadCommentsAtTime`，Comments store 自行负责替换列表和请求 generation。
+- 本次未启动或安装 Chromium，Playwright/E2E 按任务要求未执行。
+- 非浏览器验收全部通过：`npm ci` 安装 913 个包；lint、格式、严格类型、runtime、Node 20 服务端类型和素材检查通过；服务端 116 项通过、6 项无凭据集成测试跳过，前端 31 项通过；EdgeOne 构建及 7 项产物检查通过。
+- `npm audit --omit=dev` 为 0；完整 `npm audit` 保持 29 项已记录的 EdgeOne CLI 开发依赖告警（12 moderate、14 high、3 critical），未运行强制修复。
+
 ## 2026-08-03 增量维护
 
 本轮从远端 `main` 的 `901fb29` 开始，保持主题、视觉、动画、DOM、API、Blob key、Cookie、CSRF、密码/邮箱格式和首个注册用户自动成为管理员的行为。
@@ -80,7 +91,7 @@ middleware.js：Edge Runtime / Web APIs / ES2023+
 
 原始 `src/main.ts` 执行两次 `Object.assign(window, ...)`。原始 `src/index.ts` 导出约 50 个函数、状态对象和 DOM 引用，其中页面依赖的主要全局包括：
 
-- 留言：`loadComments`、`clearComments`、`seekComment`、`newComment`、`sendMessage`、`Comments`。
+- 留言：`loadComments`、`seekComment`、`newComment`、`sendMessage`、`Comments`。
 - 用户：`User`、`loadUserInfo`、`showUserComment`。
 - 弹窗/图片：`Popup`、`showPopup`、`closePopup`、`viewImg`。
 - 主题/音乐：`Theme`、`MusicPlayer`、`Settings`。

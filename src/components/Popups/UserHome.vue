@@ -219,7 +219,9 @@ function handleScroll(event: Event): void {
 function gotoComment(index: number): void {
   const comment = comments.value[index]
   if (!comment) return
-  void commentsStore.gotoNumber(comment.number ?? comment.id)
+  void commentsStore
+    .gotoNumber(comment.number ?? comment.id)
+    .catch(() => undefined)
   Popups.close()
 }
 

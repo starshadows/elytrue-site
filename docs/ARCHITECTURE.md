@@ -37,6 +37,8 @@ EdgeOne 对精确 `/* -> /index.html` 规则先匹配静态资源和 Functions�
 
 `src/app/App.vue` 是唯一根应用，统一渲染站点外壳、留言、弹窗、图片查看器和浮动消息。`src/features/` 按 auth、comments、gallery、music、pwa、settings、theme、timeline、viewport 和 admin 划分类型化边界：store 持有共享响应式状态和 API 流程，controller 持有音乐、主题、时间轴及浏览器生命周期。组件只保留模板内交互和局部 DOM 布局行为；弹窗、浮动消息和图片查看器不再创建独立 Vue 应用。关键 class、ID、DOM 顺序、背景顺序/焦点和动画参数保持不变。
 
+Comments store 以 `jumping` 和 `jumpNumber` 管理公开编号跳转：请求完成后保留目标，`CommentsPanel` 在 Vue 完成 DOM 更新后定位留言并调用 `finishJump()`，随后恢复双向分页；失败、刷新、时间轴加载和后续跳转都会释放或替换旧状态。点赞 pending 状态同样只由 Comments store 管理，组件不保留独立 timer。Timeline 只通过 `refreshComments` 和 `loadCommentsAtTime` 两个明确回调加载留言。
+
 `src/config/site.ts` 是站点、SEO 和中英文文案来源；`src/config/assets.ts` 是 16 张背景、作者/来源、原图映射和 10 首音乐来源。PWA manifest 在构建前从站点配置生成。
 
 类型化 API 客户端固定同源 `/api/*`、`credentials: "include"`、JSON envelope `{ code, message, data }`、非安全方法 CSRF、30 秒默认超时、调用方取消和 401 本地状态清理。
@@ -69,7 +71,7 @@ EdgeOne 对精确 `/* -> /index.html` 规则先匹配静态资源和 Functions�
 
 `check:runtime` 同时运行无 Node 类型的 WebWorker/ES2023 middleware 类型检查和导入静态扫描，并阻断 Node 21+ 的 SQLite、`process.getBuiltinModule`、新版 `import.meta` 与文件系统 glob API。`check:server` 使用独立 `tsconfig.server.json` 和 Node 20 类型对生产服务端做 `checkJs`，已启用 `strictNullChecks`、`noUncheckedIndexedAccess`、`alwaysStrict` 等增量严格选项；`test:server` 不加载 Vite、Vue SFC 或 Playwright。`check:build` 扫描最终部署资源，证明服务端、测试、维护脚本、环境文件、source map、EdgeOne CLI 和 Node 专属模块不进入前端 bundle。
 
-2026-08-03 本轮维护未启动浏览器；Playwright/E2E 按任务要求未执行。
+2026-08-03 本次交互状态收尾未启动或安装 Chromium；Playwright/E2E 按任务要求未执行。
 
 ## 平台限制
 

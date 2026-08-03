@@ -18,7 +18,8 @@ function setLanguage(language: '' | 'zh' | 'en'): void {
 }
 
 function gotoComment(): void {
-  if (goto.value) void commentsStore.gotoNumber(goto.value)
+  if (goto.value)
+    void commentsStore.gotoNumber(goto.value).catch(() => undefined)
 }
 </script>
 

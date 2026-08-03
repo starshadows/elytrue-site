@@ -114,13 +114,13 @@ export function parseTimelineDay(value: string): Date | undefined {
 }
 
 export interface TimelineControllerCallbacks {
-  clearComments(keepPinned?: number): void
   getCurrentCommentTime(): number | undefined
   getMaxTimelineTime(): number
   isFullscreen(): boolean
-  loadComments(query?: Readonly<{ time: number }>): void | Promise<unknown>
+  loadCommentsAtTime(time: number): void | Promise<unknown>
   logError(error: unknown, message: string): void
   persistVisibility(visible: boolean): void
+  refreshComments(): void | Promise<unknown>
   setCommentsScrollbarHidden(hidden: boolean): void
 }
 
@@ -197,7 +197,7 @@ class TimelineControllerImpl implements TimelineController {
   }
 
   load(unixSeconds: number): void {
-    void this.callbacks.loadComments({ time: unixSeconds })
+    void this.callbacks.loadCommentsAtTime(unixSeconds)
   }
 
   render(maxUnixSeconds = this.callbacks.getMaxTimelineTime()): void {
@@ -269,8 +269,7 @@ class TimelineControllerImpl implements TimelineController {
 
     if (target.tagName === 'STRONG') {
       if (target === this.requireTimeline().querySelector('strong')) {
-        this.callbacks.clearComments()
-        void this.callbacks.loadComments()
+        void this.callbacks.refreshComments()
         return
       }
       const year = Number.parseInt(target.textContent ?? '', 10)
@@ -299,8 +298,7 @@ class TimelineControllerImpl implements TimelineController {
 
     if (!selection) return
     const time = getTimelineSelectionTime(selection, maxTime)
-    this.callbacks.clearComments(1)
-    void this.callbacks.loadComments({ time })
+    void this.callbacks.loadCommentsAtTime(time)
   }
 
   private readonly handleWheel = (event: WheelEvent): void => {
