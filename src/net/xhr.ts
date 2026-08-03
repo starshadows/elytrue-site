@@ -10,7 +10,7 @@ interface XHRSettings {
   timeoutMs?: number
 }
 
-type Payload = BodyInit | Record<string, unknown>
+type Payload = BodyInit | object
 
 const XHR = {
   token: '',
@@ -72,7 +72,7 @@ const XHR = {
 
   get<T = unknown>(
     url: string,
-    payload?: Record<string, unknown>,
+    payload?: object,
     settings?: XHRSettings,
   ): Promise<T> {
     return this.send<T>(

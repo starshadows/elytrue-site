@@ -1,6 +1,4 @@
-export function toQueryString(
-  values?: Readonly<Record<string, unknown>>,
-): string {
+export function toQueryString(values?: object): string {
   if (!values) return ''
   const parameters = new URLSearchParams()
   for (const [key, value] of Object.entries(values)) {
