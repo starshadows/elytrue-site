@@ -337,8 +337,16 @@ test('编号跳转：输入编号回车后显示对应留言', async ({ page }) 
 
   await liftPanel(page)
   await page.locator('#menu').hover()
-  await page.locator('#goto').fill('1')
-  await page.keyboard.press('Enter')
+  const gotoInput = page.locator('#goto')
+  const jumpResponse = page.waitForResponse(
+    (response) =>
+      response.url().includes('/api/comments') &&
+      response.url().includes('number=1'),
+    { timeout: 10_000 },
+  )
+  await gotoInput.fill('1')
+  await gotoInput.press('Enter')
+  await jumpResponse
 
   await expect(page.locator('#comments .commentItem')).toHaveCount(1)
   await expect(page.locator('#comments .commentItem .id').first()).toHaveText(

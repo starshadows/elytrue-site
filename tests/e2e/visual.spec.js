@@ -8,6 +8,22 @@ async function expectBaseline(page, name) {
   })
 }
 
+async function waitForCommentImages(page) {
+  await page.locator('#comments img').evaluateAll(async (images) => {
+    await Promise.all(
+      images.map(async (image) => {
+        if (!image.complete) {
+          await new Promise((resolve) => {
+            image.addEventListener('load', resolve, { once: true })
+            image.addEventListener('error', resolve, { once: true })
+          })
+        }
+        await image.decode?.().catch(() => undefined)
+      }),
+    )
+  })
+}
+
 test.beforeEach(async ({ page, context }) => {
   await page.request.post('/__test/reset')
   await context.clearCookies()
@@ -52,5 +68,6 @@ test('mobile home matches the pre-refactor visual baseline', async ({
   await page.goto('/')
   await expect(page.locator('#userInfoName')).toHaveText(/访客/)
   await page.evaluate(() => document.fonts.ready)
+  await waitForCommentImages(page)
   await expectBaseline(page, 'mobile-home')
 })
