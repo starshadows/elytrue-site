@@ -264,10 +264,26 @@ test('点赞快速双击只计一次，且无网络错误提示', async ({ page 
   const likeBtn = card.locator('.btn.like')
   await expect(likeBtn).toBeVisible()
 
+  let likeRequests = 0
+  let releaseLike = () => {}
+  const likeGate = new Promise((resolve) => {
+    releaseLike = resolve
+  })
+  await page.route(/\/api\/comments\/like\?commentId=/, async (route) => {
+    likeRequests += 1
+    await likeGate
+    await route.continue()
+  })
+
   await likeBtn.click()
-  await likeBtn.click()
+  await expect(likeBtn).toHaveClass(/busy/)
+  await expect.poll(() => likeRequests).toBe(1)
+  await likeBtn.click({ force: true })
+  expect(likeRequests).toBe(1)
+  releaseLike()
 
   await expect(card.locator('.like-count')).toHaveText('1')
+  await expect(likeBtn).not.toHaveClass(/busy/)
   await page.waitForTimeout(600)
   await expect(page.locator('#floatMsgs .float-msg.error')).toHaveCount(0)
   await expect(page.locator('#floatMsgs')).not.toContainText('网络错误')
