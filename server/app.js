@@ -353,9 +353,12 @@ async function bootstrap(context, stores, path, auth) {
                 : String(todayCountResult.reason),
         }))
     }
-    const comments = commentsResult.status === 'fulfilled'
+    const commentsValue = commentsResult.status === 'fulfilled'
         ? commentsResult.value
         : null
+    const comments = Array.isArray(commentsValue)
+        ? { items: commentsValue, hasMore: false }
+        : commentsValue
     return timedApiResponse(context, {
         profile,
         ...(profile ? { csrfToken: profile.csrfToken } : {}),

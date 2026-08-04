@@ -57,6 +57,7 @@ async function claimUniqueIndex(data, key, userId, conflictMessage) {
     if (claimed?.userId !== userId) throw httpError(409, conflictMessage)
 }
 
+/** @param {import('./types.js').ServerTiming | null} timing */
 async function applyAdminMarker(data, user, timing = null) {
     if (!user) return user
     if (user.role === 'admin') {
@@ -87,6 +88,7 @@ export async function findUserByIdentifier(data, env, identifier) {
     return applyAdminMarker(data, await getJSON(data, blobKeys.user(index.userId)))
 }
 
+/** @param {{timing?: import('./types.js').ServerTiming | null}} [options] */
 export async function findUserById(data, userId, options = {}) {
     if (!/^[a-f0-9-]{36}$/iu.test(String(userId || ''))) return null
     const user = options.timing
@@ -299,11 +301,13 @@ export async function createSession(data, user, request, env = {}) {
     }
 }
 
-export async function getSession(
-    data,
-    request,
-    { slide = true, env = {}, timing = null } = {},
-) {
+/**
+ * @param {*} data
+ * @param {Request} request
+ * @param {{slide?: boolean, env?: Record<string, string | undefined>, timing?: import('./types.js').ServerTiming | null}} [options]
+ */
+export async function getSession(data, request, options = {}) {
+    const { slide = true, env = {}, timing = null } = options
     const cookies = parseCookies(request)
     const token = cookies.elytrue_session
     if (!token) return null

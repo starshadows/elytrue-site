@@ -421,7 +421,7 @@ async function listAllCommentKeys(data, publicRead = false) {
     return blobs.map(blob => blob.key)
 }
 
-/** @param {{lowerId?: number, upperId?: number, startNumber?: number | null, timing?: import('./types.js').ServerTiming}} [options] */
+/** @param {{lowerId?: number, upperId?: number, startNumber?: number | null, timing?: import('./types.js').ServerTiming, publicRead?: boolean}} [options] */
 async function listRecentNumberedComments(data, count, scanCap, viewer, options = {}) {
     const {
         lowerId = 0,
@@ -641,7 +641,7 @@ async function collectVisibleComments(data, ids, {
     }
 }
 
-/** @param {{timing?: import('./types.js').ServerTiming}} [options] */
+/** @param {{timing?: import('./types.js').ServerTiming, publicRead?: boolean}} [options] */
 export async function listComments(data, query, viewer, options = {}) {
     const { timing, publicRead = false } = options
     const readIndexJSON = publicRead ? getJSONPublic : getJSON
