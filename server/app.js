@@ -33,6 +33,7 @@ import {
 import { API_ROUTES, matchApiRoute, validateApiRouteRegistry } from './routes/registry.js'
 import { enforceRoutePolicy } from './routes/policy.js'
 import { apiRoutePath } from './lib/routing.js'
+import { attachServerTiming, createServerTiming } from './lib/server-timing.js'
 import {
     cleanupStalePendingImages,
     deletePendingImage,
@@ -246,17 +247,26 @@ async function deleteUploadedImage(context, stores, path, auth) {
 async function postComment(context, stores, path, auth) {
     await enforceRateLimit('comment', clientIdentity(context, auth.user.id))
     const body = await readJSON(context.request, 64 * 1024)
-    const comment = await createComment(stores.data, auth.user, body)
+    const comment = await context.commentTiming.measure('comments', () =>
+        createComment(stores.data, auth.user, body, { timing: context.commentTiming }))
     return apiResponse(comment, { status: 201, message: '留言已发布' })
 }
 
 async function getComments(context, stores, path, auth) {
     const url = new URL(context.request.url)
-    const result = await listComments(stores.data, url.searchParams, auth?.user)
+    const result = await listComments(stores.data, url.searchParams, auth?.user, {
+        timing: context.commentTiming,
+    })
     // 用户列表:{ items, hasMore, nextCursor };主列表:数组(scanCap 截断时返回 { items, hasMore })
     if (Array.isArray(result)) return apiResponse(result, { cookies: auth?.refreshCookies || [] })
     if (url.searchParams.get('uid')) return apiResponse(result, { cookies: auth?.refreshCookies || [] })
-    if (result.hasMore) return apiResponse({ items: result.items, hasMore: true }, { cookies: auth?.refreshCookies || [] })
+    if (result.hasMore) {
+        return apiResponse({
+            items: result.items,
+            hasMore: true,
+            ...(result.nextCursor ? { nextCursor: result.nextCursor } : {}),
+        }, { cookies: auth?.refreshCookies || [] })
+    }
     return apiResponse(result.items, { cookies: auth?.refreshCookies || [] })
 }
 
@@ -270,7 +280,9 @@ async function likeComment(context, stores, path, auth, liked) {
     await enforceRateLimit('like', clientIdentity(context, auth.user.id))
     const commentId = Number(new URL(context.request.url).searchParams.get('commentId'))
     if (!Number.isSafeInteger(commentId)) throw httpError(400, '留言编号无效')
-    const result = await setLike(stores.data, commentId, auth.user, liked)
+    const result = await setLike(stores.data, commentId, auth.user, liked, {
+        timing: context.commentTiming,
+    })
     return apiResponse(result, { message: liked ? '已点赞' : '已取消点赞' })
 }
 
@@ -362,17 +374,26 @@ export async function handleApiRequest(context, injectedStores) {
     const method = request.method.toUpperCase()
     const path = apiRoutePath(request)
 
+    let timing = null
     try {
         if (method === 'OPTIONS') return new Response(null, { status: 204 })
         const route = matchApiRoute(method, path)
         if (!route) return errorResponse(404, '接口不存在')
+        if (path === 'comments' || path.startsWith('comments/')) {
+            timing = createServerTiming()
+            context.commentTiming = timing
+        }
         const handler = API_ROUTE_HANDLERS[route.handler]
         if (!handler) throw new Error(`API route handler is not registered: ${route.handler}`)
-        const auth = await enforceRoutePolicy({ context, stores, route })
-        return await handler(context, stores, path, auth)
+        const auth = timing
+            ? await timing.measure('auth', () => enforceRoutePolicy({ context, stores, route }))
+            : await enforceRoutePolicy({ context, stores, route })
+        const response = await handler(context, stores, path, auth)
+        return timing ? attachServerTiming(response, timing) : response
     } catch (error) {
         if (Number.isInteger(error?.status)) {
-            return errorResponse(error.status, error.message, error.code || error.status)
+            const response = errorResponse(error.status, error.message, error.code || error.status)
+            return timing ? attachServerTiming(response, timing) : response
         }
         console.error('Unhandled API error', {
             path,
@@ -380,6 +401,7 @@ export async function handleApiRequest(context, injectedStores) {
             message: error?.message,
             stack: error?.stack,
         })
-        return errorResponse(500, '服务器暂时无法处理请求')
+        const response = errorResponse(500, '服务器暂时无法处理请求')
+        return timing ? attachServerTiming(response, timing) : response
     }
 }

@@ -7,6 +7,7 @@ import {
   runProfileAction,
 } from '../features/auth/auth-actions'
 import { useAuth, type ProfileAction } from '../features/auth/useAuth'
+import { finishPerformanceMark, startPerformanceMark } from '../lib/performance'
 
 const auth = useAuth()
 const avatar = computed(() => avatarPath(auth.profile.value?.avatar))
@@ -14,9 +15,18 @@ const name = computed(() => auth.profile.value?.name ?? '')
 const homeUrl = `${window.location.origin}${window.location.pathname}`
 
 async function openUser(): Promise<void> {
-  if (auth.loginState.value === 'loading') await initializeAuth()
-  if (auth.loggedIn.value) runProfileAction('showMe')
-  else Popups.show('loginPopup')
+  startPerformanceMark('user-popup-open')
+  if (auth.loginState.value === 'loading') {
+    Popups.show('userHome', { loadingAuth: true })
+    void initializeAuth()
+    return
+  }
+  if (auth.loggedIn.value) {
+    Popups.show('userHome', { profile: auth.profile.value ?? undefined })
+  } else {
+    Popups.show('loginPopup')
+    finishPerformanceMark('user-popup-open')
+  }
 }
 
 function action(value: ProfileAction): void {

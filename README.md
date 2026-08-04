@@ -67,13 +67,14 @@ npm run check:assets
 npm run build:edgeone
 npm run test:e2e
 npm run audit:uploads # 需要 EdgeOne 凭据，只读审计图片与用量
+npm run audit:comment-likes # 需要 EdgeOne 凭据，只读审计留言点赞缓存
 ```
 
 CI 的 `verify` 和 `e2e` 使用 Node 22.17.1；独立 `server-node20` 任务只运行 `check:server` 与 `test:server`，不会导入 Vite、Vue SFC 或 Playwright。
 
 页面安全头由 Edge Runtime 按响应类型附加：HTML 保持 `script-src 'self'`，API JSON 与图片二进制不附加页面 CSP；所有 HTTPS 响应带一年期、含子域但不含 preload 的 HSTS。会话 Cookie 的 `Secure` 依次依据边缘转发协议、请求 URL 和 `PUBLIC_SITE_URL`，因此 EdgeOne TLS 终止后的内部 HTTP URL 与本地 HTTP Mock 均保持正确行为。
 
-API 路由的 `auth` 与 `csrf` 声明由统一分发策略实际执行，Handler 不再各自重复通用权限检查。留言列表优先按稳定公开编号座位进行有界读取，直接返回由幂等点赞记录计算的计数与回复摘要；历史未编号留言继续兼容读取，不要求自动全量迁移。
+API 路由的 `auth` 与 `csrf` 声明由统一分发策略实际执行，Handler 不再各自重复通用权限检查。留言列表优先按稳定公开编号座位分批并发读取，并使用独立点赞计数缓存；`likes/{id}/{uid}.json` 仍是幂等点赞事实来源，缓存偏差可由只读审计定位和显式确认修复。历史留言首次读取会惰性核对并建立缓存，新用户留言写入倒序 v2 索引；旧索引和未编号留言继续兼容读取，不要求自动全量迁移。
 
 Edge KV 固定窗口限流是多节点 best-effort 保护，可信客户端地址只取平台 `request.eo.clientIp` 或运行时注入的 `context.clientIp`，不信任转发 Header。Cloud Functions 另有单实例内存限流；生产仍应配置 EdgeOne WAF/频率控制，代码不宣称严格全局计数。
 

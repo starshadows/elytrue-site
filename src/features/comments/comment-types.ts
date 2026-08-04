@@ -9,6 +9,7 @@ export interface CommentRecord {
   image: string
   replyid?: number | null
   time: number
+  createdAt?: number
   hidden: boolean
   liked: boolean
   likes: number
@@ -40,7 +41,7 @@ export interface UserCommentRecord {
 export interface UserCommentPage {
   items: UserCommentRecord[]
   hasMore: boolean
-  nextCursor: number | null
+  nextCursor: number | string | null
 }
 
 function isObject(value: unknown): value is object {
@@ -124,6 +125,9 @@ export function parseCommentRecord(value: unknown): CommentRecord {
         ? {}
         : { replyid }),
     time,
+    ...(numberField(value, 'createdAt') === undefined
+      ? {}
+      : { createdAt: numberField(value, 'createdAt') }),
     hidden: Reflect.get(value, 'hidden') === true,
     liked,
     likes,
@@ -164,7 +168,11 @@ export function parseUserCommentPage(value: unknown): UserCommentPage {
   if (
     !Array.isArray(items) ||
     typeof hasMore !== 'boolean' ||
-    !(nextCursor === null || typeof nextCursor === 'number')
+    !(
+      nextCursor === null ||
+      typeof nextCursor === 'number' ||
+      typeof nextCursor === 'string'
+    )
   ) {
     throw new Error('用户留言分页字段无效')
   }

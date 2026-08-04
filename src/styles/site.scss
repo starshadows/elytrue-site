@@ -1073,6 +1073,24 @@ body:not(.fullscreen) #lowerPanel.animating:not(.lowerPanelUp) {
     transition: line-height 0.5s;
 }
 
+#comments .commentsLoadError {
+    display: flex;
+    flex-direction: column;
+    align-items: center;
+    justify-content: center;
+    gap: 0.5rem;
+    min-width: 10rem;
+}
+
+#comments .commentsLoadError button,
+.userCommentsError button {
+    border: 0;
+    padding: 0.375rem 0.75rem;
+    color: inherit;
+    background: rgba(255, 255, 255, 0.28);
+    cursor: pointer;
+}
+
 #lowerPanel:hover:not(.lowerPanelDown) #comments .loadingIndicator,
 #lowerPanel.lowerPanelUp #comments .loadingIndicator {
     line-height: 55vh;
@@ -1955,6 +1973,20 @@ p.altLoginOption,
     min-height: 20rem !important;
     box-sizing: border-box;
     padding: 1.25rem 1.5rem 2rem !important;
+}
+
+.userPopupAuthLoading,
+.userCommentsLoading,
+.userCommentsError {
+    display: flex;
+    min-height: 4rem;
+    align-items: center;
+    justify-content: center;
+}
+
+.userCommentsError {
+    flex-direction: column;
+    gap: 0.5rem;
 }
 
 .userHome .userinfo {

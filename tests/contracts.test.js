@@ -93,6 +93,43 @@ describe('declarative API route contract', () => {
     assert.match(entry, /export default function onRequest\(context\)/u)
   })
 
+  test('keeps post insertion and loading indicators tied to real requests', async () => {
+    const [panel, editor, userHome] = await Promise.all([
+      readFile(
+        new URL('../src/components/CommentsPanel.vue', import.meta.url),
+        'utf8',
+      ),
+      readFile(
+        new URL('../src/components/CommentEditor.vue', import.meta.url),
+        'utf8',
+      ),
+      readFile(
+        new URL('../src/components/Popups/UserHome.vue', import.meta.url),
+        'utf8',
+      ),
+    ])
+    assert.match(panel, /insertCreatedComment\(comment\)/u)
+    assert.doesNotMatch(
+      panel,
+      /setTimeout\(\(\) => void commentsStore\.refresh\(\), 1_000\)/u,
+    )
+    assert.match(
+      panel,
+      /loadingInitial \|\| commentsStore\.state\.loadingOlder/u,
+    )
+    assert.doesNotMatch(
+      panel,
+      /display: commentsStore\.state\.reachedOldest/u,
+    )
+    assert.match(editor, /emit\('sent', created\)/u)
+    assert.match(editor, /await Promise\.allSettled/u)
+    assert.match(
+      userHome,
+      /await authStore\.ready\(\)\s+if \(disposed\) return/u,
+    )
+    assert.match(userHome, /if \(closing\) disposed = true/u)
+  })
+
   test('keeps core comment actions keyboard accessible without card-level request fan-out', async () => {
     const [card, panel] = await Promise.all([
       readFile(new URL('../src/components/CommentCard.vue', import.meta.url), 'utf8'),

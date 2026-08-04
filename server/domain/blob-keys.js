@@ -7,12 +7,14 @@
  */
 
 const paddedCommentId = id => String(id).padStart(16, '0')
+const invertedCommentId = id => String(Number.MAX_SAFE_INTEGER - Number(id)).padStart(16, '0')
 
 export const blobPrefixes = Object.freeze({
     users: 'users/',
     comments: 'comments/',
     commentNumbers: 'indexes/comments/number/',
     commentUsers: 'indexes/comments/by-user/',
+    commentUsersV2: 'indexes/comments/by-user-v2/',
     commentAliases: 'uploads/aliases/comments/',
     avatarAliases: 'uploads/aliases/avatars/',
     reports: 'reports/',
@@ -34,13 +36,18 @@ export const blobKeys = Object.freeze({
     commentsByUserPrefix: userId => `${blobPrefixes.commentUsers}${userId}/`,
     commentByUser: (userId, commentId) =>
         `${blobPrefixes.commentUsers}${userId}/${paddedCommentId(commentId)}.json`,
+    commentsByUserV2Prefix: userId => `${blobPrefixes.commentUsersV2}${userId}/`,
+    commentByUserV2: (userId, commentId) =>
+        `${blobPrefixes.commentUsersV2}${userId}/${invertedCommentId(commentId)}-${paddedCommentId(commentId)}.json`,
     commentsByDatePrefix: date => `dates/${date}/`,
     commentByDate: (date, commentId) => `dates/${date}/${paddedCommentId(commentId)}.json`,
     commentNumberHint: 'meta/comments-number-hint.json',
     commentLikePrefix: commentId => `likes/${commentId}/`,
     commentLike: (commentId, userId) => `likes/${commentId}/${userId}.json`,
+    commentLikeCountCache: commentId => `cache/comment-like-count/${commentId}.json`,
     commentReport: (commentId, userId) => `reports/${commentId}/${userId}.json`,
     commentDeleteRepair: commentId => `repairs/comment-delete/${commentId}.json`,
+    commentLikeCountRepair: commentId => `repairs/comment-like-count/${commentId}.json`,
 
     uploadUsage: 'usage/uploads.json',
     imageUploadOperation: imageId => `operations/image-uploads/${imageId}.json`,

@@ -17,6 +17,8 @@ import ToolsPanel from './ToolsPanel.vue'
 import { commentsStore } from '../features/comments/comments-store'
 import Settings from '../settings'
 import { getConfig } from '../settings/config'
+import type { CommentRecord } from '../features/comments/comment-types'
+import { finishPerformanceMark, startPerformanceMark } from '../lib/performance'
 
 const emit = defineEmits<{ fullscreen: []; install: [] }>()
 const container = useTemplateRef<HTMLDivElement>('container')
@@ -29,7 +31,10 @@ const pinnedHidden = computed(() => Settings.pinnedHidden)
 let scrollPaused = false
 let pauseTimer: number | undefined
 let scrollTimer: number | undefined
-let refreshTimer: number | undefined
+const showLeadingLoader = ref(false)
+const showTrailingLoader = ref(false)
+let leadingLoaderTimer: number | undefined
+let trailingLoaderTimer: number | undefined
 let pointerInside = false
 let previousOverscroll: { document: string; body: string } | undefined
 
@@ -231,10 +236,47 @@ function closeEditor(): void {
   forceLowerPanelDown()
 }
 
-function refreshAfterSend(): void {
-  if (refreshTimer !== undefined) window.clearTimeout(refreshTimer)
-  refreshTimer = window.setTimeout(() => void commentsStore.refresh(), 1_000)
+function handleSent(comment: CommentRecord): void {
+  commentsStore.insertCreatedComment(comment)
 }
+
+function retryInitialLoad(): void {
+  void commentsStore.initialize().catch(() => undefined)
+}
+
+function delayLoader(
+  loading: boolean,
+  target: typeof showLeadingLoader,
+  timer: 'leading' | 'trailing',
+): void {
+  const current = timer === 'leading' ? leadingLoaderTimer : trailingLoaderTimer
+  if (current !== undefined) window.clearTimeout(current)
+  if (!loading) {
+    target.value = false
+    if (timer === 'leading') leadingLoaderTimer = undefined
+    else trailingLoaderTimer = undefined
+    return
+  }
+  const next = window.setTimeout(() => {
+    target.value = true
+    if (timer === 'leading') leadingLoaderTimer = undefined
+    else trailingLoaderTimer = undefined
+  }, 200)
+  if (timer === 'leading') leadingLoaderTimer = next
+  else trailingLoaderTimer = next
+}
+
+watch(
+  () => commentsStore.state.loadingNewer,
+  (loading) => delayLoader(loading, showLeadingLoader, 'leading'),
+  { immediate: true },
+)
+
+watch(
+  () => commentsStore.state.loadingInitial || commentsStore.state.loadingOlder,
+  (loading) => delayLoader(loading, showTrailingLoader, 'trailing'),
+  { immediate: true },
+)
 
 function hidePinned(): void {
   Settings.pinnedHidden = true
@@ -258,7 +300,12 @@ function onOpenEditor(): void {
 }
 
 onMounted(() => {
-  void commentsStore.initialize().then(() => nextTick(updateVisibleTime))
+  startPerformanceMark('comments-initial')
+  void commentsStore
+    .initialize()
+    .then(() => nextTick(updateVisibleTime))
+    .catch(() => undefined)
+    .finally(() => finishPerformanceMark('comments-initial'))
   container.value?.addEventListener('scroll', handleScroll)
   container.value?.addEventListener('wheel', handleWheel)
   document.addEventListener('elytrue:seek-comment', onSeek)
@@ -279,7 +326,9 @@ onBeforeUnmount(() => {
   document.removeEventListener('pointermove', handleDocumentPointerMove)
   if (pauseTimer !== undefined) window.clearTimeout(pauseTimer)
   if (scrollTimer !== undefined) window.clearInterval(scrollTimer)
-  if (refreshTimer !== undefined) window.clearTimeout(refreshTimer)
+  if (leadingLoaderTimer !== undefined) window.clearTimeout(leadingLoaderTimer)
+  if (trailingLoaderTimer !== undefined)
+    window.clearTimeout(trailingLoaderTimer)
   panelMode.value = 'auto'
   setOverscrollContainment(false)
   document.body.classList.remove('touchKeyboardShowing')
@@ -363,12 +412,12 @@ defineExpose({ forceLowerPanelDown, forceLowerPanelUp, pauseScroll })
         :reply-number="replyNumber"
         @close="closeEditor"
         @focus="forceLowerPanelUp"
-        @sent="refreshAfterSend"
+        @sent="handleSent"
       />
       <div
         id="loadingIndicatorBefore"
         class="commentBox loadingIndicator"
-        :style="{ display: commentsStore.state.loadingNewer ? '' : 'none' }"
+        :style="{ display: showLeadingLoader ? '' : 'none' }"
       >
         <div class="loadingCircle"></div>
       </div>
@@ -380,9 +429,21 @@ defineExpose({ forceLowerPanelDown, forceLowerPanelUp, pauseScroll })
         @reply="openEditor"
       />
       <div
+        v-if="
+          commentsStore.state.initialError && !commentsStore.state.items.length
+        "
+        class="commentBox loadingIndicator commentsLoadError"
+      >
+        <span class="ui zh">留言加载失败</span>
+        <span class="ui en">Failed to load messages</span>
+        <button type="button" @click="retryInitialLoad">
+          <span class="ui zh">重新加载</span><span class="ui en">Retry</span>
+        </button>
+      </div>
+      <div
         id="loadingIndicator"
         class="commentBox loadingIndicator"
-        :style="{ display: commentsStore.state.reachedOldest ? 'none' : '' }"
+        :style="{ display: showTrailingLoader ? '' : 'none' }"
       >
         <div class="loadingCircle"></div>
       </div>

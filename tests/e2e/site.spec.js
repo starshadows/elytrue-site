@@ -374,6 +374,15 @@ test('按 Escape 收起后鼠标离开再进入可重新展开留言区', async 
 })
 
 test('发布留言：新留言卡片出现且编号为 #1', async ({ page }) => {
+  let commentListRequests = 0
+  await page.route('**/api/comments*', async (route) => {
+    const request = route.request()
+    const url = new URL(request.url())
+    if (request.method() === 'GET' && url.pathname === '/api/comments') {
+      commentListRequests += 1
+    }
+    await route.continue()
+  })
   await page.goto('/')
   await expectVisitor(page)
 
@@ -388,7 +397,9 @@ test('发布留言：新留言卡片出现且编号为 #1', async ({ page }) => 
   )
   await expect(page.locator('#senderText')).toHaveText(user1Name)
   await typeMessage(page, user1Message)
+  const listRequestsBeforePost = commentListRequests
   await sendMessageAndWaitNewCard(page, 1)
+  expect(commentListRequests).toBe(listRequestsBeforePost)
   await leaveAndReliftPanel(page)
 
   const card = page.locator('#comments .commentItem').first()
@@ -622,6 +633,51 @@ test('登录态初始化：首次加载只请求一次 /user/me', async ({ page 
   await expect(page.locator('#popups .loginPopup')).toBeVisible()
   await page.waitForTimeout(200)
   expect(meRequests).toBe(1)
+})
+
+test('已登录头像：缓存资料立即显示且不重复请求 /user/me', async ({ page }) => {
+  let meRequests = 0
+  await page.route('**/api/user/me', async (route) => {
+    meRequests += 1
+    await route.continue()
+  })
+  await page.goto('/')
+  await loginByIdentifier(page, user1Name, PASSWORD)
+  await expectLoggedIn(page, user1Name)
+  const requestsBeforeOpen = meRequests
+
+  await page.locator('#userInfo').click()
+  const userHome = page.locator('#popups .userHome')
+  await expect(userHome).toBeVisible()
+  await expect(userHome.locator('.userinfo')).toContainText(user1Name)
+  expect(meRequests).toBe(requestsBeforeOpen)
+})
+
+test('留言加载失败：停止动画并提供重试入口', async ({ page }) => {
+  await page.route('**/api/comments*', async (route) => {
+    const request = route.request()
+    const url = new URL(request.url())
+    if (request.method() === 'GET' && url.pathname === '/api/comments') {
+      await route.fulfill({
+        status: 503,
+        contentType: 'application/json',
+        body: JSON.stringify({
+          code: 503,
+          message: '测试加载失败',
+          data: null,
+        }),
+      })
+      return
+    }
+    await route.continue()
+  })
+  await page.goto('/')
+  await liftPanel(page)
+  await expect(page.locator('#comments .commentsLoadError')).toBeVisible()
+  await expect(page.locator('#loadingIndicator .loadingCircle')).toBeHidden()
+  await expect(
+    page.getByRole('button', { name: /重新加载|Retry/ }),
+  ).toBeVisible()
 })
 
 test('举报按钮：留言先加载、用户后登录时自动出现', async ({ page }) => {

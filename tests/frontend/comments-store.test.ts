@@ -47,7 +47,9 @@ function deferred<T>() {
 
 function apiWith(overrides: Partial<CommentsApi>): CommentsApi {
   return {
-    async create() {},
+    async create() {
+      return comment(1)
+    },
     async deleteUpload() {},
     async getCount() {
       return 0
@@ -89,6 +91,127 @@ describe('comments store', () => {
       store.state.items.map((item) => item.id),
       [2, 1],
     )
+  })
+
+  test('inserts a created comment without clearing or refreshing the list', async () => {
+    let listCalls = 0
+    let countCalls = 0
+    const store = createCommentsStore(
+      apiWith({
+        async list() {
+          listCalls += 1
+          return { items: [comment(2), comment(1)], hasMore: true }
+        },
+        async getCount() {
+          countCalls += 1
+          return countCalls === 1 ? 2 : 3
+        },
+      }),
+    )
+    await store.initialize()
+
+    store.insertCreatedComment(comment(3))
+    assert.deepEqual(
+      store.state.items.map((item) => item.id),
+      [3, 2, 1],
+    )
+    assert.equal(store.state.todayCount, 3)
+    assert.equal(store.state.reachedNewest, true)
+    assert.equal(listCalls, 1)
+    await new Promise((resolve) => setTimeout(resolve, 0))
+    assert.equal(countCalls, 2)
+
+    store.insertCreatedComment(comment(3, { comment: 'updated' }))
+    assert.equal(store.state.items.filter((item) => item.id === 3).length, 1)
+    assert.equal(store.state.items[0]?.comment, 'updated')
+    assert.equal(listCalls, 1)
+  })
+
+  test('keeps a newly posted comment when an older initial response resolves later', async () => {
+    const request = deferred<CommentPage>()
+    const store = createCommentsStore(
+      apiWith({
+        list() {
+          return request.promise
+        },
+      }),
+    )
+
+    const initializing = store.initialize()
+    store.insertCreatedComment(comment(2))
+    request.resolve({ items: [comment(1)], hasMore: false })
+    await initializing
+
+    assert.deepEqual(
+      store.state.items.map((item) => item.id),
+      [2, 1],
+    )
+  })
+
+  test('uses the server cursor for the next older page', async () => {
+    const queries: CommentQuery[] = []
+    const store = createCommentsStore(
+      apiWith({
+        async list(query = {}) {
+          queries.push(query)
+          if (queries.length === 1) {
+            return {
+              items: [comment(80), comment(79)],
+              hasMore: true,
+              nextCursor: 51,
+            }
+          }
+          return { items: [comment(50)], hasMore: false }
+        },
+      }),
+    )
+
+    await store.initialize()
+    await store.loadOlder()
+
+    assert.deepEqual(queries[1], {
+      cursor: 51,
+      direction: 'before',
+      count: 30,
+    })
+  })
+
+  test('does not request an older page when the initial page is complete', async () => {
+    let calls = 0
+    const store = createCommentsStore(
+      apiWith({
+        async list() {
+          calls += 1
+          return { items: [], hasMore: false }
+        },
+      }),
+    )
+
+    await store.initialize()
+    await store.loadOlder()
+
+    assert.equal(calls, 1)
+    assert.equal(store.state.reachedOldest, true)
+  })
+
+  test('stops initial loading and remains retryable after failure', async () => {
+    let calls = 0
+    const store = createCommentsStore(
+      apiWith({
+        async list() {
+          calls += 1
+          if (calls === 1) throw new Error('offline')
+          return { items: [comment(1)], hasMore: false }
+        },
+      }),
+    )
+
+    await assert.rejects(store.initialize(), /offline/)
+    assert.equal(store.state.loadingInitial, false)
+    assert.equal(store.state.initialError, true)
+    await store.initialize()
+    assert.equal(calls, 2)
+    assert.equal(store.state.initialError, false)
   })
 
   test('keeps numbered jump state until the rendered target is finished', async () => {

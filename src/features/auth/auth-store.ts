@@ -20,7 +20,7 @@ interface MutableAuthState {
 }
 
 export interface AuthAdapter {
-  loadProfile(): Promise<UserProfile>
+  loadProfile(): Promise<UserProfile | null>
   clearSession(): void
 }
 
@@ -79,6 +79,8 @@ export function createAuthStore(initialAdapter?: AuthAdapter) {
   ): Promise<UserProfile | null> {
     try {
       const profile = await requireAdapter().loadProfile()
+      if (!profile)
+        return generation === requestGeneration ? clearState() : null
       return generation === requestGeneration
         ? applyProfile(profile)
         : mutableState.profile

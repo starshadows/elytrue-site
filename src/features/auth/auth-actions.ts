@@ -19,7 +19,9 @@ function configureAuth(): void {
       XHR.csrfToken = ''
     },
     loadProfile: () =>
-      XHR.get<UserProfile>('user/me', undefined, { silentStatuses: [401] }),
+      XHR.get<UserProfile | null>('user/me', undefined, {
+        silentStatuses: [401],
+      }),
   })
 }
 
@@ -125,7 +127,7 @@ export function runProfileAction(action: ProfileAction): void {
       Popups.show('recoveryKeySetupPopup')
       break
     case 'showMe':
-      Popups.show('userHome')
+      Popups.show('userHome', { profile: authStore.state.profile ?? undefined })
       break
     case 'logout':
       logout(false)

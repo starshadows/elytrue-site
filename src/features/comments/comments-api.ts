@@ -30,12 +30,12 @@ export interface LikeResult {
 }
 
 export interface CommentsApi {
-  create(payload: CreateCommentPayload): Promise<void>
+  create(payload: CreateCommentPayload): Promise<CommentRecord>
   deleteUpload(imageId: string): Promise<void>
   getCount(): Promise<number>
   like(commentId: number, liked: boolean): Promise<LikeResult | void>
   list(query?: CommentQuery): Promise<CommentPage>
-  listUser(uid: string, cursor?: number): Promise<UserCommentPage>
+  listUser(uid: string, cursor?: number | string): Promise<UserCommentPage>
   report(commentId: number, reason: string): Promise<void>
   upload(image: string): Promise<string>
 }
@@ -65,7 +65,7 @@ export const commentsApi: CommentsApi = {
   },
   async listUser(uid, cursor) {
     return parseUserCommentPage(
-      await XHR.get<unknown>('comments', { uid, count: 50, cursor }),
+      await XHR.get<unknown>('comments', { uid, count: 20, cursor }),
     )
   },
   async like(commentId, liked) {
@@ -99,7 +99,9 @@ export const commentsApi: CommentsApi = {
     )
   },
   async create(payload) {
-    requireSuccess(await XHR.post('comments/post', payload))
+    const response = await XHR.post<unknown>('comments/post', payload)
+    requireSuccess(response)
+    return parseCommentPage([response.data]).items[0]!
   },
 }
 

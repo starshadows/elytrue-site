@@ -2,7 +2,7 @@ import assert from 'node:assert/strict'
 import { describe, it } from 'node:test'
 import { handleApiRequest } from '../server/app.js'
 import { MemoryStore } from '../server/storage.js'
-import { createComment, listComments, newCommentId, shanghaiDateString } from '../server/comments.js'
+import { createComment, listComments, newCommentId, setLike, shanghaiDateString } from '../server/comments.js'
 import { resetMemoryRateLimitsForTests } from '../server/rate-limit.js'
 
 class FlakyStore extends MemoryStore {
@@ -31,6 +31,78 @@ class TrackingStore extends MemoryStore {
     async list(options = {}) {
         this.listPrefixes.push(options.prefix || '')
         return super.list(options)
+    }
+}
+
+class ReadTrackingStore extends MemoryStore {
+    constructor() {
+        super()
+        this.enabled = false
+        this.getKeys = []
+        this.active = 0
+        this.maxActive = 0
+        this.listOptions = []
+    }
+
+    async get(key, options = {}) {
+        if (!this.enabled) return super.get(key, options)
+        this.getKeys.push(key)
+        this.active += 1
+        this.maxActive = Math.max(this.maxActive, this.active)
+        try {
+            await new Promise(resolve => setTimeout(resolve, 1))
+            return await super.get(key, options)
+        } finally {
+            this.active -= 1
+        }
+    }
+
+    async list(options = {}) {
+        if (this.enabled) this.listOptions.push(options)
+        return super.list(options)
+    }
+}
+
+class DelayedIndexFailureStore extends MemoryStore {
+    delayedWriteFinished = false
+    rollbackStartedEarly = false
+
+    async setJSON(key, value, options = {}) {
+        if (key.startsWith('indexes/comments/by-user-v2/')) {
+            await new Promise(resolve => setTimeout(resolve, 20))
+            await super.setJSON(key, value, options)
+            this.delayedWriteFinished = true
+            return
+        }
+        if (key.startsWith('dates/')) throw new Error('injected date failure')
+        return super.setJSON(key, value, options)
+    }
+
+    async delete(key) {
+        if (key.startsWith('comments/') && !this.delayedWriteFinished) {
+            this.rollbackStartedEarly = true
+        }
+        return super.delete(key)
+    }
+}
+
+class DelayedCacheWarmStore extends MemoryStore {
+    constructor() {
+        super()
+        this.warmStarted = new Promise(resolve => {
+            this.resolveWarmStarted = resolve
+        })
+        this.warmRelease = new Promise(resolve => {
+            this.resolveWarmRelease = resolve
+        })
+    }
+
+    async setJSON(key, value, options = {}) {
+        if (key.startsWith('cache/comment-like-count/') && options.onlyIfNew) {
+            this.resolveWarmStarted()
+            await this.warmRelease
+        }
+        return super.setJSON(key, value, options)
     }
 }
 
@@ -134,6 +206,12 @@ describe('stable public comment numbers', () => {
         assert.equal(published.a.number, 1)
         assert.equal(published.b.number, 2)
         assert.equal(published.c.number, 3)
+        for (const field of ['id', 'number', 'displayId', 'uid', 'sender', 'avatar', 'comment', 'image', 'hidden', 'likes', 'liked', 'time']) {
+            assert.ok(Object.hasOwn(published.a, field), `发布响应缺少 ${field}`)
+        }
+        assert.equal(published.a.displayId, published.a.number)
+        assert.equal(published.a.likes, 0)
+        assert.equal(published.a.liked, false)
     })
 
     it('keeps numbers stable after deleting another comment', async () => {
@@ -162,6 +240,12 @@ describe('stable public comment numbers', () => {
         const reply = await postComment(state, '回复第一条', { replyid: 1 })
         assert.equal(reply.number, 5)
         assert.equal(reply.replyid, published.a.id, 'replyid 应解析为内部 ID')
+        assert.deepEqual(reply.replyPreview, {
+            displayId: 1,
+            sender: '编号用户',
+            avatar: '',
+            comment: '第一条',
+        })
         published.reply = reply
         const listed = await call(state, 'GET', 'comments?count=10')
         const replyRecord = listed.payload.data.find(comment => comment.id === reply.id)
@@ -460,6 +544,21 @@ describe('createComment failure paths', () => {
         assert.equal((await data.list({ prefix: 'indexes/comments/number/' })).blobs.length, 0)
     })
 
+    it('waits for sibling index writes to settle before rollback', async () => {
+        const data = new DelayedIndexFailureStore()
+        await assert.rejects(
+            () => createComment(data, user, { comment: '延迟索引失败' }, {
+                idFactory: () => 9876543210123776,
+            }),
+            error => error.status === 500,
+        )
+        assert.equal(data.rollbackStartedEarly, false)
+        assert.equal(
+            (await data.list({ prefix: 'indexes/comments/by-user-v2/' })).blobs.length,
+            0,
+        )
+    })
+
     it('logs a structured error when rollback itself fails', async () => {
         const data = new FlakyStore({
             setJSON: key => key.startsWith('indexes/comments/by-user/'),
@@ -626,17 +725,237 @@ describe('bounded main comment reads', () => {
         const page = await listComments(data, new URLSearchParams({ count: '2' }), user)
         assert.deepEqual(page.items.map(comment => comment.id), ids.slice(1).reverse())
         assert.equal(data.listPrefixes.includes('comments/'), false)
-        assert.equal(data.listPrefixes.filter(prefix => prefix.startsWith('likes/')).length, 2)
+        assert.equal(data.listPrefixes.some(prefix => prefix.startsWith('likes/')), false)
     })
 
-    it('counts likes across Blob list pages', async () => {
+    it('uses the isolated like-count cache without listing like records', async () => {
         const data = new MemoryStore()
         const comment = await createComment(data, user, { comment: '分页点赞计数' })
         await Promise.all(Array.from({ length: 501 }, (_, index) =>
             data.setJSON(`likes/${comment.id}/user-${index}.json`, { userId: `user-${index}` })))
+        await data.setJSON(`cache/comment-like-count/${comment.id}.json`, {
+            commentId: comment.id,
+            count: 501,
+        })
 
         const page = await listComments(data, new URLSearchParams({ number: String(comment.number) }), user)
         assert.equal(page[0].likes, 501)
+    })
+
+    it('warms an exact cache for legacy comments without a trusted count', async () => {
+        const data = new TrackingStore()
+        const id = 1752000000000999
+        await data.setJSON(`comments/${id}.json`, {
+            id,
+            uid: user.id,
+            sender: user.name,
+            comment: '历史点赞',
+            hidden: false,
+            time: 1,
+        })
+        await data.setJSON(`likes/${id}/legacy-user.json`, { userId: 'legacy-user' })
+
+        const first = await listComments(data, new URLSearchParams({ from: String(id), count: '1' }), user)
+        assert.equal(first.items[0].likes, 1)
+        assert.ok(data.listPrefixes.some(prefix => prefix === `likes/${id}/`))
+
+        data.listPrefixes = []
+        const second = await listComments(data, new URLSearchParams({ from: String(id), count: '1' }), user)
+        assert.equal(second.items[0].likes, 1)
+        assert.equal(data.listPrefixes.some(prefix => prefix === `likes/${id}/`), false)
+    })
+
+    it('does not let delayed legacy warming overwrite a newer like count', async () => {
+        const data = new DelayedCacheWarmStore()
+        const id = 1752000000000888
+        await data.setJSON(`comments/${id}.json`, {
+            id,
+            uid: user.id,
+            sender: user.name,
+            comment: '并发升温',
+            hidden: false,
+            time: 1,
+        })
+
+        const listing = listComments(
+            data,
+            new URLSearchParams({ from: String(id), count: '1' }),
+            user,
+        )
+        await data.warmStarted
+        await setLike(data, id, user, true)
+        data.resolveWarmRelease()
+        await listing
+
+        assert.equal(
+            (await data.get(`cache/comment-like-count/${id}.json`, { type: 'json' })).count,
+            1,
+        )
+    })
+
+    it('loads thirty recent comments in one bounded concurrent seat batch', async () => {
+        const data = new ReadTrackingStore()
+        const base = 1752000000000000
+        for (let number = 1; number <= 80; number += 1) {
+            const id = base + number
+            await data.setJSON(`indexes/comments/number/${number}.json`, { commentId: id })
+            await data.setJSON(`comments/${String(id).padStart(16, '0')}.json`, {
+                id,
+                number,
+                uid: user.id,
+                sender: user.name,
+                avatar: '',
+                comment: `批量留言${number}`,
+                image: '',
+                replyid: null,
+                hidden: false,
+                likeCount: 0,
+                likeCountVersion: 1,
+                createdAt: number,
+                time: number,
+            })
+        }
+        await data.setJSON('meta/comments-number-hint.json', { value: 80 })
+        data.enabled = true
+
+        const page = await listComments(data, new URLSearchParams({ count: '30' }), user)
+        assert.equal(page.items.length, 30)
+        assert.equal(data.getKeys.filter(key => key.startsWith('indexes/comments/number/')).length, 48)
+        assert.equal(data.getKeys.filter(key => key.startsWith('comments/')).length, 48)
+        assert.equal(data.listOptions.some(options => String(options.prefix).startsWith('likes/')), false)
+        assert.ok(data.maxActive > 1)
+        assert.ok(data.maxActive <= 8)
+        assert.equal(page.hasMore, false)
+        assert.equal(page.nextCursor, base + 51)
+
+        data.getKeys = []
+        const second = await listComments(data, new URLSearchParams({
+            count: '30',
+            cursor: String(page.nextCursor),
+            direction: 'before',
+        }), user)
+        assert.deepEqual(
+            second.items.map(comment => comment.number),
+            Array.from({ length: 30 }, (_, index) => 50 - index),
+        )
+        assert.equal(second.nextCursor, base + 21)
+    })
+
+    it('starts an older page near its numbered cursor instead of rescanning from newest', async () => {
+        const data = new ReadTrackingStore()
+        const base = 1753000000000000
+        for (let number = 1; number <= 300; number += 1) {
+            const id = base + number
+            await data.setJSON(`indexes/comments/number/${number}.json`, { commentId: id })
+            await data.setJSON(`indexes/comments/by-id/${String(id).padStart(16, '0')}.json`, {
+                commentId: id,
+                number,
+            })
+            await data.setJSON(`comments/${String(id).padStart(16, '0')}.json`, {
+                id,
+                number,
+                uid: user.id,
+                sender: user.name,
+                avatar: '',
+                comment: `深游标${number}`,
+                image: '',
+                replyid: null,
+                hidden: false,
+                likeCount: 0,
+                likeCountVersion: 1,
+                createdAt: number,
+                time: number,
+            })
+        }
+        await data.setJSON('meta/comments-number-hint.json', { value: 300 })
+        data.enabled = true
+
+        const page = await listComments(data, new URLSearchParams({
+            count: '2',
+            cursor: String(base + 50),
+            direction: 'before',
+        }), user)
+
+        assert.deepEqual(page.items.map(comment => comment.number), [49, 48])
+        assert.ok(
+            data.getKeys.filter(key => key.startsWith('indexes/comments/number/')).length <= 48,
+        )
+
+        data.getKeys = []
+        const exhausted = await listComments(data, new URLSearchParams({
+            count: '2',
+            cursor: String(base + 1),
+            direction: 'before',
+        }), user)
+        assert.deepEqual(exhausted.items, [])
+        assert.equal(exhausted.hasMore, false)
+        assert.equal(
+            data.getKeys.filter(key => key.startsWith('indexes/comments/number/')).length,
+            0,
+        )
+    })
+})
+
+describe('like count cache repair', () => {
+    it('keeps the like fact and writes a repair marker when cache persistence fails', async () => {
+        const data = new FlakyStore()
+        const created = await createComment(data, user, { comment: '点赞缓存修复' })
+        data.failures.setJSON = key => key === `cache/comment-like-count/${created.id}.json`
+
+        const result = await setLike(data, created.id, user, true)
+        assert.deepEqual(result, { liked: true, likes: 1 })
+        assert.ok(await data.get(`likes/${created.id}/${user.id}.json`, { type: 'json' }))
+        const marker = await data.get(`repairs/comment-like-count/${created.id}.json`, { type: 'json' })
+        assert.equal(marker.status, 'open')
+        assert.equal(marker.authoritativeLikes, 1)
+    })
+
+    it('never rewrites the comment body while updating the cache', async () => {
+        const data = new MemoryStore()
+        const created = await createComment(data, user, { comment: '独立点赞缓存' })
+        const key = `comments/${String(created.id).padStart(16, '0')}.json`
+        const before = await data.get(key, { type: 'json' })
+
+        await setLike(data, created.id, user, true)
+
+        assert.deepEqual(await data.get(key, { type: 'json' }), before)
+        assert.equal(
+            (await data.get(`cache/comment-like-count/${created.id}.json`, { type: 'json' })).count,
+            1,
+        )
+    })
+})
+
+describe('bounded v2 user comment index', () => {
+    it('reads only the requested first page of the new descending index', async () => {
+        const data = new ReadTrackingStore()
+        for (let index = 0; index < 40; index += 1) {
+            await createComment(data, user, { comment: `用户分页${index}` })
+        }
+        data.enabled = true
+        const first = await listComments(data, new URLSearchParams({
+            uid: user.id,
+            count: '20',
+        }), user)
+        assert.equal(first.items.length, 20)
+        assert.equal(first.hasMore, true)
+        const v2Lists = data.listOptions.filter(options =>
+            options.prefix === `indexes/comments/by-user-v2/${user.id}/`)
+        assert.equal(v2Lists.length, 1)
+        assert.equal(v2Lists[0].limit, 20)
+        assert.equal(v2Lists[0].paginate, false)
+    })
+})
+
+describe('comment server timing', () => {
+    it('returns categorized timing without sensitive values', async () => {
+        const state = createState('10.0.7.9')
+        const response = await call(state, 'GET', 'comments?count=1')
+        const timing = response.response.headers.get('server-timing') || ''
+        for (const category of ['auth', 'index', 'comments', 'likes', 'replies', 'total']) {
+            assert.match(timing, new RegExp(`${category};dur=\\d`))
+        }
+        assert.doesNotMatch(timing, /session|password|email/iu)
     })
 })
 

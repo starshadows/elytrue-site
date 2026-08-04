@@ -11,12 +11,17 @@ import {
 import { authStore } from '../features/auth/auth-store'
 import { commentsApi } from '../features/comments/comments-api'
 import type { CommentRecord } from '../features/comments/comment-types'
+import { finishPerformanceMark, startPerformanceMark } from '../lib/performance'
 import FloatMsgs from './FloatMsgs'
 import ImgViewer from './ImgViewer'
 import Popups from './Popups'
 
 const props = defineProps<{ replyNumber?: number }>()
-const emit = defineEmits<{ close: []; focus: []; sent: [] }>()
+const emit = defineEmits<{
+  close: []
+  focus: []
+  sent: [comment: CommentRecord]
+}>()
 const text = useTemplateRef<HTMLDivElement>('text')
 const picker = useTemplateRef<HTMLInputElement>('picker')
 const uploads = ref<string[]>([])
@@ -74,6 +79,7 @@ async function send(): Promise<void> {
     return
   }
   sending.value = true
+  startPerformanceMark('comment-post')
   const uploaded: string[] = []
   try {
     for (const source of uploads.value) {
@@ -86,26 +92,29 @@ async function send(): Promise<void> {
       ...(reply.value ? { replyid: reply.value.displayId } : {}),
     }
     try {
-      await commentsApi.create(payload)
+      const created = await commentsApi.create(payload)
+      emit('sent', created)
     } catch (error) {
       const csrfRejected =
         error instanceof ApiError &&
         error.status === 403 &&
         error.message.includes('安全校验失败')
       if (!csrfRejected || !(await refreshAuth())) throw error
-      await commentsApi.create(payload)
+      const created = await commentsApi.create(payload)
+      emit('sent', created)
     }
-    emit('sent')
   } catch (error) {
-    void Promise.allSettled(uploaded.map((id) => commentsApi.deleteUpload(id)))
+    await Promise.allSettled(uploaded.map((id) => commentsApi.deleteUpload(id)))
     const reason =
       error instanceof Error && error.message ? `：${error.message}` : ''
     window.alert(
       `发送留言失败${reason}。请稍后重试。\n\nFailed to send the message. Please try again later.`,
     )
     sending.value = false
+    finishPerformanceMark('comment-post')
     return
   }
+  finishPerformanceMark('comment-post')
   emit('close')
 }
 </script>

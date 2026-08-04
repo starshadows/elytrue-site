@@ -37,7 +37,9 @@ EdgeOne 对精确 `/* -> /index.html` 规则先匹配静态资源和 Functions�
 
 `src/app/App.vue` 是唯一根应用，统一渲染站点外壳、留言、弹窗、图片查看器和浮动消息。`src/features/` 按 auth、comments、gallery、music、pwa、settings、theme、timeline、viewport 和 admin 划分类型化边界：store 持有共享响应式状态和 API 流程，controller 持有音乐、主题、时间轴及浏览器生命周期。组件只保留模板内交互和局部 DOM 布局行为；弹窗、浮动消息和图片查看器不再创建独立 Vue 应用。关键 class、ID、DOM 顺序、背景顺序/焦点和动画参数保持不变。
 
-Comments store 以 `jumping` 和 `jumpNumber` 管理公开编号跳转：请求完成后保留目标，`CommentsPanel` 在 Vue 完成 DOM 更新后定位留言并调用 `finishJump()`，随后恢复双向分页；失败、刷新、时间轴加载和后续跳转都会释放或替换旧状态。点赞 pending 状态同样只由 Comments store 管理，组件不保留独立 timer。Timeline 只通过 `refreshComments` 和 `loadCommentsAtTime` 两个明确回调加载留言。
+Comments store 以 `jumping` 和 `jumpNumber` 管理公开编号跳转：请求完成后保留目标，`CommentsPanel` 在 Vue 完成 DOM 更新后定位留言并调用 `finishJump()`，随后恢复双向分页；失败、刷新、时间轴加载和后续跳转都会释放或替换旧状态。发布成功直接合并服务端返回的完整留言，不再固定等待或刷新首屏；首次、新旧分页和用户主页留言只在真实请求超过 200ms 时显示加载动画，错误结束动画并保留重试入口。点赞 pending 状态同样只由 Comments store 管理，组件不保留独立 timer。Timeline 只通过 `refreshComments` 和 `loadCommentsAtTime` 两个明确回调加载留言。
+
+头像弹窗先使用 Auth store 已缓存的 Profile 打开，用户留言再独立分页加载，不重复阻塞式请求 `/user/me`。开发环境通过 `src/lib/performance.ts` 记录 `comments-initial`、`comment-post`、`user-popup-open` 和 `user-comments-first-page`；生产构建不写额外性能日志。
 
 `src/config/site.ts` 是站点、SEO 和中英文文案来源；`src/config/assets.ts` 是 16 张背景、作者/来源、原图映射和 10 首音乐来源。PWA manifest 在构建前从站点配置生成。
 
@@ -69,9 +71,11 @@ Comments store 以 `jumping` 和 `jumpNumber` 管理公开编号跳转：请求�
 
 ### 留言读取
 
-- 主时间线优先从 `meta/comments-number-hint.json` 向下读取稳定编号座位，每次受 `scanCap` 限制；`cursor + direction` 表示严格的内部 ID 分页边界，公开编号跳转和历史 `from` 语义保持不变。仅当编号索引不存在或不足以覆盖历史未编号数据时回退旧 `comments/` 枚举。
-- 新留言保留 `likeCount: 0` 作为兼容字段，但精确计数始终以 `likes/{id}/{uid}.json` 记录为准，避免无 CAS 的留言本体聚合在并发下永久覆盖新值；点赞/取消点赞的 `onlyIfNew` 记录保持幂等，响应直接返回 `{ liked, likes }`，旧客户端 envelope 兼容。
+- 主时间线优先从 `meta/comments-number-hint.json` 向下读取稳定编号座位：每批最多预取 48 个座位，Blob 读取并发上限为 8，总扫描仍受 `scanCap` 限制；`cursor + direction` 表示严格的内部 ID 分页边界，公开编号跳转和历史 `from` 语义保持不变。仅当编号索引不存在或不足以覆盖历史未编号数据时回退旧 `comments/` 枚举。
+- `likes/{id}/{uid}.json` 是点赞事实来源，点赞/取消点赞的 `onlyIfNew` 记录保持幂等；`cache/comment-like-count/{id}.json` 是独立列表展示缓存，避免更新计数时回写整条留言并与隐藏/删除竞争。新留言以版本化的本体零值省去空缓存读取，历史留言首次读取会按 Like 事实惰性建立缓存。缓存更新失败写 `repairs/comment-like-count/{id}.json`，`npm run audit:comment-likes` 默认只读核对，只有显式 `--fix --confirm-production-repair` 才修复缓存和 marker。
+- 新留言同时写 `indexes/comments/by-user-v2/{uid}/{invertedId}-{commentId}.json`，用户主页按倒序 key 每页最多读取 20 条；没有 v2 数据的历史用户自动回退 `indexes/comments/by-user/{uid}/`，无需全量迁移。隐藏留言页使用服务端 `nextCursor` 继续扫描，避免空页循环或遗漏。
 - 一页内的 `replyid` 先去重，再直接读取目标留言并返回最小 `replyPreview`；目标删除或对当前用户不可见时返回删除占位，不暴露隐藏内容。`CommentCard` 不再挂载后逐卡发请求。
+- 留言路由返回 `Server-Timing` 的 `auth`、`index`、`comments`、`likes`、`replies` 和 `total` 分项，字段不包含用户标识或凭据。
 
 ### 图片操作
 

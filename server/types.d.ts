@@ -51,4 +51,10 @@ export interface RequestContext {
   request: Request
   env?: Record<string, string | undefined>
   clientIp?: string
+  commentTiming?: ServerTiming
+}
+
+export interface ServerTiming {
+  measure<T>(category: string, operation: () => Promise<T>): Promise<T>
+  header(): string
 }

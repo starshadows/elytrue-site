@@ -21,6 +21,7 @@ interface CommentsState {
   likePendingIds: Set<number>
   currentVisibleTime: number | null
   todayCount: number
+  initialError: boolean
 }
 
 function compareComments(left: CommentRecord, right: CommentRecord): number {
@@ -40,10 +41,14 @@ export function createCommentsStore(api: CommentsApi) {
     likePendingIds: new Set<number>(),
     currentVisibleTime: null,
     todayCount: 0,
+    initialError: false,
   })
   const pending = new Map<LoadKind, Promise<void>>()
   const likeLocks = new Map<number, Promise<void>>()
   let generation = 0
+  let insertionVersion = 0
+  const insertedVersions = new Map<number, number>()
+  let nextOlderCursor: number | null = null
 
   function merge(items: CommentRecord[]): void {
     const merged = new Map(state.items.map((item) => [item.id, item]))
@@ -66,24 +71,53 @@ export function createCommentsStore(api: CommentsApi) {
     const existing = pending.get(kind)
     if (existing) return existing
     const requestGeneration = generation
+    const requestInsertionVersion = insertionVersion
     setLoading(kind, true)
     const request = api
       .list(query)
       .then((page) => {
         if (requestGeneration !== generation) return
+        if (kind === 'initial' || kind === 'replacement')
+          state.initialError = false
+        const insertedDuringRequest = replace
+          ? state.items.filter(
+              (item) =>
+                (insertedVersions.get(item.id) ?? 0) > requestInsertionVersion,
+            )
+          : []
         if (replace) state.items = []
         merge(page.items)
+        merge(insertedDuringRequest)
+        for (const item of page.items) insertedVersions.delete(item.id)
         if (kind === 'initial' || kind === 'newer') {
           state.reachedNewest = page.items.length === 0
+        }
+        if (kind === 'initial') {
+          const requested = Math.abs(query.count ?? 30)
+          state.reachedOldest = !page.hasMore && page.items.length < requested
         }
         if (kind === 'older') {
           const requested = Math.abs(query.count ?? 30)
           state.reachedOldest = !page.hasMore && page.items.length < requested
         }
+        if (kind === 'initial' || kind === 'older') {
+          nextOlderCursor = page.hasMore
+            ? (page.nextCursor ?? page.items.at(-1)?.id ?? null)
+            : null
+        }
         if (kind === 'replacement') {
           state.reachedNewest = false
           state.reachedOldest = !page.hasMore && page.items.length === 0
         }
+      })
+      .catch((error: unknown) => {
+        if (
+          requestGeneration === generation &&
+          (kind === 'initial' || kind === 'replacement')
+        ) {
+          state.initialError = true
+        }
+        throw error
       })
       .finally(() => {
         if (requestGeneration === generation) setLoading(kind, false)
@@ -94,7 +128,8 @@ export function createCommentsStore(api: CommentsApi) {
   }
 
   async function refreshTodayCount(): Promise<void> {
-    state.todayCount = await api.getCount().catch(() => 0)
+    const count = await api.getCount().catch(() => null)
+    if (count !== null) state.todayCount = count
   }
 
   async function refresh(): Promise<void> {
@@ -127,10 +162,23 @@ export function createCommentsStore(api: CommentsApi) {
   function loadOlder(count = 30): Promise<void> {
     if (state.jumping || state.reachedOldest) return Promise.resolve()
     const oldest = state.items.at(-1)
+    const cursor = nextOlderCursor ?? oldest?.id
     return load(
       'older',
-      oldest ? { cursor: oldest.id, direction: 'before', count } : { count },
+      cursor ? { cursor, direction: 'before', count } : { count },
     )
+  }
+
+  function insertCreatedComment(comment: CommentRecord): void {
+    const wasEmpty = state.items.length === 0
+    insertionVersion += 1
+    insertedVersions.set(comment.id, insertionVersion)
+    merge([comment])
+    state.reachedNewest = true
+    state.initialError = false
+    if (wasEmpty) state.currentVisibleTime = comment.time
+    state.todayCount += 1
+    void refreshTodayCount()
   }
 
   function resetForReplacement(): void {
@@ -145,6 +193,8 @@ export function createCommentsStore(api: CommentsApi) {
     state.reachedNewest = false
     state.reachedOldest = false
     state.currentVisibleTime = null
+    nextOlderCursor = null
+    state.initialError = false
   }
 
   function finishJump(): void {
@@ -224,6 +274,7 @@ export function createCommentsStore(api: CommentsApi) {
     finishJump,
     gotoNumber,
     initialize,
+    insertCreatedComment,
     isLikePending,
     loadAtTime,
     loadNewer,
