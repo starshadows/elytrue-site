@@ -12,6 +12,7 @@ const prefix = path => /** @type {const} */ ({ kind: 'prefix', path })
 export const API_ROUTES = Object.freeze([
     { methods: ['GET'], match: exact(''), handler: 'health', auth: 'public', csrf: false },
     { methods: ['GET'], match: exact('health'), handler: 'health', auth: 'public', csrf: false },
+    { methods: ['GET'], match: exact('bootstrap'), handler: 'bootstrap', auth: 'optional', csrf: false },
     { methods: ['POST'], match: exact('user/register'), handler: 'register', auth: 'public', csrf: false },
     { methods: ['POST'], match: exact('user/login'), handler: 'login', auth: 'public', csrf: false },
     { methods: ['POST'], match: exact('user/logout'), handler: 'logout', auth: 'session', csrf: true },

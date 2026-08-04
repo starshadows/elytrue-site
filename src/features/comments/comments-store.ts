@@ -6,6 +6,7 @@ import {
   type CommentsApi,
 } from './comments-api'
 import type { CommentRecord } from './comment-types'
+import { markPerformanceEvent } from '../../lib/performance'
 
 type LoadKind = 'initial' | 'newer' | 'older' | 'replacement'
 
@@ -94,6 +95,11 @@ export function createCommentsStore(api: CommentsApi) {
         if (replace) state.items = []
         merge(page.items)
         merge(insertedDuringRequest)
+        if (kind === 'initial') {
+          markPerformanceEvent('comments-state-committed', {
+            count: state.items.length,
+          })
+        }
         for (const item of page.items) insertedVersions.delete(item.id)
         if (kind === 'initial') {
           // 首次加载请求的就是最新一页:已到最新端,避免无谓的 loadNewer
@@ -121,6 +127,14 @@ export function createCommentsStore(api: CommentsApi) {
         }
       })
       .catch((error: unknown) => {
+        const todayCount =
+          typeof error === 'object' && error !== null
+            ? Reflect.get(error, 'todayCount')
+            : undefined
+        if (kind === 'initial' && typeof todayCount === 'number') {
+          state.todayCount = todayCount
+          todayCountFresh = true
+        }
         if (
           requestGeneration === generation &&
           (kind === 'initial' || kind === 'replacement')

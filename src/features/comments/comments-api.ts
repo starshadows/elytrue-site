@@ -1,5 +1,7 @@
 import type { ApiEnvelope } from '../../lib/api-client'
 import XHR from '../../net/xhr'
+import { loadBootstrap } from '../bootstrap'
+import { markPerformanceEvent } from '../../lib/performance'
 import {
   parseCommentPage,
   parseUserCommentPage,
@@ -40,6 +42,48 @@ export interface CommentsApi {
   upload(image: string): Promise<string>
 }
 
+let initialListRequest = true
+const userPageCache = new Map<
+  string,
+  { page: UserCommentPage; expiresAt: number }
+>()
+const USER_PAGE_CACHE_TTL = 30_000
+const USER_PAGE_CACHE_LIMIT = 8
+
+export function getCachedUserCommentPage(
+  cacheKey: string,
+): UserCommentPage | null {
+  const cached = userPageCache.get(cacheKey)
+  if (!cached || cached.expiresAt <= Date.now()) {
+    userPageCache.delete(cacheKey)
+    return null
+  }
+  userPageCache.delete(cacheKey)
+  userPageCache.set(cacheKey, cached)
+  return cached.page
+}
+
+export function cacheUserCommentPage(
+  cacheKey: string,
+  page: UserCommentPage,
+): void {
+  userPageCache.delete(cacheKey)
+  userPageCache.set(cacheKey, {
+    page,
+    expiresAt: Date.now() + USER_PAGE_CACHE_TTL,
+  })
+  while (userPageCache.size > USER_PAGE_CACHE_LIMIT) {
+    const oldest = userPageCache.keys().next().value
+    if (typeof oldest !== 'string') break
+    userPageCache.delete(oldest)
+  }
+}
+
+export function invalidateUserCommentCache(cacheKey?: string): void {
+  if (cacheKey) userPageCache.delete(cacheKey)
+  else userPageCache.clear()
+}
+
 function requireSuccess(response: ApiEnvelope<unknown>): void {
   if (response.code !== 1) throw new Error(response.message)
 }
@@ -57,7 +101,27 @@ function parseImageId(response: ApiEnvelope<unknown>): string {
 
 export const commentsApi: CommentsApi = {
   async list(query = {}) {
-    return parseCommentPage(await XHR.get<unknown>('comments', query))
+    const useBootstrap = initialListRequest && Object.keys(query).length === 0
+    if (useBootstrap) initialListRequest = false
+    markPerformanceEvent('comments-request-start', { bootstrap: useBootstrap })
+    let page: CommentPage
+    if (useBootstrap) {
+      const bootstrap = await loadBootstrap()
+      if (bootstrap.commentsError) {
+        const error = new Error('首屏留言加载失败')
+        if (bootstrap.todayCount !== undefined)
+          Object.assign(error, { todayCount: bootstrap.todayCount })
+        throw error
+      }
+      page = parseCommentPage(bootstrap.comments)
+    } else {
+      page = parseCommentPage(await XHR.get<unknown>('comments', query))
+    }
+    markPerformanceEvent('comments-response', {
+      bootstrap: useBootstrap,
+      count: page.items.length,
+    })
+    return page
   },
   async getCount() {
     const count = Number(await XHR.get<unknown>('comments/count'))

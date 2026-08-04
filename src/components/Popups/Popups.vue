@@ -26,7 +26,9 @@
         :is="components[item.name]"
         v-bind="{
           ...item.props,
-          ...(item.name === 'userHome' ? { popupClosing: item.closing } : {}),
+          ...(item.name === 'userHome'
+            ? { popupClosing: item.closing, popupId: item.id }
+            : {}),
         }"
         @close="closeComponent(item)"
       ></component>

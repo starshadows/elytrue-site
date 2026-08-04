@@ -604,8 +604,8 @@ test('登录竞态：已有 Cookie 立即点击新留言,不弹登录框', async
   })
   expect(register.ok()).toBeTruthy()
 
-  // 延迟 /user/me,制造初始化未完成窗口
-  await page.route('**/api/user/me', async (route) => {
+  // 延迟统一 bootstrap,制造初始化未完成窗口
+  await page.route('**/api/bootstrap', async (route) => {
     await new Promise((resolve) => setTimeout(resolve, 4000))
     await route.continue()
   })
@@ -617,8 +617,13 @@ test('登录竞态：已有 Cookie 立即点击新留言,不弹登录框', async
   await expect(page.locator('#newCommentBox')).toBeVisible({ timeout: 10000 })
 })
 
-test('登录态初始化：首次加载只请求一次 /user/me', async ({ page }) => {
+test('登录态初始化：首次加载只请求一次 bootstrap', async ({ page }) => {
+  let bootstrapRequests = 0
   let meRequests = 0
+  await page.route('**/api/bootstrap', async (route) => {
+    bootstrapRequests += 1
+    await route.continue()
+  })
   await page.route('**/api/user/me', async (route) => {
     meRequests += 1
     await route.continue()
@@ -626,13 +631,15 @@ test('登录态初始化：首次加载只请求一次 /user/me', async ({ page 
   await page.goto('/')
   await expectVisitor(page)
   await page.waitForTimeout(200)
-  expect(meRequests).toBe(1)
-  // 点击新留言触发 ensureLoggedIn → 复用首次 Promise,不再发 /user/me
+  expect(bootstrapRequests).toBe(1)
+  expect(meRequests).toBe(0)
+  // 点击新留言触发 ensureLoggedIn → 复用首次 bootstrap Promise
   await liftPanel(page)
   await page.locator('#newMsg').click()
   await expect(page.locator('#popups .loginPopup')).toBeVisible()
   await page.waitForTimeout(200)
-  expect(meRequests).toBe(1)
+  expect(bootstrapRequests).toBe(1)
+  expect(meRequests).toBe(0)
 })
 
 test('已登录头像：缓存资料立即显示且不重复请求 /user/me', async ({ page }) => {
@@ -654,23 +661,17 @@ test('已登录头像：缓存资料立即显示且不重复请求 /user/me', as
 })
 
 test('留言加载失败：停止动画并提供重试入口', async ({ page }) => {
-  await page.route('**/api/comments*', async (route) => {
-    const request = route.request()
-    const url = new URL(request.url())
-    if (request.method() === 'GET' && url.pathname === '/api/comments') {
-      await route.fulfill({
-        status: 503,
-        contentType: 'application/json',
-        body: JSON.stringify({
-          code: 503,
-          message: '测试加载失败',
-          data: null,
-        }),
-      })
-      return
-    }
-    await route.continue()
-  })
+  await page.route('**/api/bootstrap', (route) =>
+    route.fulfill({
+      status: 503,
+      contentType: 'application/json',
+      body: JSON.stringify({
+        code: 503,
+        message: '测试加载失败',
+        data: null,
+      }),
+    }),
+  )
   await page.goto('/')
   await liftPanel(page)
   await expect(page.locator('#comments .commentsLoadError')).toBeVisible()

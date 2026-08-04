@@ -582,6 +582,10 @@ body:not(.fullscreen) #lowerPanel.animating:not(.lowerPanelUp) {
     pointer-events: none;
 }
 
+#comments > .paginationSentinel:first-child {
+    margin-right: -1px;
+}
+
 #comments .commentBox.hidden {
     display: none;
 }
@@ -900,6 +904,10 @@ body:not(.fullscreen) #lowerPanel.animating:not(.lowerPanelUp) {
 }
 
 @media (prefers-reduced-motion: reduce) {
+    .commentVisualCard {
+        animation: none;
+    }
+
     #comments #newCommentBox,
     #comments #newCommentBox.closing {
         animation-duration: 0.01ms;
@@ -1974,13 +1982,50 @@ p.altLoginOption,
     padding: 1.25rem 1.5rem 2rem !important;
 }
 
-.userPopupAuthLoading,
+.userProfilePlaceholder,
+.userAuthLoadingHint,
 .userCommentsLoading,
 .userCommentsError {
     display: flex;
     min-height: 4rem;
     align-items: center;
     justify-content: center;
+}
+
+.userProfilePlaceholder {
+    justify-content: flex-start;
+    gap: 0.625rem;
+}
+
+.userProfilePlaceholderAvatar {
+    width: 3.375rem;
+    height: 3.375rem;
+    flex-shrink: 0;
+    border-radius: 100%;
+    background-color: rgba(0, 0, 0, 0.12);
+}
+
+.userProfilePlaceholder>div:last-child {
+    flex-grow: 1;
+}
+
+.userProfilePlaceholder i {
+    display: block;
+    width: min(12rem, 65%);
+    height: 0.75rem;
+    margin: 0.5rem 0;
+    background-color: rgba(0, 0, 0, 0.1);
+}
+
+.userProfilePlaceholder i:last-child {
+    width: min(18rem, 90%);
+}
+
+.userAuthLoadingHint,
+.userCommentsLoading {
+    min-height: 2.5rem;
+    color: #555;
+    font-size: 0.875rem;
 }
 
 .userCommentsError {

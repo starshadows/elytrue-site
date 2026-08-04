@@ -1,9 +1,13 @@
 <template>
   <div class="userHome" @scroll="handleScroll">
-    <div v-if="authLoading" class="userPopupAuthLoading">
-      <div class="loadingCircle"></div>
+    <div v-if="!profileReady" class="userProfilePlaceholder" aria-busy="true">
+      <div class="userProfilePlaceholderAvatar"></div>
+      <div>
+        <i></i>
+        <i></i>
+      </div>
     </div>
-    <div class="userinfo">
+    <div v-else class="userinfo">
       <img
         :src="convertAvatarPath(user.avatar)"
         :alt="`${user.name}的头像`"
@@ -24,6 +28,10 @@
           </span>
         </div>
       </div>
+    </div>
+    <div v-if="showAuthHint" class="userAuthLoadingHint">
+      <span class="ui zh">正在确认登录状态…</span>
+      <span class="ui en">Checking sign-in status…</span>
     </div>
     <div v-if="showAction" class="useraction">
       <div>
@@ -86,16 +94,17 @@
       </div>
     </div>
     <div
-      v-if="showCommentsLoader && !authLoading"
-      class="loadingIndicator userCommentsLoading"
+      v-if="showCommentsLoader && !showAuthHint"
+      class="userCommentsLoading"
       aria-label="正在加载留言"
     >
-      <div class="loadingCircle"></div>
+      <span class="ui zh">正在加载留言…</span>
+      <span class="ui en">Loading messages…</span>
     </div>
     <div v-if="commentsError" class="userCommentsError">
       <span class="ui zh">留言加载失败</span>
       <span class="ui en">Failed to load messages</span>
-      <button type="button" @click="getComments">
+      <button type="button" @click="getComments()">
         <span class="ui zh">重试</span><span class="ui en">Retry</span>
       </button>
     </div>
@@ -142,19 +151,21 @@
 </template>
 
 <script setup lang="ts">
-import { onBeforeUnmount, onMounted, ref, watch } from 'vue'
+import { nextTick, onBeforeUnmount, onMounted, ref, watch } from 'vue'
 import { avatarPath, runProfileAction } from '../../features/auth/auth-actions'
 import { authStore, type UserProfile } from '../../features/auth/auth-store'
-import { commentsApi } from '../../features/comments/comments-api'
+import {
+  cacheUserCommentPage,
+  commentsApi,
+  getCachedUserCommentPage,
+} from '../../features/comments/comments-api'
+import type { UserCommentPage } from '../../features/comments/comment-types'
 import { commentsStore } from '../../features/comments/comments-store'
 import XHR from '../../net/xhr'
 import FloatMsgs from '../FloatMsgs'
 import ImgViewer from '../ImgViewer'
 import Popups from './index'
-import {
-  finishPerformanceMark,
-  startPerformanceMark,
-} from '../../lib/performance'
+import { markPerformanceEvent } from '../../lib/performance'
 
 interface UserComment {
   id: number
@@ -175,6 +186,7 @@ const props = defineProps<{
   profile?: UserProfile
   loadingAuth?: boolean
   popupClosing?: boolean
+  popupId?: number
 }>()
 
 const user = ref<UserProfile>(
@@ -185,8 +197,9 @@ const user = ref<UserProfile>(
     create_time: 0,
   },
 )
-const showAction = ref(Boolean(props.profile || props.loadingAuth))
-const authLoading = ref(false)
+const showAction = ref(Boolean(props.profile))
+const profileReady = ref(Boolean(props.profile || (props.id && props.name)))
+const showAuthHint = ref(false)
 const comments = ref<UserComment[]>([])
 const scrollPaused = ref(false)
 const loadingComments = ref(false)
@@ -197,6 +210,13 @@ const nextCursor = ref<number | string | null>(null)
 let loaderTimer: number | undefined
 let authLoaderTimer: number | undefined
 let disposed = false
+let profileReadyMarked = false
+const pendingCursorRequests = new Set<string>()
+const completedCursorRequests = new Set<string>()
+
+function userCommentCacheKey(): string {
+  return `${authStore.state.userId ?? 'anonymous'}:${user.value.id}`
+}
 
 watch(
   () => props.popupClosing,
@@ -211,11 +231,11 @@ watch(
     if (authLoaderTimer !== undefined) window.clearTimeout(authLoaderTimer)
     if (!loading) {
       authLoaderTimer = undefined
-      authLoading.value = false
+      showAuthHint.value = false
       return
     }
     authLoaderTimer = window.setTimeout(() => {
-      authLoading.value = true
+      showAuthHint.value = true
       authLoaderTimer = undefined
     }, 400)
   },
@@ -224,7 +244,7 @@ watch(
 
 watch(loadingComments, (loading) => {
   if (loaderTimer !== undefined) window.clearTimeout(loaderTimer)
-  if (!loading || authLoading.value) {
+  if (!loading || showAuthHint.value) {
     loaderTimer = undefined
     showCommentsLoader.value = false
     return
@@ -264,55 +284,98 @@ function openAdmin(): void {
   Popups.show('adminPanel')
 }
 
-async function getComments(): Promise<void> {
-  if (scrollPaused.value || !user.value.id || toEnd.value) return
+function applyCommentPage(page: UserCommentPage, replace = false): void {
+  if (replace) comments.value = []
+  for (const raw of page.items) {
+    if (comments.value.some((item) => item.id === raw.id)) continue
+    const date = new Date(raw.time * 1000)
+    comments.value.push({
+      id: raw.id,
+      number: raw.number,
+      comment: raw.comment,
+      image: raw.image,
+      time: raw.time,
+      timeStr: `${date.toLocaleDateString()} ${date.toLocaleTimeString()}`,
+      images: raw.image ? raw.image.split(',') : [],
+    })
+  }
+  nextCursor.value = page.hasMore ? page.nextCursor : null
+  toEnd.value = !page.hasMore
+}
+
+async function getComments(refresh = false): Promise<void> {
+  if (scrollPaused.value || !user.value.id || (!refresh && toEnd.value)) return
+  let cursor = refresh ? undefined : (nextCursor.value ?? undefined)
+  let requestKey = refresh ? 'refresh' : String(cursor ?? 'first')
+  if (
+    pendingCursorRequests.has(requestKey) ||
+    completedCursorRequests.has(requestKey)
+  )
+    return
+  pendingCursorRequests.add(requestKey)
   scrollPaused.value = true
   loadingComments.value = true
   commentsError.value = false
-  const firstPage = comments.value.length === 0 && nextCursor.value === null
-  if (firstPage) startPerformanceMark('user-comments-first-page')
+  const firstPage = cursor === undefined
+  let pageIndex = 0
+  let pageToCache: UserCommentPage | null = null
   try {
-    let emptyPages = 0
-    do {
-      const page = await commentsApi.listUser(
-        user.value.id,
-        nextCursor.value ?? undefined,
-      )
+    while (true) {
+      const page = await commentsApi.listUser(user.value.id, cursor)
       if (disposed) return
-
-      for (const raw of page.items) {
-        if (comments.value.some((item) => item.id === raw.id)) continue
-        const date = new Date(raw.time * 1000)
-        comments.value.push({
-          id: raw.id,
-          number: raw.number,
-          comment: raw.comment,
-          image: raw.image,
-          time: raw.time,
-          timeStr: `${date.toLocaleDateString()} ${date.toLocaleTimeString()}`,
-          images: raw.image ? raw.image.split(',') : [],
-        })
-      }
-
-      const cursor =
-        page.nextCursor ??
-        (page.items.length > 0 ? (page.items.at(-1)?.id ?? null) : null)
-      if (page.hasMore && cursor) {
-        nextCursor.value = cursor
-        emptyPages = page.items.length === 0 ? emptyPages + 1 : 0
-      } else {
-        toEnd.value = true
-        nextCursor.value = null
+      applyCommentPage(page, refresh && pageIndex === 0)
+      pageToCache = page
+      completedCursorRequests.add(requestKey)
+      pendingCursorRequests.delete(requestKey)
+      if (comments.value.length || !page.hasMore || page.nextCursor === null)
         break
-      }
-    } while (emptyPages > 0 && emptyPages < 5)
+      cursor = page.nextCursor
+      requestKey = String(cursor)
+      if (
+        pendingCursorRequests.has(requestKey) ||
+        completedCursorRequests.has(requestKey)
+      )
+        break
+      pendingCursorRequests.add(requestKey)
+      pageIndex += 1
+    }
+    if (firstPage) {
+      if (pageToCache) cacheUserCommentPage(userCommentCacheKey(), pageToCache)
+      await nextTick()
+      markPerformanceEvent('user-comments-first-page-ready', {
+        cached: false,
+        count: comments.value.length,
+      })
+    }
   } catch {
-    commentsError.value = true
+    if (!refresh) commentsError.value = true
   } finally {
     scrollPaused.value = false
     loadingComments.value = false
-    if (firstPage) finishPerformanceMark('user-comments-first-page')
+    pendingCursorRequests.delete(requestKey)
   }
+}
+
+function startUserComments(): void {
+  const cached = getCachedUserCommentPage(userCommentCacheKey())
+  if (cached) {
+    applyCommentPage(cached, true)
+    markPerformanceEvent('user-comments-first-page-ready', {
+      cached: true,
+      count: comments.value.length,
+    })
+    void getComments(true)
+    return
+  }
+  void getComments()
+}
+
+async function markProfileReady(): Promise<void> {
+  profileReady.value = true
+  if (profileReadyMarked) return
+  profileReadyMarked = true
+  await nextTick()
+  markPerformanceEvent('user-profile-ready', { id: user.value.id })
 }
 
 async function getUser(): Promise<void> {
@@ -323,25 +386,23 @@ async function getUser(): Promise<void> {
       window.clearTimeout(authLoaderTimer)
       authLoaderTimer = undefined
     }
-    authLoading.value = false
+    showAuthHint.value = false
     if (!profile) {
-      // 登录状态确认后在同一容器内切换:不播完用户弹窗的离场动画再开登录框
-      Popups.closeInstant()
-      Popups.show('loginPopup')
-      finishPerformanceMark('user-popup-open')
+      if (props.popupId !== undefined)
+        Popups.replace(props.popupId, 'loginPopup')
       return
     }
     user.value = profile
     showAction.value = true
-    finishPerformanceMark('user-popup-open')
-    void getComments()
+    await markProfileReady()
+    startUserComments()
     return
   }
   if (props.profile) {
     user.value = props.profile
     showAction.value = true
-    finishPerformanceMark('user-popup-open')
-    void getComments()
+    await markProfileReady()
+    startUserComments()
     return
   }
   const response = await XHR.get<UserProfile[]>('user/find', { id: props.id })
@@ -352,13 +413,12 @@ async function getUser(): Promise<void> {
       type: 'warn',
       msg: `<span class="ui zh">找不到用户</span><span class="ui en">User not found</span> (ID: ${props.id ?? ''})`,
     })
-    finishPerformanceMark('user-popup-open')
     return
   }
   user.value = profile
   showAction.value = profile.id === authStore.state.userId
-  finishPerformanceMark('user-popup-open')
-  void getComments()
+  await markProfileReady()
+  startUserComments()
 }
 
 function handleScroll(event: Event): void {
@@ -380,6 +440,7 @@ function gotoComment(index: number): void {
 }
 
 onMounted(() => {
+  if (profileReady.value) void markProfileReady()
   void getUser()
 })
 

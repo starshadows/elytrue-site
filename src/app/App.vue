@@ -22,6 +22,7 @@ import { createViewportController } from '../features/viewport/viewport-controll
 import Settings from '../settings'
 import { setConfig } from '../settings/config'
 import { logFrontendError } from './app-events'
+import { markPerformanceEvent } from '../lib/performance'
 
 const commentsPanel =
   useTemplateRef<InstanceType<typeof CommentsPanel>>('commentsPanel')
@@ -109,6 +110,7 @@ async function installPwa(): Promise<void> {
 }
 
 onMounted(() => {
+  markPerformanceEvent('app-mounted')
   theme.init()
   timeline.init()
   pwa.init()

@@ -18,7 +18,11 @@ import { commentsStore } from '../features/comments/comments-store'
 import Settings from '../settings'
 import { getConfig } from '../settings/config'
 import type { CommentRecord } from '../features/comments/comment-types'
-import { finishPerformanceMark, startPerformanceMark } from '../lib/performance'
+import {
+  finishPerformanceMark,
+  markPerformanceEvent,
+  startPerformanceMark,
+} from '../lib/performance'
 
 const emit = defineEmits<{ fullscreen: []; install: [] }>()
 const container = useTemplateRef<HTMLDivElement>('container')
@@ -31,6 +35,11 @@ type PanelMode = 'auto' | 'forced-up' | 'forced-down'
 const panelMode = ref<PanelMode>('auto')
 const pinnedHidden = computed(() => Settings.pinnedHidden)
 const showInitialLoadingHint = ref(false)
+const initialRequestSettled = ref(false)
+const initialVisualReady = ref(false)
+const initialAnimationStarted = ref(false)
+let pinnedAnimationRecorded = false
+let firstCommentAnimationRecorded = false
 let initialLoadingHintTimer: number | undefined
 let scrollPaused = false
 let pauseTimer: number | undefined
@@ -336,6 +345,28 @@ function retryInitialLoad(): void {
   void commentsStore.initialize().catch(() => undefined)
 }
 
+function handleInitialAnimationStart(
+  kind: 'pinned' | 'comment',
+  event: AnimationEvent,
+): void {
+  if (
+    !initialVisualReady.value ||
+    event.target !== event.currentTarget ||
+    event.animationName !== 'commentBoxAppear'
+  )
+    return
+  if (kind === 'pinned') {
+    if (pinnedAnimationRecorded) return
+    pinnedAnimationRecorded = true
+    markPerformanceEvent('pinned-animation-start')
+  } else {
+    if (firstCommentAnimationRecorded) return
+    firstCommentAnimationRecorded = true
+    markPerformanceEvent('first-comment-animation-start')
+  }
+  initialAnimationStarted.value = true
+}
+
 function hidePinned(): void {
   Settings.pinnedHidden = true
   FloatMsgs.show({
@@ -363,7 +394,15 @@ onMounted(() => {
     .initialize()
     .then(() => nextTick(updateVisibleTime))
     .catch(() => undefined)
-    .finally(() => finishPerformanceMark('comments-initial'))
+    .finally(async () => {
+      initialRequestSettled.value = true
+      initialVisualReady.value = true
+      await nextTick()
+      markPerformanceEvent('initial-comment-dom-ready', {
+        count: commentsStore.state.items.length,
+      })
+      finishPerformanceMark('comments-initial')
+    })
   container.value?.addEventListener('scroll', handleScroll)
   container.value?.addEventListener('wheel', handleWheel)
   document.addEventListener('elytrue:seek-comment', onSeek)
@@ -429,9 +468,12 @@ defineExpose({ forceLowerPanelDown, forceLowerPanelUp, pauseScroll })
         aria-hidden="true"
       ></div>
       <div
-        v-show="!pinnedHidden"
+        v-if="initialVisualReady && !pinnedHidden"
         id="topComment"
         class="commentBox commentVisualCard"
+        :data-initial-request-settled="initialRequestSettled"
+        :data-initial-animation-started="initialAnimationStarted"
+        @animationstart="handleInitialAnimationStart('pinned', $event)"
       >
         <img class="bg" src="/assets/elytrue-20260724/bg/portrait1.webp" />
         <div class="bgcover"></div>
@@ -491,14 +533,19 @@ defineExpose({ forceLowerPanelDown, forceLowerPanelUp, pauseScroll })
         @focus="forceLowerPanelUp"
         @sent="handleSent"
       />
-      <CommentCard
-        v-for="(record, index) in commentsStore.state.items"
-        :key="record.id"
-        :record="record"
-        :eager="index < 4"
-        @lift="forceLowerPanelUp"
-        @reply="openEditor"
-      />
+      <template v-if="initialVisualReady">
+        <CommentCard
+          v-for="(record, index) in commentsStore.state.items"
+          :key="record.id"
+          :record="record"
+          :eager="index < 4"
+          @animationstart="
+            index === 0 && handleInitialAnimationStart('comment', $event)
+          "
+          @lift="forceLowerPanelUp"
+          @reply="openEditor"
+        />
+      </template>
       <div
         v-if="
           commentsStore.state.initialError && !commentsStore.state.items.length

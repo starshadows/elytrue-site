@@ -323,7 +323,7 @@ async function loadReplyPreviews(data, comments, viewer, timing) {
             .filter(id => Number.isSafeInteger(id) && id > 0),
     )]
     const previews = new Map()
-    const replies = await measure(timing, 'replies', () => mapWithConcurrency(replyIds, id =>
+    const replies = await measure(timing, 'replyPreviews', () => mapWithConcurrency(replyIds, id =>
         getJSON(data, blobKeys.comment(id)), READ_CONCURRENCY))
     replyIds.forEach((id, index) => {
         const comment = replies[index]
@@ -416,7 +416,12 @@ async function listRecentNumberedComments(data, count, scanCap, viewer, options 
     let truncated = false
 
     while (number > 0 && scanned < scanCap && comments.length < count) {
-        const batchSize = Math.min(NUMBER_BATCH_SIZE, number, scanCap - scanned)
+        const batchSize = Math.min(
+            NUMBER_BATCH_SIZE,
+            Math.max(1, count - comments.length),
+            number,
+            scanCap - scanned,
+        )
         const numbers = Array.from({ length: batchSize }, (_, index) => number - index)
         const seats = await measure(timing, 'index', () => mapWithConcurrency(
             numbers,
@@ -431,7 +436,7 @@ async function listRecentNumberedComments(data, count, scanCap, viewer, options 
             .map(seat => Number(seat.commentId))
             .filter(id => (!lowerId || id > lowerId) && (!upperId || id < upperId))
         ids.push(...batchIds)
-        const bodies = await measure(timing, 'comments', () => mapWithConcurrency(
+        const bodies = await measure(timing, 'commentBodies', () => mapWithConcurrency(
             batchIds,
             id => getJSON(data, blobKeys.comment(id)),
             READ_CONCURRENCY,
@@ -475,7 +480,12 @@ async function listNewerNumberedComments(data, count, scanCap, viewer, options =
     let truncated = false
 
     while (number <= hint && scanned < scanCap && comments.length < count) {
-        const batchSize = Math.min(NUMBER_BATCH_SIZE, hint - number + 1, scanCap - scanned)
+        const batchSize = Math.min(
+            NUMBER_BATCH_SIZE,
+            Math.max(1, count - comments.length),
+            hint - number + 1,
+            scanCap - scanned,
+        )
         const numbers = Array.from({ length: batchSize }, (_, index) => number + index)
         const seats = await measure(timing, 'index', () => mapWithConcurrency(
             numbers,
@@ -489,7 +499,7 @@ async function listNewerNumberedComments(data, count, scanCap, viewer, options =
             .filter(seat => seat?.commentId && !seat.tombstone)
             .map(seat => Number(seat.commentId))
         ids.push(...batchIds)
-        const bodies = await measure(timing, 'comments', () => mapWithConcurrency(
+        const bodies = await measure(timing, 'commentBodies', () => mapWithConcurrency(
             batchIds,
             id => getJSON(data, blobKeys.comment(id)),
             READ_CONCURRENCY,
@@ -577,7 +587,7 @@ async function collectVisibleComments(data, ids, {
     let nextCursor = null
     while (scanned < selected.length && scanned < scanCap && comments.length < count) {
         const batchIds = selected.slice(scanned, Math.min(selected.length, scanned + 32, scanCap))
-        const bodies = await measure(timing, 'comments', () => mapWithConcurrency(
+        const bodies = await measure(timing, 'commentBodies', () => mapWithConcurrency(
             batchIds,
             id => getJSON(data, blobKeys.comment(id)),
             READ_CONCURRENCY,
@@ -637,7 +647,7 @@ export async function listComments(data, query, viewer, options = {}) {
             getJSON(data, blobKeys.commentNumber(Number(numberParam))))
         if (!seat || seat.tombstone) throw httpError(404, '留言不存在')
         const comment = seat?.commentId
-            ? await measure(timing, 'comments', () =>
+            ? await measure(timing, 'commentBodies', () =>
                 getJSON(data, blobKeys.comment(Number(seat.commentId))))
             : null
         if (!comment) throw httpError(404, '留言不存在')
@@ -657,7 +667,7 @@ export async function listComments(data, query, viewer, options = {}) {
             getJSON(data, blobKeys.commentNumberReverse(from)))
         cursorNumber = Number(reverse?.number) || 0
         if (!cursorNumber) {
-            const cursorComment = await measure(timing, 'comments', () =>
+            const cursorComment = await measure(timing, 'commentBodies', () =>
                 getJSON(data, blobKeys.comment(from)))
             cursorNumber = Number(cursorComment?.number) || 0
         }
@@ -777,7 +787,7 @@ async function listLegacyUserComments(data, viewer, uid, {
     while (scanned < ids.length && scanned < scanCap && items.length < count) {
         const batchSize = Math.min(32, Math.max(1, count - items.length + skipped))
         const batchIds = ids.slice(scanned, Math.min(ids.length, scanned + batchSize, scanCap))
-        const bodies = await measure(timing, 'comments', () => mapWithConcurrency(
+        const bodies = await measure(timing, 'commentBodies', () => mapWithConcurrency(
             batchIds,
             id => getJSON(data, blobKeys.comment(id)),
             READ_CONCURRENCY,
@@ -861,7 +871,7 @@ async function listUserComments(data, query, viewer, uid, timing) {
         sawV2 = true
         scanned += ids.length
         floor = floor ? Math.min(floor, ...ids) : Math.min(...ids)
-        const bodies = await measure(timing, 'comments', () => mapWithConcurrency(
+        const bodies = await measure(timing, 'commentBodies', () => mapWithConcurrency(
             ids,
             id => getJSON(data, blobKeys.comment(id)),
             READ_CONCURRENCY,
@@ -939,7 +949,7 @@ export async function countComments(data, query) {
 /** @param {{timing?: import('./types.js').ServerTiming}} [options] */
 export async function setLike(data, commentId, user, liked, options = {}) {
     const { timing } = options
-    const comment = await measure(timing, 'comments', () =>
+    const comment = await measure(timing, 'commentBodies', () =>
         getJSON(data, blobKeys.comment(commentId)))
     if (!comment || comment.hidden) throw httpError(404, '留言不存在')
     const key = blobKeys.commentLike(commentId, user.id)

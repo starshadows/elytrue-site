@@ -63,6 +63,17 @@ class ReadTrackingStore extends MemoryStore {
     }
 }
 
+class BootstrapCommentFailureStore extends MemoryStore {
+    failCommentReads = false
+
+    async get(key, options = {}) {
+        if (this.failCommentReads && key === 'meta/comments-number-hint.json') {
+            throw new Error('injected bootstrap comment failure')
+        }
+        return super.get(key, options)
+    }
+}
+
 class DelayedIndexFailureStore extends MemoryStore {
     delayedWriteFinished = false
     rollbackStartedEarly = false
@@ -833,8 +844,8 @@ describe('bounded main comment reads', () => {
 
         const page = await listComments(data, new URLSearchParams({ count: '30' }), user)
         assert.equal(page.items.length, 30)
-        assert.equal(data.getKeys.filter(key => key.startsWith('indexes/comments/number/')).length, 48)
-        assert.equal(data.getKeys.filter(key => key.startsWith('comments/')).length, 48)
+        assert.equal(data.getKeys.filter(key => key.startsWith('indexes/comments/number/')).length, 30)
+        assert.equal(data.getKeys.filter(key => key.startsWith('comments/')).length, 30)
         assert.equal(data.listOptions.some(options => String(options.prefix).startsWith('likes/')), false)
         assert.ok(data.maxActive > 1)
         assert.ok(data.maxActive <= 8)
@@ -894,6 +905,79 @@ describe('bounded main comment reads', () => {
             Array.from({ length: 10 }, (_, index) => 80 - index),
         )
         assert.equal(newest.hasMore, false)
+    })
+
+    it('caps an anonymous bootstrap at 38 Blob operations for twelve comments', async () => {
+        const data = new ReadTrackingStore()
+        const state = createState('10.0.7.8')
+        state.stores.data = data
+        const base = 1754000000000000
+        for (let number = 1; number <= 20; number += 1) {
+            const id = base + number
+            await data.setJSON(`indexes/comments/number/${number}.json`, { commentId: id })
+            await data.setJSON(`comments/${String(id).padStart(16, '0')}.json`, {
+                id,
+                number,
+                uid: user.id,
+                sender: user.name,
+                avatar: '',
+                comment: `bootstrap-${number}`,
+                image: '',
+                replyid: null,
+                hidden: false,
+                likeCount: 0,
+                likeCountVersion: 1,
+                createdAt: number,
+                time: number,
+            })
+        }
+        await data.setJSON('meta/comments-number-hint.json', { value: 20 })
+        data.enabled = true
+
+        const result = await call(state, 'GET', 'bootstrap')
+
+        assert.equal(result.response.status, 200)
+        assert.equal(result.payload.data.profile, null)
+        assert.equal(result.payload.data.comments.items.length, 12)
+        assert.equal(data.getKeys.length, 37)
+        assert.equal(data.listOptions.length, 1)
+        assert.equal(data.getKeys.length + data.listOptions.length, 38)
+        assert.ok(data.maxActive <= 8)
+    })
+
+    it('returns an authenticated CSRF token at the bootstrap data root', async () => {
+        const state = createState('10.0.7.9')
+        await register(state, '启动用户', 'bootstrap@example.com')
+
+        state.csrfToken = ''
+        const result = await call(state, 'GET', 'bootstrap')
+
+        assert.equal(result.response.status, 200)
+        assert.ok(result.payload.data.csrfToken)
+        assert.equal(
+            result.payload.data.csrfToken,
+            result.payload.data.profile.csrfToken,
+        )
+        assert.equal(state.csrfToken, result.payload.data.csrfToken)
+    })
+
+    it('keeps an authenticated profile when bootstrap comment reads fail', async () => {
+        const state = createState('10.0.7.10')
+        const data = new BootstrapCommentFailureStore()
+        state.stores.data = data
+        await register(state, '故障用户', 'bootstrap-failure@example.com')
+
+        data.failCommentReads = true
+        const result = await call(state, 'GET', 'bootstrap')
+
+        assert.equal(result.response.status, 200)
+        assert.equal(result.payload.data.profile.name, '故障用户')
+        assert.equal(result.payload.data.comments, null)
+        assert.equal(result.payload.data.commentsError, true)
+        assert.equal(
+            result.payload.data.csrfToken,
+            result.payload.data.profile.csrfToken,
+        )
     })
 
     it('starts an older page near its numbered cursor instead of rescanning from newest', async () => {
@@ -1007,7 +1091,17 @@ describe('comment server timing', () => {
         const state = createState('10.0.7.9')
         const response = await call(state, 'GET', 'comments?count=1')
         const timing = response.response.headers.get('server-timing') || ''
-        for (const category of ['auth', 'index', 'comments', 'likes', 'replies', 'total']) {
+        for (const category of [
+            'auth',
+            'routing',
+            'index',
+            'commentBodies',
+            'likes',
+            'replyPreviews',
+            'todayCount',
+            'serialization',
+            'total',
+        ]) {
             assert.match(timing, new RegExp(`${category};dur=\\d`))
         }
         assert.doesNotMatch(timing, /session|password|email/iu)

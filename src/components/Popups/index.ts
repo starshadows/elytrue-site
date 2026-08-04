@@ -22,9 +22,26 @@ export interface PopupEntry {
 
 const popups = reactive<PopupEntry[]>([])
 let nextId = 0
+const removalTimers = new Map<number, number>()
 
-function show(name: PopupName, props?: object): void {
-  popups.push({ id: nextId++, name, props, closing: false })
+function show(name: PopupName, props?: object): number {
+  const id = nextId++
+  popups.push({ id, name, props, closing: false })
+  location.hash = 'popup'
+  return id
+}
+
+function replace(id: number, name: PopupName, props?: object): void {
+  const entry = popups.find((item) => item.id === id)
+  if (!entry) return
+  const timer = removalTimers.get(id)
+  if (timer !== undefined) {
+    window.clearTimeout(timer)
+    removalTimers.delete(id)
+  }
+  entry.name = name
+  entry.props = props
+  entry.closing = false
   location.hash = 'popup'
 }
 
@@ -40,13 +57,17 @@ function complete(id: number): void {
 }
 
 function closeEntries(selected: PopupEntry[]): void {
-  selected.forEach((item) => (item.closing = true))
-  window.setTimeout(() => {
-    selected.forEach((item) => {
+  selected.forEach((item) => {
+    item.closing = true
+    const previousTimer = removalTimers.get(item.id)
+    if (previousTimer !== undefined) window.clearTimeout(previousTimer)
+    const timer = window.setTimeout(() => {
+      removalTimers.delete(item.id)
       const index = popups.indexOf(item)
       if (index >= 0) popups.splice(index, 1)
-    })
-  }, 150)
+    }, 150)
+    removalTimers.set(item.id, timer)
+  })
 }
 
 /**
@@ -58,6 +79,11 @@ function closeInstant(id?: number): void {
     id == null ? [...popups] : popups.filter((item) => item.id === id)
   ).filter((item) => item.name !== 'recoveryKeyPopup')
   selected.forEach((item) => {
+    const timer = removalTimers.get(item.id)
+    if (timer !== undefined) {
+      window.clearTimeout(timer)
+      removalTimers.delete(item.id)
+    }
     item.closing = true
     const index = popups.indexOf(item)
     if (index >= 0) popups.splice(index, 1)
@@ -69,6 +95,9 @@ export default {
   closeInstant,
   complete,
   isOpen: () => popups.some((item) => !item.closing),
+  isOpenName: (name: PopupName) =>
+    popups.some((item) => item.name === name && !item.closing),
   popups: readonly(popups),
+  replace,
   show,
 }

@@ -34,23 +34,35 @@ import { API_ROUTES, matchApiRoute, validateApiRouteRegistry } from './routes/re
 import { enforceRoutePolicy } from './routes/policy.js'
 import { apiRoutePath } from './lib/routing.js'
 import { attachServerTiming, createServerTiming } from './lib/server-timing.js'
-import {
-    cleanupStalePendingImages,
-    deletePendingImage,
-    loadImage,
-    saveImage,
-} from './services/image-service.js'
-import {
-    recoverAccount,
-    rotateRecoveryKey,
-} from './services/account-recovery-service.js'
 import { createReport } from './services/report-service.js'
-import {
-    bootstrapAdministrator,
-    getAdminReports,
-    getAdminUsage,
-    moderateAdminComment,
-} from './services/admin-service.js'
+
+let imageServicePromise = null
+let accountRecoveryServicePromise = null
+let adminServicePromise = null
+
+function loadImageService() {
+    imageServicePromise ??= import('./services/image-service.js')
+    return imageServicePromise.catch(error => {
+        imageServicePromise = null
+        throw error
+    })
+}
+
+function loadAccountRecoveryService() {
+    accountRecoveryServicePromise ??= import('./services/account-recovery-service.js')
+    return accountRecoveryServicePromise.catch(error => {
+        accountRecoveryServicePromise = null
+        throw error
+    })
+}
+
+function loadAdminService() {
+    adminServicePromise ??= import('./services/admin-service.js')
+    return adminServicePromise.catch(error => {
+        adminServicePromise = null
+        throw error
+    })
+}
 
 // server/build-info.js 由 scripts/gen-build-info.mjs 在构建时生成(被 gitignore),
 // 本地测试/开发时不存在,回退为 dev 默认值。
@@ -76,10 +88,16 @@ function authenticatedProfile(user, env, session) {
 }
 
 async function serveImage(stores, kind, imageId) {
+    const { loadImage } = await loadImageService()
     const image = await loadImage(stores, kind, imageId)
     return binaryResponse(image.buffer, image.contentType, {
         cache: 'public, max-age=31536000, immutable',
     })
+}
+
+function timedApiResponse(context, data, options) {
+    const operation = () => apiResponse(data, options)
+    return context.requestTiming?.measureSync('serialization', operation) ?? operation()
 }
 
 async function register(context, stores) {
@@ -146,11 +164,13 @@ async function logout(context, stores, path, auth, allDevices = false) {
 async function getMe(context, stores, path, auth) {
     if (!auth) {
         if (parseCookies(context.request).elytrue_session) throw httpError(401, '请先登录')
-        return apiResponse(null)
+        return timedApiResponse(context, null)
     }
-    return apiResponse(authenticatedProfile(auth.user, environmentFor(context), auth.session), {
-        cookies: auth.refreshCookies,
-    })
+    return timedApiResponse(
+        context,
+        authenticatedProfile(auth.user, environmentFor(context), auth.session),
+        { cookies: auth.refreshCookies },
+    )
 }
 
 async function findUsers(context, stores) {
@@ -184,6 +204,7 @@ async function updateProfile(context, stores, path, auth) {
     if (body.password !== undefined) updates.password = body.password
     if (body.avatar) {
         await enforceRateLimit('upload', clientIdentity(context, auth.user.id))
+        const { saveImage } = await loadImageService()
         const saved = await saveImage(stores, auth.user, body.avatar, 'avatar')
         updates.avatarKey = saved.imageId
     }
@@ -214,6 +235,7 @@ async function recoverUser(context, stores) {
     const identifier = String(body.identifier || '').normalize('NFKC').trim().toLowerCase()
     await enforceRateLimit('recoverIp', clientIdentity(context))
     await enforceRateLimit('recoverAccount', `account:${sha256(identifier)}`)
+    const { recoverAccount } = await loadAccountRecoveryService()
     const result = await recoverAccount(stores.data, environmentFor(context), {
         identifier,
         recoveryKey: body.recoveryKey,
@@ -225,6 +247,7 @@ async function recoverUser(context, stores) {
 async function updateRecoveryKey(context, stores, path, auth) {
     await enforceRateLimit('recoveryKey', `user:${sha256(auth.user.id)}`)
     const body = await readJSON(context.request, 32 * 1024)
+    const { rotateRecoveryKey } = await loadAccountRecoveryService()
     const result = await rotateRecoveryKey(stores.data, auth.user, body.currentPassword)
     return apiResponse(result, { message: '恢复密钥已更新，旧密钥已失效' })
 }
@@ -232,6 +255,7 @@ async function updateRecoveryKey(context, stores, path, auth) {
 async function uploadCommentImage(context, stores, path, auth) {
     await enforceRateLimit('upload', clientIdentity(context, auth.user.id))
     const body = await readJSON(context.request, 3 * 1024 * 1024)
+    const { cleanupStalePendingImages, saveImage } = await loadImageService()
     const saved = await saveImage(stores, auth.user, body.image, 'comment')
     await cleanupStalePendingImages(stores, auth.user)
     return apiResponse({ imageId: saved.imageId }, { status: 201, message: '图片已上传' })
@@ -240,6 +264,7 @@ async function uploadCommentImage(context, stores, path, auth) {
 async function deleteUploadedImage(context, stores, path, auth) {
     await enforceRateLimit('upload', clientIdentity(context, auth.user.id))
     const imageId = String(new URL(context.request.url).searchParams.get('imageId') || '')
+    const { deletePendingImage } = await loadImageService()
     await deletePendingImage(stores, auth.user, imageId)
     return apiResponse(null, { message: '图片已删除' })
 }
@@ -247,29 +272,43 @@ async function deleteUploadedImage(context, stores, path, auth) {
 async function postComment(context, stores, path, auth) {
     await enforceRateLimit('comment', clientIdentity(context, auth.user.id))
     const body = await readJSON(context.request, 64 * 1024)
-    const comment = await context.commentTiming.measure('comments', () =>
+    const comment = await context.commentTiming.measure('commentBodies', () =>
         createComment(stores.data, auth.user, body, { timing: context.commentTiming }))
     return apiResponse(comment, { status: 201, message: '留言已发布' })
 }
 
 async function getComments(context, stores, path, auth) {
     const url = new URL(context.request.url)
-    const result = await listComments(stores.data, url.searchParams, auth?.user, {
-        timing: context.commentTiming,
-    })
-    // 用户列表:{ items, hasMore, nextCursor };主列表:数组(scanCap 截断时返回 { items, hasMore })
-    if (Array.isArray(result)) return apiResponse(result, { cookies: auth?.refreshCookies || [] })
-    if (url.searchParams.get('uid')) return apiResponse(result, { cookies: auth?.refreshCookies || [] })
-    // 首次主页列表合并今日留言数量,避免额外的 /comments/count 请求;
-    // 跳转(number/time/from)与分页(cursor)请求保持原有形态。
     const params = url.searchParams
-    const isInitialPage = params.get('cursor') === null
+    const isInitialPage = params.get('uid') === null
+        && params.get('cursor') === null
         && params.get('number') === null
         && params.get('time') === null
         && params.get('from') === null
+    const todayCountRequest = isInitialPage
+        ? context.commentTiming.measure('todayCount', () => countComments(stores.data, params))
+        : null
+    const commentsRequest = listComments(stores.data, params, auth?.user, {
+        timing: context.commentTiming,
+    })
+    let result
+    let todayCount
+    if (todayCountRequest) {
+        [result, todayCount] = await Promise.all([commentsRequest, todayCountRequest])
+    } else {
+        result = await commentsRequest
+    }
+    // 用户列表:{ items, hasMore, nextCursor };主列表:数组(scanCap 截断时返回 { items, hasMore })
+    if (Array.isArray(result)) {
+        return timedApiResponse(context, result, { cookies: auth?.refreshCookies || [] })
+    }
+    if (params.get('uid')) {
+        return timedApiResponse(context, result, { cookies: auth?.refreshCookies || [] })
+    }
+    // 首次主页列表合并今日留言数量,避免额外的 /comments/count 请求;
+    // 跳转(number/time/from)与分页(cursor)请求保持原有形态。
     if (isInitialPage) {
-        const todayCount = await countComments(stores.data, params)
-        return apiResponse({
+        return timedApiResponse(context, {
             items: result.items,
             hasMore: result.hasMore,
             ...(result.nextCursor ? { nextCursor: result.nextCursor } : {}),
@@ -277,19 +316,70 @@ async function getComments(context, stores, path, auth) {
         }, { cookies: auth?.refreshCookies || [] })
     }
     if (result.hasMore) {
-        return apiResponse({
+        return timedApiResponse(context, {
             items: result.items,
             hasMore: true,
             ...(result.nextCursor ? { nextCursor: result.nextCursor } : {}),
         }, { cookies: auth?.refreshCookies || [] })
     }
-    return apiResponse(result.items, { cookies: auth?.refreshCookies || [] })
+    return timedApiResponse(context, result.items, { cookies: auth?.refreshCookies || [] })
+}
+
+async function bootstrap(context, stores, path, auth) {
+    const params = new URLSearchParams({ count: '12' })
+    const profile = auth
+        ? authenticatedProfile(auth.user, environmentFor(context), auth.session)
+        : null
+    const [commentsResult, todayCountResult] = await Promise.allSettled([
+        listComments(stores.data, params, auth?.user, {
+            timing: context.commentTiming,
+        }),
+        context.commentTiming.measure('todayCount', () => countComments(stores.data, params)),
+    ])
+    if (commentsResult.status === 'rejected') {
+        console.error(JSON.stringify({
+            event: 'bootstrap_comments_failed',
+            message: commentsResult.reason instanceof Error
+                ? commentsResult.reason.message
+                : String(commentsResult.reason),
+        }))
+    }
+    if (todayCountResult.status === 'rejected') {
+        console.error(JSON.stringify({
+            event: 'bootstrap_today_count_failed',
+            message: todayCountResult.reason instanceof Error
+                ? todayCountResult.reason.message
+                : String(todayCountResult.reason),
+        }))
+    }
+    const comments = commentsResult.status === 'fulfilled'
+        ? commentsResult.value
+        : null
+    return timedApiResponse(context, {
+        profile,
+        ...(profile ? { csrfToken: profile.csrfToken } : {}),
+        todayCount: todayCountResult.status === 'fulfilled'
+            ? todayCountResult.value
+            : null,
+        comments: comments ? {
+            items: comments.items,
+            hasMore: comments.hasMore,
+            ...(comments.nextCursor ? { nextCursor: comments.nextCursor } : {}),
+            ...(todayCountResult.status === 'fulfilled'
+                ? { todayCount: todayCountResult.value }
+                : {}),
+        } : null,
+        ...(comments ? {} : { commentsError: true }),
+    }, { cookies: auth?.refreshCookies || [] })
 }
 
 async function commentsCount(context, stores) {
     const url = new URL(context.request.url)
-    const count = await countComments(stores.data, url.searchParams)
-    return apiResponse(count)
+    const count = await context.commentTiming.measure(
+        'todayCount',
+        () => countComments(stores.data, url.searchParams),
+    )
+    return timedApiResponse(context, count)
 }
 
 async function likeComment(context, stores, path, auth, liked) {
@@ -312,6 +402,7 @@ async function reportComment(context, stores, path, auth) {
 
 async function bootstrapAdmin(context, stores, path, auth) {
     await enforceRateLimit('bootstrap', clientIdentity(context, auth.user.id))
+    const { bootstrapAdministrator } = await loadAdminService()
     await bootstrapAdministrator(
         stores.data,
         auth.user,
@@ -323,18 +414,21 @@ async function bootstrapAdmin(context, stores, path, auth) {
 
 async function adminReports(context, stores, path, auth) {
     await enforceRateLimit('admin', clientIdentity(context, auth.user.id))
+    const { getAdminReports } = await loadAdminService()
     return apiResponse(await getAdminReports(stores.data))
 }
 
 async function adminModerate(context, stores, path, auth) {
     await enforceRateLimit('admin', clientIdentity(context, auth.user.id))
     const body = await readJSON(context.request, 16 * 1024)
+    const { moderateAdminComment } = await loadAdminService()
     await moderateAdminComment(stores.data, Number(body.commentId), body.action)
     return apiResponse(null, { message: '管理操作已完成' })
 }
 
 async function adminUsage(context, stores, path, auth) {
     await enforceRateLimit('admin', clientIdentity(context, auth.user.id))
+    const { getAdminUsage } = await loadAdminService()
     return apiResponse(await getAdminUsage(stores))
 }
 
@@ -354,6 +448,7 @@ export const API_ROUTE_HANDLERS = Object.freeze({
     logout,
     logoutAll: (context, stores, path, auth) => logout(context, stores, path, auth, true),
     me: getMe,
+    bootstrap,
     findUsers,
     updateProfile,
     recoverUser,
@@ -393,12 +488,19 @@ export async function handleApiRequest(context, injectedStores) {
     let timing = null
     try {
         if (method === 'OPTIONS') return new Response(null, { status: 204 })
-        const route = matchApiRoute(method, path)
-        if (!route) return errorResponse(404, '接口不存在')
-        if (path === 'comments' || path.startsWith('comments/')) {
+        const shouldMeasure = path === 'bootstrap'
+            || path === 'user/me'
+            || path === 'comments'
+            || path.startsWith('comments/')
+        if (shouldMeasure) {
             timing = createServerTiming()
+            context.requestTiming = timing
             context.commentTiming = timing
         }
+        const route = timing
+            ? await timing.measure('routing', () => Promise.resolve(matchApiRoute(method, path)))
+            : matchApiRoute(method, path)
+        if (!route) return errorResponse(404, '接口不存在')
         const handler = API_ROUTE_HANDLERS[route.handler]
         if (!handler) throw new Error(`API route handler is not registered: ${route.handler}`)
         const auth = timing

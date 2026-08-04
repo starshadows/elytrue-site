@@ -1,3 +1,5 @@
+import { beginApiRequest } from './performance'
+
 export interface ApiEnvelope<T> {
   readonly code: number
   readonly message: string
@@ -121,17 +123,20 @@ export class ApiClient {
       requestBody = body as BodyInit | undefined
     }
 
+    const requestUrl = new URL(path, new URL(this.baseUrl, `${this.origin}/`))
+    const measurement = beginApiRequest(
+      `${requestUrl.pathname}${requestUrl.search}`,
+    )
+    let requestError: unknown
     try {
-      const response = await fetch(
-        new URL(path, new URL(this.baseUrl, `${this.origin}/`)),
-        {
-          method,
-          headers,
-          body: SAFE_METHODS.has(method) ? undefined : requestBody,
-          credentials: 'include',
-          signal: combinedSignal,
-        },
-      )
+      const response = await fetch(requestUrl, {
+        method,
+        headers,
+        body: SAFE_METHODS.has(method) ? undefined : requestBody,
+        credentials: 'include',
+        signal: combinedSignal,
+      })
+      measurement.response(response)
       const text = await response.text()
       let parsed: unknown = text
       if (text) {
@@ -167,8 +172,12 @@ export class ApiClient {
           : ''
       if (csrf) this.hooks.setCsrfToken?.(csrf)
       return parsed as ApiEnvelope<T>
+    } catch (error) {
+      requestError = error
+      throw error
     } finally {
       globalThis.clearTimeout(timeout)
+      measurement.finish(requestError)
     }
   }
 }

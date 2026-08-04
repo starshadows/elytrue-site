@@ -1,6 +1,10 @@
 import FloatMsgs from '../../components/FloatMsgs'
 import Popups from '../../components/Popups'
 import XHR from '../../net/xhr'
+import { loadBootstrap } from '../bootstrap'
+import { markPerformanceEvent } from '../../lib/performance'
+import { commentsStore } from '../comments/comments-store'
+import { invalidateUserCommentCache } from '../comments/comments-api'
 import { authStore, type ProfileAction, type UserProfile } from './auth-store'
 
 interface InputActionContext {
@@ -9,6 +13,7 @@ interface InputActionContext {
 }
 
 let configured = false
+let initialProfileRequest = true
 
 function configureAuth(): void {
   if (configured) return
@@ -18,10 +23,22 @@ function configureAuth(): void {
       XHR.token = ''
       XHR.csrfToken = ''
     },
-    loadProfile: () =>
-      XHR.get<UserProfile | null>('user/me', undefined, {
-        silentStatuses: [401],
-      }),
+    async loadProfile() {
+      markPerformanceEvent('auth-request-start')
+      try {
+        const profile = initialProfileRequest
+          ? (await loadBootstrap()).profile
+          : await XHR.get<UserProfile | null>('user/me', undefined, {
+              silentStatuses: [401],
+            })
+        markPerformanceEvent('auth-response', {
+          authenticated: Boolean(profile),
+        })
+        return profile
+      } finally {
+        initialProfileRequest = false
+      }
+    },
   })
 }
 
@@ -36,9 +53,13 @@ export function initializeAuth(): Promise<UserProfile | null> {
   return authStore.initialize()
 }
 
-export function refreshAuth(): Promise<UserProfile | null> {
+export async function refreshAuth(): Promise<UserProfile | null> {
   configureAuth()
-  return authStore.refresh()
+  initialProfileRequest = false
+  invalidateUserCommentCache()
+  const profile = await authStore.refresh()
+  void commentsStore.refresh().catch(() => undefined)
+  return profile
 }
 
 export async function ensureLoggedIn(): Promise<boolean> {
@@ -103,6 +124,7 @@ function changeEmail(): void {
 
 function logout(allDevices: boolean): void {
   void XHR.post(allDevices ? 'user/resettoken' : 'user/logout').finally(() => {
+    invalidateUserCommentCache()
     authStore.clear()
     Popups.close()
     void refreshAuth()

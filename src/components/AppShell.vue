@@ -1,5 +1,5 @@
 <script setup lang="ts">
-import { computed } from 'vue'
+import { computed, nextTick } from 'vue'
 import Popups from './Popups'
 import {
   avatarPath,
@@ -7,7 +7,7 @@ import {
   runProfileAction,
 } from '../features/auth/auth-actions'
 import { useAuth, type ProfileAction } from '../features/auth/useAuth'
-import { finishPerformanceMark, startPerformanceMark } from '../lib/performance'
+import { markPerformanceEvent } from '../lib/performance'
 
 const auth = useAuth()
 const avatar = computed(() => avatarPath(auth.profile.value?.avatar))
@@ -15,18 +15,17 @@ const name = computed(() => auth.profile.value?.name ?? '')
 const homeUrl = `${window.location.origin}${window.location.pathname}`
 
 async function openUser(): Promise<void> {
-  startPerformanceMark('user-popup-open')
+  if (Popups.popups.some((item) => item.name === 'userHome')) return
   if (auth.loginState.value === 'loading') {
     Popups.show('userHome', { loadingAuth: true })
     void initializeAuth()
-    return
-  }
-  if (auth.loggedIn.value) {
+  } else if (auth.loggedIn.value) {
     Popups.show('userHome', { profile: auth.profile.value ?? undefined })
   } else {
     Popups.show('loginPopup')
-    finishPerformanceMark('user-popup-open')
   }
+  await nextTick()
+  markPerformanceEvent('user-popup-shell-open')
 }
 
 function action(value: ProfileAction): void {

@@ -52,9 +52,11 @@ export interface RequestContext {
   env?: Record<string, string | undefined>
   clientIp?: string
   commentTiming?: ServerTiming
+  requestTiming?: ServerTiming
 }
 
 export interface ServerTiming {
   measure<T>(category: string, operation: () => Promise<T>): Promise<T>
+  measureSync<T>(category: string, operation: () => T): T
   header(): string
 }

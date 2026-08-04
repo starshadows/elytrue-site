@@ -1,9 +1,28 @@
-const CATEGORIES = ['auth', 'index', 'comments', 'likes', 'replies']
+const CATEGORIES = [
+    'auth',
+    'routing',
+    'index',
+    'commentBodies',
+    'likes',
+    'replyPreviews',
+    'todayCount',
+    'serialization',
+]
 
 export function createServerTiming() {
     const startedAt = performance.now()
     const durations = Object.fromEntries(CATEGORIES.map(category => [category, 0]))
     return {
+        measureSync(category, operation) {
+            const start = performance.now()
+            try {
+                return operation()
+            } finally {
+                if (category in durations) {
+                    durations[category] = (durations[category] ?? 0) + performance.now() - start
+                }
+            }
+        },
         async measure(category, operation) {
             const start = performance.now()
             try {
