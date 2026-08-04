@@ -29,6 +29,10 @@ function compareComments(left: CommentRecord, right: CommentRecord): number {
   return right.time - left.time || right.id - left.id
 }
 
+function shanghaiDate(now = Date.now()): string {
+  return new Date(now + 8 * 60 * 60 * 1_000).toISOString().slice(0, 10)
+}
+
 export function createCommentsStore(api: CommentsApi) {
   const state = reactive<CommentsState>({
     items: [],
@@ -52,6 +56,10 @@ export function createCommentsStore(api: CommentsApi) {
   let nextNewerCursor: number | null = null
   let nextOlderCursor: number | null = null
   let todayCountFresh = false
+  let todayCountDate = shanghaiDate()
+  let countRequestVersion = 0
+  let viewerLikeVersion = 0
+  const likeMutationVersions = new Map<number, number>()
 
   function merge(items: CommentRecord[]): void {
     const merged = new Map(state.items.map((item) => [item.id, item]))
@@ -152,14 +160,25 @@ export function createCommentsStore(api: CommentsApi) {
   }
 
   async function refreshTodayCount(): Promise<void> {
+    const requestVersion = ++countRequestVersion
+    const requestDate = shanghaiDate()
     const count = await api.getCount().catch(() => null)
-    if (count !== null) state.todayCount = count
+    if (
+      count === null ||
+      requestVersion !== countRequestVersion ||
+      requestDate !== shanghaiDate()
+    )
+      return
+    if (requestDate !== todayCountDate) {
+      todayCountDate = requestDate
+      state.todayCount = count
+    } else state.todayCount = Math.max(state.todayCount, count)
   }
 
   async function refresh(): Promise<void> {
     resetForReplacement()
-    await load('initial', {}, true)
-    if (!todayCountFresh) await refreshTodayCount()
+    await load('initial', { count: 10 }, true)
+    if (!todayCountFresh) void refreshTodayCount()
   }
 
   function initialize(): Promise<void> {
@@ -170,9 +189,48 @@ export function createCommentsStore(api: CommentsApi) {
         Promise.resolve()
       )
     }
-    return load('initial', {}, true).then(() => {
-      if (!todayCountFresh) return refreshTodayCount()
+    return load('initial', { count: 10 }, true).then(() => {
+      if (!todayCountFresh) void refreshTodayCount()
     })
+  }
+
+  async function hydrateViewerLikes(): Promise<void> {
+    const generationAtStart = generation
+    const hydrationVersion = ++viewerLikeVersion
+    const snapshots = state.items.map((item) => ({
+      id: item.id,
+      item,
+      mutationVersion: likeMutationVersions.get(item.id) ?? 0,
+    }))
+    const batches = []
+    for (let index = 0; index < snapshots.length; index += 20) {
+      batches.push(
+        api.getViewerLikes(
+          snapshots.slice(index, index + 20).map((item) => item.id),
+        ),
+      )
+    }
+    const states = (await Promise.all(batches)).flat()
+    if (
+      generationAtStart !== generation ||
+      hydrationVersion !== viewerLikeVersion
+    )
+      return
+    const byId = new Map(states.map((item) => [item.id, item.liked]))
+    for (const snapshot of snapshots) {
+      const item = state.items.find((current) => current.id === snapshot.id)
+      if (
+        item !== snapshot.item ||
+        (likeMutationVersions.get(item.id) ?? 0) !== snapshot.mutationVersion
+      )
+        continue
+      item.liked = byId.get(item.id) ?? false
+    }
+  }
+
+  function clearViewerLikes(): void {
+    viewerLikeVersion += 1
+    for (const item of state.items) item.liked = false
   }
 
   function loadNewer(count = 10): Promise<void> {
@@ -208,6 +266,11 @@ export function createCommentsStore(api: CommentsApi) {
   }
 
   function insertCreatedComment(comment: CommentRecord): void {
+    const currentDate = shanghaiDate()
+    if (currentDate !== todayCountDate) {
+      todayCountDate = currentDate
+      state.todayCount = 0
+    }
     const wasEmpty = state.items.length === 0
     insertionVersion += 1
     insertedVersions.set(comment.id, insertionVersion)
@@ -233,6 +296,7 @@ export function createCommentsStore(api: CommentsApi) {
     state.currentVisibleTime = null
     nextNewerCursor = null
     nextOlderCursor = null
+    likeMutationVersions.clear()
     todayCountFresh = false
     state.initialError = false
   }
@@ -285,6 +349,8 @@ export function createCommentsStore(api: CommentsApi) {
     if (existing) return existing
     const item = state.items.find((comment) => comment.id === id)
     if (!item) return Promise.resolve()
+    const viewerVersionAtStart = viewerLikeVersion
+    likeMutationVersions.set(id, (likeMutationVersions.get(id) ?? 0) + 1)
     state.likePendingIds.add(id)
     const before = { liked: item.liked, likes: item.likes }
     item.liked = !item.liked
@@ -292,6 +358,7 @@ export function createCommentsStore(api: CommentsApi) {
     const request = Promise.resolve()
       .then(() => api.like(id, before.liked))
       .then(async (result) => {
+        if (viewerVersionAtStart !== viewerLikeVersion) return
         if (result) {
           const target = state.items.find((comment) => comment.id === id)
           if (target) {
@@ -306,6 +373,7 @@ export function createCommentsStore(api: CommentsApi) {
         if (target) Object.assign(target, current)
       })
       .catch((error: unknown) => {
+        if (viewerVersionAtStart !== viewerLikeVersion) throw error
         const target = state.items.find((comment) => comment.id === id)
         if (target === item) Object.assign(target, before)
         throw error
@@ -323,12 +391,14 @@ export function createCommentsStore(api: CommentsApi) {
     finishJump,
     gotoId,
     gotoNumber,
+    hydrateViewerLikes,
     initialize,
     insertCreatedComment,
     isLikePending,
     loadAtTime,
     loadNewer,
     loadOlder,
+    clearViewerLikes,
     refresh,
     refreshTodayCount,
     setCurrentVisibleTime,

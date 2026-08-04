@@ -16,6 +16,7 @@ const XHR = {
   token: '',
   csrfToken: '',
   client: undefined as ApiClient | undefined,
+  unauthorizedHandler: undefined as (() => void) | undefined,
 
   getClient(): ApiClient {
     this.client ??= new ApiClient('/api/', {
@@ -26,6 +27,7 @@ const XHR = {
       onUnauthorized: () => {
         this.token = ''
         this.csrfToken = ''
+        this.unauthorizedHandler?.()
       },
     })
     return this.client

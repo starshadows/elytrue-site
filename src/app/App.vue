@@ -115,7 +115,11 @@ onMounted(() => {
   timeline.init()
   pwa.init()
   viewport.init()
-  void initializeAuth()
+  const authRequest = initializeAuth()
+  const commentsRequest = commentsStore.initialize().catch(() => undefined)
+  void Promise.all([authRequest, commentsRequest]).then(([profile]) => {
+    if (profile) void commentsStore.hydrateViewerLikes().catch(() => undefined)
+  })
   if (location.hash.startsWith('#popup-')) {
     const popup = location.hash.slice(7)
     if (popup === 'loginPopup') Popups.show('loginPopup')

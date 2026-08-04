@@ -1,11 +1,11 @@
 import FloatMsgs from '../../components/FloatMsgs'
 import Popups from '../../components/Popups'
 import XHR from '../../net/xhr'
-import { loadBootstrap } from '../bootstrap'
 import { markPerformanceEvent } from '../../lib/performance'
 import { commentsStore } from '../comments/comments-store'
 import { invalidateUserCommentCache } from '../comments/comments-api'
 import { authStore, type ProfileAction, type UserProfile } from './auth-store'
+import { clearProfileHint, saveProfileHint } from './profile-hint'
 
 interface InputActionContext {
   close(): void
@@ -13,7 +13,6 @@ interface InputActionContext {
 }
 
 let configured = false
-let initialProfileRequest = true
 
 function configureAuth(): void {
   if (configured) return
@@ -22,24 +21,24 @@ function configureAuth(): void {
     clearSession() {
       XHR.token = ''
       XHR.csrfToken = ''
+      clearProfileHint()
     },
     async loadProfile() {
       markPerformanceEvent('auth-request-start')
-      try {
-        const profile = initialProfileRequest
-          ? (await loadBootstrap()).profile
-          : await XHR.get<UserProfile | null>('user/me', undefined, {
-              silentStatuses: [401],
-            })
-        markPerformanceEvent('auth-response', {
-          authenticated: Boolean(profile),
-        })
-        return profile
-      } finally {
-        initialProfileRequest = false
-      }
+      const profile = await XHR.get<UserProfile | null>('user/me', undefined, {
+        silentStatuses: [401],
+      })
+      markPerformanceEvent('auth-response', {
+        authenticated: Boolean(profile),
+      })
+      return profile
     },
   })
+  XHR.unauthorizedHandler = () => {
+    invalidateUserCommentCache()
+    commentsStore.clearViewerLikes()
+    authStore.clear()
+  }
 }
 
 export function avatarPath(avatar = ''): string {
@@ -48,17 +47,21 @@ export function avatarPath(avatar = ''): string {
     : '/res/defaultAvatar.png'
 }
 
-export function initializeAuth(): Promise<UserProfile | null> {
+export async function initializeAuth(): Promise<UserProfile | null> {
   configureAuth()
-  return authStore.initialize()
+  const profile = await authStore.initialize()
+  if (profile) saveProfileHint(profile)
+  return profile
 }
 
 export async function refreshAuth(): Promise<UserProfile | null> {
   configureAuth()
-  initialProfileRequest = false
   invalidateUserCommentCache()
   const profile = await authStore.refresh()
-  void commentsStore.refresh().catch(() => undefined)
+  if (profile) {
+    saveProfileHint(profile)
+    void commentsStore.hydrateViewerLikes().catch(() => undefined)
+  } else commentsStore.clearViewerLikes()
   return profile
 }
 
@@ -125,6 +128,7 @@ function changeEmail(): void {
 function logout(allDevices: boolean): void {
   void XHR.post(allDevices ? 'user/resettoken' : 'user/logout').finally(() => {
     invalidateUserCommentCache()
+    commentsStore.clearViewerLikes()
     authStore.clear()
     Popups.close()
     void refreshAuth()

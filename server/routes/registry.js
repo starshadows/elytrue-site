@@ -64,7 +64,9 @@ export const API_ROUTES = Object.freeze([
         csrf: false,
     },
     { methods: ['GET'], match: exact('comments'), handler: 'comments', auth: 'optional', csrf: false },
+    { methods: ['GET'], match: exact('comments/public'), handler: 'publicComments', auth: 'public', csrf: false },
     { methods: ['GET'], match: exact('comments/count'), handler: 'commentCount', auth: 'public', csrf: false },
+    { methods: ['GET'], match: exact('comments/viewer-likes'), handler: 'viewerLikes', auth: 'session', csrf: false },
     { methods: ['POST'], match: exact('comments/post'), handler: 'postComment', auth: 'session', csrf: true },
     { methods: ['POST'], match: exact('comments/like'), handler: 'likeComment', auth: 'session', csrf: true },
     {

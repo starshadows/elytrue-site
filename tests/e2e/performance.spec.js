@@ -94,47 +94,89 @@ function commentPayload(id = 1) {
   }
 }
 
-async function fulfillBootstrap(
+async function fulfillComments(
   route,
-  { delay = 0, items = [commentPayload()] } = {},
+  { delay = 0, items = [commentPayload()], status = 200 } = {},
 ) {
   if (delay) await new Promise((resolve) => setTimeout(resolve, delay))
   await route.fulfill({
-    status: 200,
+    status,
     contentType: 'application/json',
     headers: {
       'Server-Timing':
-        'auth;dur=1, routing;dur=1, index;dur=2, commentBodies;dur=3, likes;dur=1, replyPreviews;dur=0, todayCount;dur=1, serialization;dur=1, total;dur=9',
+        'routing;dur=1, index;dur=2, commentBodies;dur=3, likes;dur=1, replyPreviews;dur=0, serialization;dur=1, total;dur=8',
     },
     body: JSON.stringify({
-      code: 1,
-      message: 'OK',
-      data: {
-        profile: null,
-        comments: { items, hasMore: false, todayCount: items.length },
-      },
+      code: status === 200 ? 1 : status,
+      message: status === 200 ? 'OK' : '暂时不可用',
+      data: status === 200 ? { items, hasMore: false } : null,
     }),
   })
 }
 
-test('首次加载:无 direction 请求、今日数量已合并、主留言区无旋转加载圈', async ({
-  page,
-}) => {
-  await registerAndStayLoggedIn(page, unique('性能旅人'))
-  for (let index = 0; index < 3; index += 1) {
-    await postViaApi(page, `性能回归留言 ${index} ${Date.now()}`, index)
-  }
+async function fulfillMe(
+  route,
+  { delay = 0, profile = null, status = 200 } = {},
+) {
+  if (delay) await new Promise((resolve) => setTimeout(resolve, delay))
+  await route.fulfill({
+    status,
+    contentType: 'application/json',
+    headers: {
+      'Server-Timing':
+        'routing;dur=1, session;dur=1, user;dur=1, adminMarker;dur=1, sessionRefresh;dur=0, serialization;dur=1, total;dur=5',
+    },
+    body: JSON.stringify({
+      code: status === 200 ? 1 : status,
+      message: status === 200 ? 'OK' : '请先登录',
+      data: status === 200 ? profile : null,
+    }),
+  })
+}
 
+function profilePayload(name = '缓存用户') {
+  return {
+    id: 'perf-user',
+    name,
+    avatar: '',
+    role: 'user',
+    csrfToken: 'test-csrf-token',
+  }
+}
+
+function installProfileHint(page, name = '缓存用户') {
+  return page.addInitScript((cachedName) => {
+    localStorage.setItem(
+      'elytrue.profileHint',
+      JSON.stringify({
+        version: 1,
+        userId: 'perf-user',
+        name: cachedName,
+        avatar: '',
+        savedAt: Date.now(),
+      }),
+    )
+  }, name)
+}
+
+test('首次加载:认证、公共留言和统计各自单飞且不误触分页', async ({ page }) => {
   let directionAfterRequests = 0
   let directionBeforeRequests = 0
   let countRequests = 0
   let mainListRequests = 0
+  let publicListRequests = 0
+  let meRequests = 0
+  let viewerLikeRequests = 0
   let bootstrapRequests = 0
   await page.route('**/api/bootstrap', async (route) => {
     bootstrapRequests += 1
     await route.continue()
   })
-  await page.route('**/api/comments*', async (route) => {
+  await page.route('**/api/user/me', async (route) => {
+    meRequests += 1
+    await fulfillMe(route, { profile: profilePayload() })
+  })
+  await page.route(/\/api\/comments(?:\/[^?]+)?(?:\?.*)?$/u, async (route) => {
     const request = route.request()
     const url = new URL(request.url())
     if (request.method() === 'GET' && url.pathname === '/api/comments') {
@@ -144,19 +186,44 @@ test('首次加载:无 direction 请求、今日数量已合并、主留言区�
       if (url.searchParams.get('direction') === 'before')
         directionBeforeRequests += 1
     }
+    if (url.pathname === '/api/comments/public') publicListRequests += 1
     if (url.pathname === '/api/comments/count') countRequests += 1
-    await route.continue()
+    if (url.pathname === '/api/comments/viewer-likes') viewerLikeRequests += 1
+    if (url.pathname === '/api/comments/public') {
+      await fulfillComments(route, { items: [commentPayload(3)] })
+      return
+    }
+    if (url.pathname === '/api/comments/count') {
+      await route.fulfill({
+        status: 200,
+        contentType: 'application/json',
+        body: JSON.stringify({ code: 1, message: 'OK', data: 3 }),
+      })
+      return
+    }
+    if (url.pathname === '/api/comments/viewer-likes') {
+      await route.fulfill({
+        status: 200,
+        contentType: 'application/json',
+        body: JSON.stringify({ code: 1, message: 'OK', data: [] }),
+      })
+      return
+    }
+    await fulfillComments(route, { items: [] })
   })
 
-  await page.reload()
+  await page.goto('/')
   await liftPanel(page)
-  await expect(page.locator('#comments .commentItem').first()).toBeVisible()
 
   expect(directionAfterRequests).toBe(0)
   expect(directionBeforeRequests).toBe(0)
-  expect(bootstrapRequests).toBe(1)
+  expect(publicListRequests).toBe(1)
   expect(mainListRequests).toBe(0)
-  expect(countRequests).toBe(0)
+  await expect.poll(() => countRequests).toBe(1)
+  await expect.poll(() => viewerLikeRequests).toBe(1)
+  expect(bootstrapRequests).toBe(0)
+  expect(meRequests).toBe(1)
+  await expect(page.locator('#comments .commentItem').first()).toBeVisible()
   await expect(page.locator('#comments .loadingCircle')).toHaveCount(0)
   await expect(page.locator('#comments .paginationSentinel')).toHaveCount(2)
 
@@ -199,7 +266,7 @@ test('滚动到最旧一端只请求一次历史,5 秒空闲后不循环分页',
   expect(beforeRequests).toBe(1)
 })
 
-test('置顶卡片与首条普通留言在 50ms 内开始同一入场动画', async ({ page }) => {
+test('置顶卡片立即稳定显示,首条普通留言独立播放入场动画', async ({ page }) => {
   await registerAndStayLoggedIn(page, unique('性能旅人'))
   await postViaApi(page, `动画配置 ${Date.now()}`)
   await page.reload()
@@ -216,137 +283,219 @@ test('置顶卡片与首条普通留言在 50ms 内开始同一入场动画', as
       pinned: getComputedStyle(pinned).animationName,
       first: first ? getComputedStyle(first).animationName : '',
       sentinels,
-      pinnedStart: performance.getEntriesByName('pinned-animation-start').at(-1)
-        ?.startTime,
       firstStart: performance
         .getEntriesByName('first-comment-animation-start')
         .at(-1)?.startTime,
     }
   })
-  expect(animationState.pinned).toBeTruthy()
-  expect(animationState.first).toBe(animationState.pinned)
+  expect(animationState.pinned).toBe('none')
+  expect(animationState.first).toBe('commentBoxAppear')
   expect(animationState.sentinels.every((name) => name === 'none')).toBe(true)
-  expect(animationState.pinnedStart).toBeTruthy()
   expect(animationState.firstStart).toBeTruthy()
-  expect(
-    Math.abs(animationState.pinnedStart - animationState.firstStart),
-  ).toBeLessThan(50)
 })
 
-test('200ms 首次请求不显示加载提示', async ({ page }) => {
-  await page.route('**/api/bootstrap', (route) =>
-    fulfillBootstrap(route, { delay: 200 }),
+test('1500ms 公共留言请求期间立即显示置顶卡和三个骨架', async ({ page }) => {
+  await page.route('**/api/user/me', (route) => fulfillMe(route))
+  await page.route('**/api/comments/public*', (route) =>
+    fulfillComments(route, { delay: 1500 }),
   )
-  await page.goto('/')
-  await expect(page.locator('#comments .commentItem')).toHaveCount(1)
-  await expect(page.locator('#commentsLoadingHint')).toHaveCount(0)
-  await expect(page.locator('#comments .loadingCircle')).toHaveCount(0)
-})
-
-test('800ms 首次请求只显示一个非阻塞提示', async ({ page }) => {
-  await page.route('**/api/bootstrap', (route) =>
-    fulfillBootstrap(route, { delay: 800 }),
-  )
-  await page.goto('/')
-  await page.waitForTimeout(500)
-  await expect(page.locator('#commentsLoadingHint')).toHaveCount(1)
+  await page.goto('/', { waitUntil: 'domcontentloaded' })
+  await expect(page.locator('#topComment')).toBeVisible({ timeout: 100 })
+  await expect(page.locator('#comments .commentSkeleton')).toHaveCount(3)
   await expect(page.locator('#comments .loadingCircle')).toHaveCount(0)
   await expect(page.locator('#comments .commentItem')).toHaveCount(1)
-  await expect(page.locator('#commentsLoadingHint')).toHaveCount(0)
+  await expect(page.locator('#comments .commentSkeleton')).toHaveCount(0)
 })
 
 test('首次请求失败仍显示置顶、错误状态和可用重试', async ({ page }) => {
-  await page.route('**/api/bootstrap', (route) =>
-    route.fulfill({
-      status: 500,
-      contentType: 'application/json',
-      body: JSON.stringify({ code: 500, message: '暂时不可用', data: null }),
-    }),
+  let requests = 0
+  await page.route('**/api/user/me', (route) =>
+    fulfillMe(route, { profile: profilePayload() }),
   )
-  await page.route('**/api/comments', (route) =>
+  await page.route('**/api/comments/viewer-likes*', (route) =>
     route.fulfill({
       status: 200,
       contentType: 'application/json',
       body: JSON.stringify({
         code: 1,
         message: 'OK',
-        data: {
-          items: [commentPayload(2)],
-          hasMore: false,
-          todayCount: 1,
-        },
+        data: [{ id: 2, liked: true }],
       }),
     }),
   )
+  await page.route('**/api/comments/public*', (route) => {
+    requests += 1
+    return fulfillComments(route, {
+      items: [commentPayload(2)],
+      status: requests === 1 ? 500 : 200,
+    })
+  })
   await page.goto('/')
   await expect(page.locator('#topComment')).toBeVisible()
   await expect(page.locator('.commentsLoadError')).toBeVisible()
   await liftPanel(page)
   await page.locator('.commentsLoadError button').click()
   await expect(page.locator('#comments .commentItem')).toHaveCount(1)
+  await expect(page.locator('#comments .btn.like')).toHaveClass(/liked/)
 })
 
-test('认证未决时重复点击只保留一个弹窗和一个 bootstrap 请求', async ({
+test('认证未决时重复点击只保留一个弹窗和一个 /user/me 请求', async ({
   page,
 }) => {
-  let bootstrapRequests = 0
-  await page.route('**/api/bootstrap', async (route) => {
-    bootstrapRequests += 1
-    await fulfillBootstrap(route, { delay: 800, items: [] })
+  let meRequests = 0
+  await page.route('**/api/user/me', async (route) => {
+    meRequests += 1
+    await fulfillMe(route, { delay: 800 })
   })
+  await page.route('**/api/comments/public*', (route) =>
+    fulfillComments(route, { items: [] }),
+  )
   await page.goto('/', { waitUntil: 'domcontentloaded' })
-  const started = Date.now()
+  const started = await page.evaluate(() => performance.now())
   await page.locator('#userInfo').dispatchEvent('click')
   await page.locator('#userInfo').dispatchEvent('click')
   await expect(page.locator('#popups .userHome')).toBeVisible({ timeout: 100 })
-  expect(Date.now() - started).toBeLessThan(100)
+  const openedAt = await page.evaluate(
+    () =>
+      performance.getEntriesByName('user-popup-shell-open').at(-1)?.startTime,
+  )
+  expect(openedAt).toBeTruthy()
+  expect(openedAt - started).toBeLessThan(100)
   await expect(page.locator('#popups .userHome')).toHaveCount(1)
   await page.waitForTimeout(900)
-  expect(bootstrapRequests).toBe(1)
+  expect(meRequests).toBe(1)
   await expect(page.locator('#popups .loginPopup')).toBeVisible()
 })
 
-test('注册刷新不复用注册前仍未完成的匿名 bootstrap', async ({ page }) => {
-  let releaseBootstrap = () => {}
-  const bootstrapGate = new Promise((resolve) => {
-    releaseBootstrap = resolve
+test('公共留言延迟 3000ms 不阻塞缓存用户名和认证确认', async ({ page }) => {
+  await installProfileHint(page, '独立认证用户')
+  await page.route('**/api/user/me', (route) =>
+    fulfillMe(route, { profile: profilePayload('独立认证用户') }),
+  )
+  await page.route('**/api/comments/public*', (route) =>
+    fulfillComments(route, { delay: 3000 }),
+  )
+  await page.goto('/', { waitUntil: 'domcontentloaded' })
+  await expect(page.locator('#userInfoName')).toHaveText('独立认证用户', {
+    timeout: 100,
   })
-  let meRequests = 0
-  await page.route('**/api/bootstrap', async (route) => {
-    await bootstrapGate
-    await fulfillBootstrap(route, { items: [] })
-  })
-  await page.route('**/api/user/me', async (route) => {
-    meRequests += 1
-    await route.continue()
-  })
+  await expect(page.locator('#userInfo')).not.toHaveClass(/nologin/)
+  await expect(page.locator('#comments .commentSkeleton')).toHaveCount(3)
+  await expect(page.locator('#comments .commentItem')).toHaveCount(1)
+})
 
-  const name = unique('并发注册旅人')
-  await page.goto('/#popup-loginPopup', { waitUntil: 'domcontentloaded' })
-  const popup = page.locator('#popups .loginPopup')
-  await expect(popup).toBeVisible()
-  await page.getByText(/第一次来/).click()
-  await popup.locator('input').nth(0).fill(name)
-  await popup
-    .locator('input')
-    .nth(1)
-    .fill(`bootstrap_race_${Date.now()}@example.com`)
-  await popup.locator('input').nth(2).fill(PASSWORD)
-  await popup.locator('input').nth(3).fill(PASSWORD)
-  await popup.locator('.okBtn').click()
+test('认证延迟 3000ms 不阻塞公共留言,期间显示用户名骨架而非访客', async ({
+  page,
+}) => {
+  await page.route('**/api/user/me', (route) =>
+    fulfillMe(route, { delay: 3000 }),
+  )
+  await page.route('**/api/comments/public*', (route) => fulfillComments(route))
+  await page.goto('/', { waitUntil: 'domcontentloaded' })
+  await expect(page.locator('#comments .commentItem')).toHaveCount(1, {
+    timeout: 500,
+  })
+  await expect(page.locator('#userInfo .userNameSkeleton')).toHaveCount(1)
+  await expect(page.locator('#userInfoName')).not.toContainText('访客')
+  await expect(page.locator('#userInfoName')).toHaveText(/访客/, {
+    timeout: 4000,
+  })
+})
 
-  const recoveryPopup = page.locator('#popups .recoveryKeyPopup')
-  await expect(recoveryPopup).toBeVisible()
-  await expect.poll(() => meRequests).toBe(1)
-  releaseBootstrap()
-  await recoveryPopup.locator('.recoveryConfirmation input').check()
-  await recoveryPopup.getByTestId('confirm-recovery-key').click()
-  await expect(page.locator('#userInfoName')).toHaveText(name)
+test('缓存用户名在 100ms 内显示,服务端确认未登录后才清除', async ({ page }) => {
+  await installProfileHint(page, '缓存命中用户')
+  await page.route('**/api/user/me', (route) =>
+    fulfillMe(route, { delay: 500 }),
+  )
+  await page.route('**/api/comments/public*', (route) => fulfillComments(route))
+  await page.goto('/', { waitUntil: 'domcontentloaded' })
+  await expect(page.locator('#userInfoName')).toHaveText('缓存命中用户', {
+    timeout: 100,
+  })
+  await expect(page.locator('#userInfoName')).toHaveText(/访客/)
+  expect(
+    await page.evaluate(() => localStorage.getItem('elytrue.profileHint')),
+  ).toBeNull()
+})
+
+test('认证请求失败会清除缓存用户名', async ({ page }) => {
+  await installProfileHint(page, '失效缓存用户')
+  await page.route('**/api/user/me', (route) =>
+    fulfillMe(route, { delay: 200, status: 503 }),
+  )
+  await page.route('**/api/comments/public*', (route) => fulfillComments(route))
+  await page.goto('/', { waitUntil: 'domcontentloaded' })
+  await expect(page.locator('#userInfoName')).toHaveText('失效缓存用户', {
+    timeout: 100,
+  })
+  await expect(page.locator('#userInfoName')).toHaveText(/访客/)
+  expect(
+    await page.evaluate(() => localStorage.getItem('elytrue.profileHint')),
+  ).toBeNull()
+})
+
+test('今日统计延迟 3000ms 不阻塞留言卡片', async ({ page }) => {
+  await page.route('**/api/user/me', (route) => fulfillMe(route))
+  await page.route('**/api/comments/public*', (route) => fulfillComments(route))
+  await page.route('**/api/comments/count', async (route) => {
+    await new Promise((resolve) => setTimeout(resolve, 3000))
+    await route.fulfill({
+      status: 200,
+      contentType: 'application/json',
+      body: JSON.stringify({ code: 1, message: 'OK', data: 7 }),
+    })
+  })
+  await page.goto('/', { waitUntil: 'domcontentloaded' })
+  await expect(page.locator('#comments .commentItem')).toHaveCount(1, {
+    timeout: 500,
+  })
+  await expect(page.locator('#todayCommentCount')).toHaveText('0')
+  await expect(page.locator('#todayCommentCount')).toHaveText('7', {
+    timeout: 4000,
+  })
+})
+
+test('延迟补充 viewer-like 只更新原卡片且不重播动画', async ({ page }) => {
+  await page.route('**/api/user/me', (route) =>
+    fulfillMe(route, { profile: profilePayload() }),
+  )
+  await page.route('**/api/comments/public*', (route) => fulfillComments(route))
+  await page.route('**/api/comments/viewer-likes*', async (route) => {
+    await new Promise((resolve) => setTimeout(resolve, 1000))
+    await route.fulfill({
+      status: 200,
+      contentType: 'application/json',
+      body: JSON.stringify({
+        code: 1,
+        message: 'OK',
+        data: [{ id: 1, liked: true }],
+      }),
+    })
+  })
+  await page.goto('/')
+  const card = page.locator('#comments .commentItem').first()
+  await expect(card).toBeVisible()
+  await page.waitForTimeout(700)
+  const cardHandle = await card.elementHandle()
+  expect(await card.evaluate((element) => element.getAnimations().length)).toBe(
+    0,
+  )
+  await expect(card.locator('.btn.like')).toHaveClass(/liked/)
+  expect(
+    await card.evaluate(
+      (element, original) => element === original,
+      cardHandle,
+    ),
+  ).toBe(true)
+  expect(await card.evaluate((element) => element.getAnimations().length)).toBe(
+    0,
+  )
 })
 
 test('reduced-motion 不强制执行留言入场动画', async ({ page }) => {
   await page.emulateMedia({ reducedMotion: 'reduce' })
-  await page.route('**/api/bootstrap', (route) => fulfillBootstrap(route))
+  await page.route('**/api/user/me', (route) => fulfillMe(route))
+  await page.route('**/api/comments/public*', (route) => fulfillComments(route))
   await page.goto('/')
   await expect(page.locator('#comments .commentItem')).toHaveCount(1)
   const state = await page.evaluate(() => ({
@@ -355,9 +504,8 @@ test('reduced-motion 不强制执行留言入场动画', async ({ page }) => {
     firstAnimations: document
       .querySelector('#comments .commentItem')
       ?.getAnimations().length,
-    forcedMarks:
-      performance.getEntriesByName('pinned-animation-start').length +
-      performance.getEntriesByName('first-comment-animation-start').length,
+    forcedMarks: performance.getEntriesByName('first-comment-animation-start')
+      .length,
   }))
   expect(state.pinnedAnimations).toBe(0)
   expect(state.firstAnimations).toBe(0)

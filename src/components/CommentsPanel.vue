@@ -18,6 +18,7 @@ import { commentsStore } from '../features/comments/comments-store'
 import Settings from '../settings'
 import { getConfig } from '../settings/config'
 import type { CommentRecord } from '../features/comments/comment-types'
+import { useAuth } from '../features/auth/useAuth'
 import {
   finishPerformanceMark,
   markPerformanceEvent,
@@ -25,6 +26,7 @@ import {
 } from '../lib/performance'
 
 const emit = defineEmits<{ fullscreen: []; install: [] }>()
+const auth = useAuth()
 const container = useTemplateRef<HTMLDivElement>('container')
 const panel = useTemplateRef<HTMLDivElement>('panel')
 const newestSentinel = useTemplateRef<HTMLDivElement>('newestSentinel')
@@ -34,13 +36,10 @@ const replyNumber = ref<number>()
 type PanelMode = 'auto' | 'forced-up' | 'forced-down'
 const panelMode = ref<PanelMode>('auto')
 const pinnedHidden = computed(() => Settings.pinnedHidden)
-const showInitialLoadingHint = ref(false)
 const initialRequestSettled = ref(false)
-const initialVisualReady = ref(false)
 const initialAnimationStarted = ref(false)
-let pinnedAnimationRecorded = false
 let firstCommentAnimationRecorded = false
-let initialLoadingHintTimer: number | undefined
+let initialPerformanceFinished = false
 let scrollPaused = false
 let pauseTimer: number | undefined
 let paginationObserver: IntersectionObserver | undefined
@@ -185,6 +184,7 @@ async function loadOlder(): Promise<void> {
 
 function checkNewest(): void {
   if (
+    commentsStore.state.initialError ||
     commentsStore.state.jumping ||
     commentsStore.state.loadingInitial ||
     commentsStore.state.loadingNewer ||
@@ -196,6 +196,7 @@ function checkNewest(): void {
 
 function checkOldest(): void {
   if (
+    commentsStore.state.initialError ||
     commentsStore.state.jumping ||
     commentsStore.state.loadingInitial ||
     commentsStore.state.loadingOlder ||
@@ -292,24 +293,20 @@ watch(
   { flush: 'post' },
 )
 
-function delayInitialLoadingHint(loading: boolean): void {
-  if (initialLoadingHintTimer !== undefined)
-    window.clearTimeout(initialLoadingHintTimer)
-  if (!loading) {
-    initialLoadingHintTimer = undefined
-    showInitialLoadingHint.value = false
-    return
-  }
-  initialLoadingHintTimer = window.setTimeout(() => {
-    showInitialLoadingHint.value = true
-    initialLoadingHintTimer = undefined
-  }, 400)
-}
-
 watch(
   () => commentsStore.state.loadingInitial,
-  (loading) => delayInitialLoadingHint(loading),
-  { immediate: true },
+  async (loading, previousLoading) => {
+    if (!previousLoading || loading || initialPerformanceFinished) return
+    initialPerformanceFinished = true
+    initialRequestSettled.value = true
+    await nextTick()
+    updateVisibleTime()
+    markPerformanceEvent('initial-comment-dom-ready', {
+      count: commentsStore.state.items.length,
+    })
+    finishPerformanceMark('comments-initial')
+  },
+  { flush: 'post' },
 )
 
 function handleWheel(event: WheelEvent): void {
@@ -342,28 +339,23 @@ function handleSent(comment: CommentRecord): void {
 }
 
 function retryInitialLoad(): void {
-  void commentsStore.initialize().catch(() => undefined)
+  void commentsStore
+    .initialize()
+    .then(() => {
+      if (auth.loggedIn.value) return commentsStore.hydrateViewerLikes()
+    })
+    .catch(() => undefined)
 }
 
-function handleInitialAnimationStart(
-  kind: 'pinned' | 'comment',
-  event: AnimationEvent,
-): void {
+function handleInitialAnimationStart(event: AnimationEvent): void {
   if (
-    !initialVisualReady.value ||
     event.target !== event.currentTarget ||
     event.animationName !== 'commentBoxAppear'
   )
     return
-  if (kind === 'pinned') {
-    if (pinnedAnimationRecorded) return
-    pinnedAnimationRecorded = true
-    markPerformanceEvent('pinned-animation-start')
-  } else {
-    if (firstCommentAnimationRecorded) return
-    firstCommentAnimationRecorded = true
-    markPerformanceEvent('first-comment-animation-start')
-  }
+  if (firstCommentAnimationRecorded) return
+  firstCommentAnimationRecorded = true
+  markPerformanceEvent('first-comment-animation-start')
   initialAnimationStarted.value = true
 }
 
@@ -390,19 +382,6 @@ function onOpenEditor(): void {
 
 onMounted(() => {
   startPerformanceMark('comments-initial')
-  void commentsStore
-    .initialize()
-    .then(() => nextTick(updateVisibleTime))
-    .catch(() => undefined)
-    .finally(async () => {
-      initialRequestSettled.value = true
-      initialVisualReady.value = true
-      await nextTick()
-      markPerformanceEvent('initial-comment-dom-ready', {
-        count: commentsStore.state.items.length,
-      })
-      finishPerformanceMark('comments-initial')
-    })
   container.value?.addEventListener('scroll', handleScroll)
   container.value?.addEventListener('wheel', handleWheel)
   document.addEventListener('elytrue:seek-comment', onSeek)
@@ -427,8 +406,6 @@ onBeforeUnmount(() => {
   document.removeEventListener('elytrue:open-comment-editor', onOpenEditor)
   document.removeEventListener('pointermove', handleDocumentPointerMove)
   if (pauseTimer !== undefined) window.clearTimeout(pauseTimer)
-  if (initialLoadingHintTimer !== undefined)
-    window.clearTimeout(initialLoadingHintTimer)
   disposePaginationObserver()
   bodyObserver?.disconnect()
   bodyObserver = undefined
@@ -456,9 +433,6 @@ defineExpose({ forceLowerPanelDown, forceLowerPanelUp, pauseScroll })
       <span class="ui zh">今日留言: </span
       ><span class="ui en">Messages today: </span
       ><span id="todayCommentCount">{{ commentsStore.state.todayCount }}</span>
-      <span v-if="showInitialLoadingHint" id="commentsLoadingHint" class="ui zh"
-        >正在加载留言…</span
-      >
     </div>
     <div id="comments" ref="container" class="noscrollbar">
       <div
@@ -468,12 +442,11 @@ defineExpose({ forceLowerPanelDown, forceLowerPanelUp, pauseScroll })
         aria-hidden="true"
       ></div>
       <div
-        v-if="initialVisualReady && !pinnedHidden"
+        v-if="!pinnedHidden"
         id="topComment"
-        class="commentBox commentVisualCard"
+        class="commentBox"
         :data-initial-request-settled="initialRequestSettled"
         :data-initial-animation-started="initialAnimationStarted"
-        @animationstart="handleInitialAnimationStart('pinned', $event)"
       >
         <img class="bg" src="/assets/elytrue-20260724/bg/portrait1.webp" />
         <div class="bgcover"></div>
@@ -533,19 +506,31 @@ defineExpose({ forceLowerPanelDown, forceLowerPanelUp, pauseScroll })
         @focus="forceLowerPanelUp"
         @sent="handleSent"
       />
-      <template v-if="initialVisualReady">
-        <CommentCard
-          v-for="(record, index) in commentsStore.state.items"
-          :key="record.id"
-          :record="record"
-          :eager="index < 4"
-          @animationstart="
-            index === 0 && handleInitialAnimationStart('comment', $event)
-          "
-          @lift="forceLowerPanelUp"
-          @reply="openEditor"
-        />
-      </template>
+      <div
+        v-for="index in 3"
+        v-if="
+          commentsStore.state.loadingInitial &&
+          !commentsStore.state.items.length &&
+          !commentsStore.state.initialError
+        "
+        :key="`comment-skeleton-${index}`"
+        class="commentBox commentSkeleton"
+        aria-hidden="true"
+      >
+        <i class="commentSkeletonAvatar"></i>
+        <i class="commentSkeletonName"></i>
+        <i class="commentSkeletonLine"></i>
+        <i class="commentSkeletonLine short"></i>
+      </div>
+      <CommentCard
+        v-for="(record, index) in commentsStore.state.items"
+        :key="record.id"
+        :record="record"
+        :eager="index < 4"
+        @animationstart="index === 0 && handleInitialAnimationStart($event)"
+        @lift="forceLowerPanelUp"
+        @reply="openEditor"
+      />
       <div
         v-if="
           commentsStore.state.initialError && !commentsStore.state.items.length

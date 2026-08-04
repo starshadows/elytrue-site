@@ -12,6 +12,7 @@ import {
 import {
     createComment,
     countComments,
+    getViewerLikeStates,
     listComments,
     setLike,
 } from './comments.js'
@@ -33,7 +34,11 @@ import {
 import { API_ROUTES, matchApiRoute, validateApiRouteRegistry } from './routes/registry.js'
 import { enforceRoutePolicy } from './routes/policy.js'
 import { apiRoutePath } from './lib/routing.js'
-import { attachServerTiming, createServerTiming } from './lib/server-timing.js'
+import {
+    attachServerTiming,
+    createServerTiming,
+    USER_ME_TIMING_CATEGORIES,
+} from './lib/server-timing.js'
 import { createReport } from './services/report-service.js'
 
 let imageServicePromise = null
@@ -277,7 +282,7 @@ async function postComment(context, stores, path, auth) {
     return apiResponse(comment, { status: 201, message: '留言已发布' })
 }
 
-async function getComments(context, stores, path, auth) {
+async function getComments(context, stores, path, auth, publicRead = false) {
     const url = new URL(context.request.url)
     const params = url.searchParams
     const isInitialPage = params.get('uid') === null
@@ -285,19 +290,10 @@ async function getComments(context, stores, path, auth) {
         && params.get('number') === null
         && params.get('time') === null
         && params.get('from') === null
-    const todayCountRequest = isInitialPage
-        ? context.commentTiming.measure('todayCount', () => countComments(stores.data, params))
-        : null
-    const commentsRequest = listComments(stores.data, params, auth?.user, {
+    const result = await listComments(stores.data, params, auth?.user, {
         timing: context.commentTiming,
+        publicRead,
     })
-    let result
-    let todayCount
-    if (todayCountRequest) {
-        [result, todayCount] = await Promise.all([commentsRequest, todayCountRequest])
-    } else {
-        result = await commentsRequest
-    }
     // 用户列表:{ items, hasMore, nextCursor };主列表:数组(scanCap 截断时返回 { items, hasMore })
     if (Array.isArray(result)) {
         return timedApiResponse(context, result, { cookies: auth?.refreshCookies || [] })
@@ -305,14 +301,11 @@ async function getComments(context, stores, path, auth) {
     if (params.get('uid')) {
         return timedApiResponse(context, result, { cookies: auth?.refreshCookies || [] })
     }
-    // 首次主页列表合并今日留言数量,避免额外的 /comments/count 请求;
-    // 跳转(number/time/from)与分页(cursor)请求保持原有形态。
     if (isInitialPage) {
         return timedApiResponse(context, {
             items: result.items,
             hasMore: result.hasMore,
             ...(result.nextCursor ? { nextCursor: result.nextCursor } : {}),
-            todayCount,
         }, { cookies: auth?.refreshCookies || [] })
     }
     if (result.hasMore) {
@@ -323,6 +316,14 @@ async function getComments(context, stores, path, auth) {
         }, { cookies: auth?.refreshCookies || [] })
     }
     return timedApiResponse(context, result.items, { cookies: auth?.refreshCookies || [] })
+}
+
+async function getPublicComments(context, stores) {
+    const params = new URL(context.request.url).searchParams
+    if ([...params.keys()].some(key => key !== 'count')) {
+        throw httpError(400, '公共首屏留言参数无效')
+    }
+    return getComments(context, stores, 'comments/public', null, true)
 }
 
 async function bootstrap(context, stores, path, auth) {
@@ -377,9 +378,27 @@ async function commentsCount(context, stores) {
     const url = new URL(context.request.url)
     const count = await context.commentTiming.measure(
         'todayCount',
-        () => countComments(stores.data, url.searchParams),
+        () => countComments(stores.data, url.searchParams, { publicRead: true }),
     )
     return timedApiResponse(context, count)
+}
+
+async function viewerLikes(context, stores, path, auth) {
+    const rawIds = new URL(context.request.url).searchParams.get('ids') || ''
+    const ids = [...new Set(rawIds.split(',').filter(Boolean).map(Number))]
+    if (
+        ids.length > 20
+        || ids.some(id => !Number.isSafeInteger(id) || id <= 0)
+    ) {
+        throw httpError(400, '留言 ID 参数无效')
+    }
+    const states = await getViewerLikeStates(
+        stores.data,
+        ids,
+        auth.user,
+        context.commentTiming,
+    )
+    return timedApiResponse(context, states, { cookies: auth.refreshCookies })
 }
 
 async function likeComment(context, stores, path, auth, liked) {
@@ -466,7 +485,9 @@ export const API_ROUTE_HANDLERS = Object.freeze({
             path.slice('data/images/posts/'.length).replace(/\.[a-z0-9]+$/iu, ''),
         ),
     comments: getComments,
+    publicComments: getPublicComments,
     commentCount: commentsCount,
+    viewerLikes,
     postComment,
     likeComment: (context, stores, path, auth) => likeComment(context, stores, path, auth, true),
     unlikeComment: (context, stores, path, auth) => likeComment(context, stores, path, auth, false),
@@ -493,9 +514,11 @@ export async function handleApiRequest(context, injectedStores) {
             || path === 'comments'
             || path.startsWith('comments/')
         if (shouldMeasure) {
-            timing = createServerTiming()
+            timing = createServerTiming(
+                path === 'user/me' ? USER_ME_TIMING_CATEGORIES : undefined,
+            )
             context.requestTiming = timing
-            context.commentTiming = timing
+            if (path !== 'user/me') context.commentTiming = timing
         }
         const route = timing
             ? await timing.measure('routing', () => Promise.resolve(matchApiRoute(method, path)))
@@ -503,7 +526,7 @@ export async function handleApiRequest(context, injectedStores) {
         if (!route) return errorResponse(404, '接口不存在')
         const handler = API_ROUTE_HANDLERS[route.handler]
         if (!handler) throw new Error(`API route handler is not registered: ${route.handler}`)
-        const auth = timing
+        const auth = timing && path !== 'user/me'
             ? await timing.measure('auth', () => enforceRoutePolicy({ context, stores, route }))
             : await enforceRoutePolicy({ context, stores, route })
         const response = await handler(context, stores, path, auth)

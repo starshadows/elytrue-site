@@ -39,6 +39,7 @@ class ReadTrackingStore extends MemoryStore {
         super()
         this.enabled = false
         this.getKeys = []
+        this.getOptions = []
         this.active = 0
         this.maxActive = 0
         this.listOptions = []
@@ -47,6 +48,7 @@ class ReadTrackingStore extends MemoryStore {
     async get(key, options = {}) {
         if (!this.enabled) return super.get(key, options)
         this.getKeys.push(key)
+        this.getOptions.push({ key, options })
         this.active += 1
         this.maxActive = Math.max(this.maxActive, this.active)
         try {
@@ -943,6 +945,106 @@ describe('bounded main comment reads', () => {
         assert.equal(data.listOptions.length, 1)
         assert.equal(data.getKeys.length + data.listOptions.length, 38)
         assert.ok(data.maxActive <= 8)
+    })
+
+    it('loads ten public comments without session reads or date listings', async () => {
+        const data = new ReadTrackingStore()
+        const state = createState('10.0.7.11')
+        state.stores.data = data
+        state.jar.set('elytrue_session', 'ignored-public-session')
+        const base = 1755000000000000
+        for (let number = 1; number <= 12; number += 1) {
+            const id = base + number
+            await data.setJSON(`indexes/comments/number/${number}.json`, { commentId: id })
+            await data.setJSON(`comments/${String(id).padStart(16, '0')}.json`, {
+                id,
+                number,
+                uid: user.id,
+                sender: user.name,
+                avatar: '',
+                comment: `public-${number}`,
+                image: '',
+                replyid: null,
+                hidden: false,
+                likeCount: 0,
+                likeCountVersion: 1,
+                createdAt: number,
+                time: number,
+            })
+        }
+        await data.setJSON('meta/comments-number-hint.json', { value: 12 })
+        data.enabled = true
+
+        const result = await call(state, 'GET', 'comments/public?count=10')
+
+        assert.equal(result.response.status, 200)
+        assert.equal(result.payload.data.items.length, 10)
+        assert.equal(data.getKeys.length, 31)
+        assert.equal(data.listOptions.length, 0)
+        assert.equal(data.getKeys.some(key => key.startsWith('sessions/')), false)
+        assert.equal(data.getKeys.some(key => key.startsWith('users/')), false)
+        const eventual = data.getOptions.filter(
+            ({ options }) => options.consistency === 'eventual',
+        )
+        const strong = data.getOptions.filter(
+            ({ options }) => options.consistency === 'strong',
+        )
+        assert.equal(eventual.length, 21)
+        assert.equal(strong.length, 10)
+        assert.equal(
+            strong.every(({ key }) => key.startsWith('comments/')),
+            true,
+        )
+    })
+
+    it('keeps user/me to session, user and admin marker reads', async () => {
+        const adminState = createState('10.0.7.12')
+        await register(adminState, '首位用户', 'first-user@example.com')
+        const state = createState('10.0.7.13')
+        state.stores = adminState.stores
+        await register(state, '普通用户', 'regular-user@example.com')
+
+        const data = new ReadTrackingStore()
+        for (const [key, value] of state.stores.data.values) {
+            data.values.set(key, structuredClone(value))
+        }
+        state.stores = { ...state.stores, data }
+        data.enabled = true
+
+        const result = await call(state, 'GET', 'user/me')
+
+        assert.equal(result.response.status, 200)
+        assert.equal(result.payload.data.name, '普通用户')
+        assert.equal(data.getKeys.length, 3)
+        assert.equal(data.listOptions.length, 0)
+        assert.equal(
+            data.getKeys.some(
+                key => key.startsWith('comments/') || key.startsWith('dates/'),
+            ),
+            false,
+        )
+        assert.equal(
+            data.getKeys.some(key => key.startsWith('indexes/comments/')),
+            false,
+        )
+        assert.equal(
+            data.getOptions.every(
+                ({ options }) => options.consistency === 'strong',
+            ),
+            true,
+        )
+        const timing = result.response.headers.get('server-timing') || ''
+        for (const category of [
+            'routing',
+            'session',
+            'user',
+            'adminMarker',
+            'sessionRefresh',
+            'serialization',
+            'total',
+        ]) {
+            assert.match(timing, new RegExp(`${category};dur=\\d`))
+        }
     })
 
     it('returns an authenticated CSRF token at the bootstrap data root', async () => {

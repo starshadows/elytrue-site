@@ -1,6 +1,5 @@
 import type { ApiEnvelope } from '../../lib/api-client'
 import XHR from '../../net/xhr'
-import { loadBootstrap } from '../bootstrap'
 import { markPerformanceEvent } from '../../lib/performance'
 import {
   parseCommentPage,
@@ -31,10 +30,16 @@ export interface LikeResult {
   likes: number
 }
 
+export interface ViewerLikeState {
+  id: number
+  liked: boolean
+}
+
 export interface CommentsApi {
   create(payload: CreateCommentPayload): Promise<CommentRecord>
   deleteUpload(imageId: string): Promise<void>
   getCount(): Promise<number>
+  getViewerLikes(ids: number[]): Promise<ViewerLikeState[]>
   like(commentId: number, liked: boolean): Promise<LikeResult | void>
   list(query?: CommentQuery): Promise<CommentPage>
   listUser(uid: string, cursor?: number | string): Promise<UserCommentPage>
@@ -101,24 +106,20 @@ function parseImageId(response: ApiEnvelope<unknown>): string {
 
 export const commentsApi: CommentsApi = {
   async list(query = {}) {
-    const useBootstrap = initialListRequest && Object.keys(query).length === 0
-    if (useBootstrap) initialListRequest = false
-    markPerformanceEvent('comments-request-start', { bootstrap: useBootstrap })
-    let page: CommentPage
-    if (useBootstrap) {
-      const bootstrap = await loadBootstrap()
-      if (bootstrap.commentsError) {
-        const error = new Error('首屏留言加载失败')
-        if (bootstrap.todayCount !== undefined)
-          Object.assign(error, { todayCount: bootstrap.todayCount })
-        throw error
-      }
-      page = parseCommentPage(bootstrap.comments)
-    } else {
-      page = parseCommentPage(await XHR.get<unknown>('comments', query))
-    }
+    const usePublicInitial =
+      initialListRequest &&
+      query.count === 10 &&
+      Object.keys(query).length === 1
+    markPerformanceEvent('comments-request-start', { public: usePublicInitial })
+    const page = parseCommentPage(
+      await XHR.get<unknown>(
+        usePublicInitial ? 'comments/public' : 'comments',
+        query,
+      ),
+    )
+    if (usePublicInitial) initialListRequest = false
     markPerformanceEvent('comments-response', {
-      bootstrap: useBootstrap,
+      public: usePublicInitial,
       count: page.items.length,
     })
     return page
@@ -126,6 +127,27 @@ export const commentsApi: CommentsApi = {
   async getCount() {
     const count = Number(await XHR.get<unknown>('comments/count'))
     return Number.isFinite(count) ? count : 0
+  },
+  async getViewerLikes(ids) {
+    if (!ids.length) return []
+    const result = await XHR.get<unknown>('comments/viewer-likes', {
+      ids: ids.join(','),
+    })
+    if (!Array.isArray(result)) return []
+    return result.flatMap((item) => {
+      if (
+        typeof item !== 'object' ||
+        item === null ||
+        !Number.isSafeInteger(Number(Reflect.get(item, 'id')))
+      )
+        return []
+      return [
+        {
+          id: Number(Reflect.get(item, 'id')),
+          liked: Reflect.get(item, 'liked') === true,
+        },
+      ]
+    })
   },
   async listUser(uid, cursor) {
     return parseUserCommentPage(

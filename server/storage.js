@@ -75,11 +75,23 @@ export function createStores(injected) {
     return edgeStores
 }
 
-export async function getJSON(store, key) {
+export async function getJSONStrong(store, key) {
     return store.get(key, { type: 'json', consistency: 'strong' })
 }
 
-export async function listAll(store, prefix, limit = 1000) {
+export async function getJSONPublic(store, key) {
+    return store.get(key, { type: 'json', consistency: 'eventual' })
+}
+
+export async function listStrong(store, options) {
+    return store.list({ ...options, consistency: 'strong' })
+}
+
+export async function listPublic(store, options) {
+    return store.list({ ...options, consistency: 'eventual' })
+}
+
+export async function listAllStrong(store, prefix, limit = 1000) {
     const result = await store.list({
         prefix,
         limit,
@@ -87,6 +99,19 @@ export async function listAll(store, prefix, limit = 1000) {
     })
     return result.blobs
 }
+
+export async function listAllPublic(store, prefix, limit = 1000) {
+    const result = await store.list({
+        prefix,
+        limit,
+        consistency: 'eventual',
+    })
+    return result.blobs
+}
+
+// Existing mutation and authentication code remains strong by default.
+export const getJSON = getJSONStrong
+export const listAll = listAllStrong
 
 export function isPreconditionFailure(error) {
     return error?.name === 'PreconditionFailedError'

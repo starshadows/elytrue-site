@@ -8,10 +8,19 @@ import {
 } from '../features/auth/auth-actions'
 import { useAuth, type ProfileAction } from '../features/auth/useAuth'
 import { markPerformanceEvent } from '../lib/performance'
+import { profileHint } from '../features/auth/profile-hint'
 
 const auth = useAuth()
-const avatar = computed(() => avatarPath(auth.profile.value?.avatar))
-const name = computed(() => auth.profile.value?.name ?? '')
+const displayProfile = computed(
+  () =>
+    auth.profile.value ??
+    (auth.loginState.value === 'loading' ? profileHint.value : null),
+)
+const avatar = computed(() => avatarPath(displayProfile.value?.avatar))
+const name = computed(() => displayProfile.value?.name ?? '')
+const showNameSkeleton = computed(
+  () => auth.loginState.value === 'loading' && !displayProfile.value,
+)
 const homeUrl = `${window.location.origin}${window.location.pathname}`
 
 async function openUser(): Promise<void> {
@@ -77,7 +86,12 @@ function action(value: ProfileAction): void {
     >
       <img id="userInfoAvatar" :src="avatar" alt="" />
       <span id="userInfoName">
-        <template v-if="name">{{ name }}</template>
+        <span
+          v-if="showNameSkeleton"
+          class="userNameSkeleton"
+          aria-label="正在确认登录状态"
+        ></span>
+        <template v-else-if="name">{{ name }}</template>
         <template v-else>
           <span class="ui zh">访客</span><span class="ui en">Anonymous</span>
         </template>

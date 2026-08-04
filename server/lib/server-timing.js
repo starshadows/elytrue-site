@@ -1,4 +1,4 @@
-const CATEGORIES = [
+const COMMENT_CATEGORIES = [
     'auth',
     'routing',
     'index',
@@ -9,9 +9,18 @@ const CATEGORIES = [
     'serialization',
 ]
 
-export function createServerTiming() {
+export const USER_ME_TIMING_CATEGORIES = [
+    'routing',
+    'session',
+    'user',
+    'adminMarker',
+    'sessionRefresh',
+    'serialization',
+]
+
+export function createServerTiming(categories = COMMENT_CATEGORIES) {
     const startedAt = performance.now()
-    const durations = Object.fromEntries(CATEGORIES.map(category => [category, 0]))
+    const durations = Object.fromEntries(categories.map(category => [category, 0]))
     return {
         measureSync(category, operation) {
             const start = performance.now()
@@ -34,7 +43,7 @@ export function createServerTiming() {
             }
         },
         header() {
-            const values = CATEGORIES.map(category =>
+            const values = categories.map(category =>
                 `${category};dur=${(durations[category] ?? 0).toFixed(1)}`)
             values.push(`total;dur=${(performance.now() - startedAt).toFixed(1)}`)
             return values.join(', ')

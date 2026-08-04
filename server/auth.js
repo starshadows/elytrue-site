@@ -57,7 +57,7 @@ async function claimUniqueIndex(data, key, userId, conflictMessage) {
     if (claimed?.userId !== userId) throw httpError(409, conflictMessage)
 }
 
-async function applyAdminMarker(data, user) {
+async function applyAdminMarker(data, user, timing = null) {
     if (!user) return user
     if (user.role === 'admin') {
         adminUserIds.set(data, user.id)
@@ -67,7 +67,10 @@ async function applyAdminMarker(data, user) {
     if (cachedAdminId) {
         return cachedAdminId === user.id ? { ...user, role: 'admin' } : user
     }
-    const marker = await getJSON(data, blobKeys.adminBootstrapClosed)
+    const marker = timing
+        ? await timing.measure('adminMarker', () =>
+            getJSON(data, blobKeys.adminBootstrapClosed))
+        : await getJSON(data, blobKeys.adminBootstrapClosed)
     if (marker?.userId) adminUserIds.set(data, marker.userId)
     return marker?.userId === user.id ? { ...user, role: 'admin' } : user
 }
@@ -84,9 +87,17 @@ export async function findUserByIdentifier(data, env, identifier) {
     return applyAdminMarker(data, await getJSON(data, blobKeys.user(index.userId)))
 }
 
-export async function findUserById(data, userId) {
+export async function findUserById(data, userId, options = {}) {
     if (!/^[a-f0-9-]{36}$/iu.test(String(userId || ''))) return null
-    return applyAdminMarker(data, await getJSON(data, blobKeys.user(userId)))
+    const user = options.timing
+        ? await options.timing.measure('user', () =>
+            getJSON(data, blobKeys.user(userId)))
+        : await getJSON(data, blobKeys.user(userId))
+    return applyAdminMarker(
+        data,
+        user,
+        options.timing,
+    )
 }
 
 async function cleanupUserMutationClaim(data, userId, version, reservationId) {
@@ -288,17 +299,24 @@ export async function createSession(data, user, request, env = {}) {
     }
 }
 
-export async function getSession(data, request, { slide = true, env = {} } = {}) {
+export async function getSession(
+    data,
+    request,
+    { slide = true, env = {}, timing = null } = {},
+) {
     const cookies = parseCookies(request)
     const token = cookies.elytrue_session
     if (!token) return null
     const tokenHash = sha256(token)
-    const session = await getJSON(data, blobKeys.session(tokenHash))
+    const session = timing
+        ? await timing.measure('session', () =>
+            getJSON(data, blobKeys.session(tokenHash)))
+        : await getJSON(data, blobKeys.session(tokenHash))
     if (!session || session.expiresAt <= Date.now()) {
         if (session) await data.delete(blobKeys.session(tokenHash)).catch(() => {})
         return null
     }
-    const user = await findUserById(data, session.userId)
+    const user = await findUserById(data, session.userId, { timing })
     if (!user || user.sessionVersion !== session.version) {
         await data.delete(blobKeys.session(tokenHash)).catch(() => {})
         return null
@@ -324,7 +342,14 @@ export async function getSession(data, request, { slide = true, env = {} } = {})
             cookie('elytrue_session', token, { maxAge: SESSION_SECONDS, secure }),
         ]
     }
-    if (shouldPersist) await data.setJSON(blobKeys.session(tokenHash), session)
+    if (shouldPersist) {
+        if (timing) {
+            await timing.measure('sessionRefresh', () =>
+                data.setJSON(blobKeys.session(tokenHash), session))
+        } else {
+            await data.setJSON(blobKeys.session(tokenHash), session)
+        }
+    }
     return { session, user, tokenHash, cookies, refreshCookies }
 }
 

@@ -1,6 +1,12 @@
 import { randomUUID } from 'node:crypto'
 import { httpError } from './http.js'
-import { getJSON, listAll, isPreconditionFailure } from './storage.js'
+import {
+    getJSON,
+    getJSONPublic,
+    listAll,
+    listAllPublic,
+    isPreconditionFailure,
+} from './storage.js'
 import { blobKeys, blobPrefixes } from './domain/blob-keys.js'
 import { createReportRepository } from './repositories/report-repository.js'
 import { preserveCommentNumberBeforeDelete } from './services/report-service.js'
@@ -359,9 +365,10 @@ export async function countLikeRecords(data, commentId) {
  *  3. 都没有 → 显示 0 并写 repair marker,由维护脚本精确重建,
  *     第一个访问该留言的用户不承担历史数据迁移成本。
  */
-async function getCachedLikeCount(data, comment, timing) {
+async function getCachedLikeCount(data, comment, timing, publicRead = false) {
     const cacheKey = blobKeys.commentLikeCountCache(comment.id)
-    const cached = await measure(timing, 'likes', () => getJSON(data, cacheKey))
+    const readJSON = publicRead ? getJSONPublic : getJSON
+    const cached = await measure(timing, 'likes', () => readJSON(data, cacheKey))
     if (Number.isSafeInteger(cached?.count) && cached.count >= 0) return cached.count
     if (comment.likeCountVersion === 1) {
         return Math.max(0, Number(comment.likeCount) || 0)
@@ -380,9 +387,16 @@ async function getCachedLikeCount(data, comment, timing) {
  * @param {Map<number, ReplyPreview> | null} [replyPreviews]
  * @param {import('./types.js').ServerTiming | null} [timing]
  */
-export async function getCommentDetail(data, comment, viewer, replyPreviews = null, timing = null) {
+export async function getCommentDetail(
+    data,
+    comment,
+    viewer,
+    replyPreviews = null,
+    timing = null,
+    publicRead = false,
+) {
     const [likes, likedRecord] = await Promise.all([
-        getCachedLikeCount(data, comment, timing),
+        getCachedLikeCount(data, comment, timing, publicRead),
         viewer ? measure(timing, 'likes', () =>
             getJSON(data, blobKeys.commentLike(comment.id, viewer.id))) : null,
     ])
@@ -398,16 +412,27 @@ export async function getCommentDetail(data, comment, viewer, replyPreviews = nu
     }
 }
 
-async function listAllCommentKeys(data) {
-    const blobs = await listAll(data, blobPrefixes.comments, Infinity)
+async function listAllCommentKeys(data, publicRead = false) {
+    const blobs = await (publicRead ? listAllPublic : listAll)(
+        data,
+        blobPrefixes.comments,
+        Infinity,
+    )
     return blobs.map(blob => blob.key)
 }
 
 /** @param {{lowerId?: number, upperId?: number, startNumber?: number | null, timing?: import('./types.js').ServerTiming}} [options] */
 async function listRecentNumberedComments(data, count, scanCap, viewer, options = {}) {
-    const { lowerId = 0, upperId = 0, startNumber = null, timing } = options
+    const {
+        lowerId = 0,
+        upperId = 0,
+        startNumber = null,
+        timing,
+        publicRead = false,
+    } = options
+    const readIndexJSON = publicRead ? getJSONPublic : getJSON
     const hint = Number(await measure(timing, 'index', async () =>
-        (await getJSON(data, blobKeys.commentNumberHint))?.value || 0))
+        (await readIndexJSON(data, blobKeys.commentNumberHint))?.value || 0))
     const comments = []
     const ids = []
     let number = startNumber === null ? hint : Math.min(hint, startNumber)
@@ -425,7 +450,7 @@ async function listRecentNumberedComments(data, count, scanCap, viewer, options 
         const numbers = Array.from({ length: batchSize }, (_, index) => number - index)
         const seats = await measure(timing, 'index', () => mapWithConcurrency(
             numbers,
-            item => getJSON(data, blobKeys.commentNumber(item)),
+            item => readIndexJSON(data, blobKeys.commentNumber(item)),
             READ_CONCURRENCY,
         ))
         scanned += batchSize
@@ -469,9 +494,10 @@ async function listRecentNumberedComments(data, count, scanCap, viewer, options 
 }
 
 async function listNewerNumberedComments(data, count, scanCap, viewer, options = {}) {
-    const { startNumber, timing } = options
+    const { startNumber, timing, publicRead = false } = options
+    const readIndexJSON = publicRead ? getJSONPublic : getJSON
     const hint = Number(await measure(timing, 'index', async () =>
-        (await getJSON(data, blobKeys.commentNumberHint))?.value || 0))
+        (await readIndexJSON(data, blobKeys.commentNumberHint))?.value || 0))
     const comments = []
     const ids = []
     let number = Math.max(1, Number(startNumber) || 1)
@@ -489,7 +515,7 @@ async function listNewerNumberedComments(data, count, scanCap, viewer, options =
         const numbers = Array.from({ length: batchSize }, (_, index) => number + index)
         const seats = await measure(timing, 'index', () => mapWithConcurrency(
             numbers,
-            item => getJSON(data, blobKeys.commentNumber(item)),
+            item => readIndexJSON(data, blobKeys.commentNumber(item)),
             READ_CONCURRENCY,
         ))
         scanned += batchSize
@@ -617,7 +643,8 @@ async function collectVisibleComments(data, ids, {
 
 /** @param {{timing?: import('./types.js').ServerTiming}} [options] */
 export async function listComments(data, query, viewer, options = {}) {
-    const { timing } = options
+    const { timing, publicRead = false } = options
+    const readIndexJSON = publicRead ? getJSONPublic : getJSON
     const uid = query.get('uid')
     if (uid) return listUserComments(data, query, viewer, uid, timing)
 
@@ -644,7 +671,7 @@ export async function listComments(data, query, viewer, options = {}) {
     const numberParam = query.get('number')
     if (numberParam) {
         const seat = await measure(timing, 'index', () =>
-            getJSON(data, blobKeys.commentNumber(Number(numberParam))))
+            readIndexJSON(data, blobKeys.commentNumber(Number(numberParam))))
         if (!seat || seat.tombstone) throw httpError(404, '留言不存在')
         const comment = seat?.commentId
             ? await measure(timing, 'commentBodies', () =>
@@ -664,7 +691,7 @@ export async function listComments(data, query, viewer, options = {}) {
     let cursorNumber = 0
     if (cursorMode) {
         const reverse = await measure(timing, 'index', () =>
-            getJSON(data, blobKeys.commentNumberReverse(from)))
+            readIndexJSON(data, blobKeys.commentNumberReverse(from)))
         cursorNumber = Number(reverse?.number) || 0
         if (!cursorNumber) {
             const cursorComment = await measure(timing, 'commentBodies', () =>
@@ -677,6 +704,7 @@ export async function listComments(data, query, viewer, options = {}) {
             ? listNewerNumberedComments(data, count, scanCap, viewer, {
                 startNumber: cursorNumber + 1,
                 timing,
+                publicRead,
             })
             : listRecentNumberedComments(
                 data,
@@ -688,6 +716,7 @@ export async function listComments(data, query, viewer, options = {}) {
                     upperId: cursorMode && rawCount > 0 ? from : 0,
                     startNumber: cursorNumber > 0 ? cursorNumber - 1 : null,
                     timing,
+                    publicRead,
                 },
             ))
         : null
@@ -705,7 +734,8 @@ export async function listComments(data, query, viewer, options = {}) {
         (!ids?.length && (!recent || !recent.hasNumberedData))
         || (recent && recent.exhausted && recent.items.length < count)
     ) {
-        const keys = await measure(timing, 'index', () => listAllCommentKeys(data))
+        const keys = await measure(timing, 'index', () =>
+            listAllCommentKeys(data, publicRead))
         ids = keys.map(keyToId).filter(id => id !== null)
         sourceTruncated = false
         collected = null
@@ -735,7 +765,7 @@ export async function listComments(data, query, viewer, options = {}) {
     const items = await mapWithConcurrency(collected.items, comment => getCommentDetail(data, {
         ...comment,
         number: comment.number ?? fallbackRanks?.get(comment.id) ?? comment.id,
-    }, viewer, previews, timing), DETAIL_CONCURRENCY)
+    }, viewer, previews, timing, publicRead), DETAIL_CONCURRENCY)
     return {
         items,
         hasMore: collected.truncated,
@@ -934,7 +964,7 @@ function isValidCalendarDate(year, month, day) {
         && probe.getUTCDate() === day
 }
 
-export async function countComments(data, query) {
+export async function countComments(data, query, options = {}) {
     const date = query.get('date') || shanghaiDateString(Date.now())
     const match = /^(\d{4})-(\d{2})-(\d{2})$/u.exec(date)
     if (!match) throw httpError(400, '日期格式不正确')
@@ -942,8 +972,20 @@ export async function countComments(data, query) {
     const month = Number(match[2])
     const day = Number(match[3])
     if (!isValidCalendarDate(year, month, day)) throw httpError(400, '日期格式不正确')
-    const blobs = await listAll(data, blobKeys.commentsByDatePrefix(date), Infinity)
+    const blobs = await (options.publicRead ? listAllPublic : listAll)(
+        data,
+        blobKeys.commentsByDatePrefix(date),
+        Infinity,
+    )
     return blobs.length
+}
+
+export async function getViewerLikeStates(data, ids, user, timing = null) {
+    return mapWithConcurrency(ids, async id => ({
+        id,
+        liked: Boolean(await measure(timing, 'likes', () =>
+            getJSON(data, blobKeys.commentLike(id, user.id)))),
+    }), READ_CONCURRENCY)
 }
 
 /** @param {{timing?: import('./types.js').ServerTiming}} [options] */

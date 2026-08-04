@@ -21,6 +21,9 @@ export async function enforceRoutePolicy({ context, stores, route }) {
     if (route.auth !== 'public') {
         authContext = await getSession(stores.data, request, {
             env: environmentFor(context),
+            ...(route.handler === 'me' && context.requestTiming
+                ? { timing: context.requestTiming }
+                : {}),
         })
     }
     if (route.auth === 'session' && !authContext) throw httpError(401, '请先登录')

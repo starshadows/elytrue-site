@@ -54,6 +54,9 @@ function apiWith(overrides: Partial<CommentsApi>): CommentsApi {
     async getCount() {
       return 0
     },
+    async getViewerLikes() {
+      return []
+    },
     async like() {},
     async list() {
       return { items: [], hasMore: false }
@@ -93,6 +96,169 @@ describe('comments store', () => {
     )
   })
 
+  test('commits initial cards without waiting for the today count', async () => {
+    const count = deferred<number>()
+    const store = createCommentsStore(
+      apiWith({
+        async list() {
+          return { items: [comment(1)], hasMore: false }
+        },
+        getCount() {
+          return count.promise
+        },
+      }),
+    )
+
+    await Promise.race([
+      store.initialize(),
+      new Promise((_resolve, reject) =>
+        setTimeout(
+          () => reject(new Error('initial comments waited for count')),
+          50,
+        ),
+      ),
+    ])
+    assert.equal(store.state.items[0]?.id, 1)
+    assert.equal(store.state.loadingInitial, false)
+    count.resolve(4)
+    await new Promise((resolve) => setTimeout(resolve, 0))
+    assert.equal(store.state.todayCount, 4)
+  })
+
+  test('hydrates viewer likes without replacing visible comment records', async () => {
+    const viewer = deferred<Array<{ id: number; liked: boolean }>>()
+    const store = createCommentsStore(
+      apiWith({
+        async list() {
+          return { items: [comment(2), comment(1)], hasMore: false }
+        },
+        getViewerLikes() {
+          return viewer.promise
+        },
+      }),
+    )
+    await store.initialize()
+    const first = store.state.items[0]
+
+    const hydration = store.hydrateViewerLikes()
+    assert.equal(store.state.items[0], first)
+    viewer.resolve([{ id: 2, liked: true }])
+    await hydration
+
+    assert.equal(store.state.items[0], first)
+    assert.equal(store.state.items[0]?.liked, true)
+    assert.equal(store.state.items[1]?.liked, false)
+  })
+
+  test('hydrates viewer likes in batches of at most twenty ids', async () => {
+    const batchSizes: number[] = []
+    const store = createCommentsStore(
+      apiWith({
+        async list() {
+          return {
+            items: Array.from({ length: 45 }, (_, index) =>
+              comment(45 - index),
+            ),
+            hasMore: false,
+          }
+        },
+        async getViewerLikes(ids) {
+          batchSizes.push(ids.length)
+          return ids.map((id) => ({ id, liked: true }))
+        },
+      }),
+    )
+    await store.initialize()
+
+    await store.hydrateViewerLikes()
+
+    assert.deepEqual(batchSizes, [20, 20, 5])
+    assert.equal(
+      store.state.items.every((item) => item.liked),
+      true,
+    )
+  })
+
+  test('ignores viewer-like hydration after logout or a local like mutation', async () => {
+    const firstViewer = deferred<Array<{ id: number; liked: boolean }>>()
+    const secondViewer = deferred<Array<{ id: number; liked: boolean }>>()
+    let viewerCalls = 0
+    const store = createCommentsStore(
+      apiWith({
+        async list() {
+          return { items: [comment(1)], hasMore: false }
+        },
+        getViewerLikes() {
+          viewerCalls += 1
+          return viewerCalls === 1 ? firstViewer.promise : secondViewer.promise
+        },
+        async like() {
+          return { liked: true, likes: 1 }
+        },
+      }),
+    )
+    await store.initialize()
+
+    const beforeLogout = store.hydrateViewerLikes()
+    store.clearViewerLikes()
+    firstViewer.resolve([{ id: 1, liked: true }])
+    await beforeLogout
+    assert.equal(store.state.items[0]?.liked, false)
+
+    const beforeToggle = store.hydrateViewerLikes()
+    await store.toggleLike(1)
+    secondViewer.resolve([{ id: 1, liked: false }])
+    await beforeToggle
+    assert.equal(store.state.items[0]?.liked, true)
+  })
+
+  test('ignores an in-flight like result after viewer state is cleared', async () => {
+    const likeResult = deferred<{ liked: boolean; likes: number }>()
+    const store = createCommentsStore(
+      apiWith({
+        async list() {
+          return { items: [comment(1)], hasMore: false }
+        },
+        like() {
+          return likeResult.promise
+        },
+      }),
+    )
+    await store.initialize()
+
+    const pending = store.toggleLike(1)
+    store.clearViewerLikes()
+    likeResult.resolve({ liked: true, likes: 1 })
+    await pending
+
+    assert.equal(store.state.items[0]?.liked, false)
+  })
+
+  test('does not let an older count request overwrite a newer count', async () => {
+    const firstCount = deferred<number>()
+    const secondCount = deferred<number>()
+    let countCalls = 0
+    const store = createCommentsStore(
+      apiWith({
+        async list() {
+          return { items: [comment(1)], hasMore: false }
+        },
+        getCount() {
+          countCalls += 1
+          return countCalls === 1 ? firstCount.promise : secondCount.promise
+        },
+      }),
+    )
+    await store.initialize()
+    store.insertCreatedComment(comment(2))
+    secondCount.resolve(3)
+    await new Promise((resolve) => setTimeout(resolve, 0))
+    firstCount.resolve(1)
+    await new Promise((resolve) => setTimeout(resolve, 0))
+
+    assert.equal(store.state.todayCount, 3)
+  })
+
   test('inserts a created comment without clearing or refreshing the list', async () => {
     let listCalls = 0
     let countCalls = 0
@@ -109,6 +275,8 @@ describe('comments store', () => {
       }),
     )
     await store.initialize()
+    await new Promise((resolve) => setTimeout(resolve, 0))
+    assert.equal(store.state.todayCount, 2)
 
     store.insertCreatedComment(comment(3))
     assert.deepEqual(
