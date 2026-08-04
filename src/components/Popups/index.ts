@@ -49,8 +49,24 @@ function closeEntries(selected: PopupEntry[]): void {
   }, 150)
 }
 
+/**
+ * 立即移除弹窗(不播放入场/离场动画),用于在同一个容器内
+ * 直接切换弹窗内容,避免「关一个再开一个」产生两次完整动画。
+ */
+function closeInstant(id?: number): void {
+  const selected = (
+    id == null ? [...popups] : popups.filter((item) => item.id === id)
+  ).filter((item) => item.name !== 'recoveryKeyPopup')
+  selected.forEach((item) => {
+    item.closing = true
+    const index = popups.indexOf(item)
+    if (index >= 0) popups.splice(index, 1)
+  })
+}
+
 export default {
   close,
+  closeInstant,
   complete,
   isOpen: () => popups.some((item) => !item.closing),
   popups: readonly(popups),

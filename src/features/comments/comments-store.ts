@@ -48,7 +48,9 @@ export function createCommentsStore(api: CommentsApi) {
   let generation = 0
   let insertionVersion = 0
   const insertedVersions = new Map<number, number>()
+  let nextNewerCursor: number | null = null
   let nextOlderCursor: number | null = null
+  let todayCountFresh = false
 
   function merge(items: CommentRecord[]): void {
     const merged = new Map(state.items.map((item) => [item.id, item]))
@@ -79,6 +81,10 @@ export function createCommentsStore(api: CommentsApi) {
         if (requestGeneration !== generation) return
         if (kind === 'initial' || kind === 'replacement')
           state.initialError = false
+        if (kind === 'initial' && page.todayCount !== undefined) {
+          state.todayCount = page.todayCount
+          todayCountFresh = true
+        }
         const insertedDuringRequest = replace
           ? state.items.filter(
               (item) =>
@@ -89,16 +95,19 @@ export function createCommentsStore(api: CommentsApi) {
         merge(page.items)
         merge(insertedDuringRequest)
         for (const item of page.items) insertedVersions.delete(item.id)
-        if (kind === 'initial' || kind === 'newer') {
-          state.reachedNewest = page.items.length === 0
-        }
         if (kind === 'initial') {
-          const requested = Math.abs(query.count ?? 30)
-          state.reachedOldest = !page.hasMore && page.items.length < requested
+          // 首次加载请求的就是最新一页:已到最新端,避免无谓的 loadNewer
+          state.reachedNewest = true
+          state.reachedOldest = !page.hasMore
+        }
+        if (kind === 'newer') {
+          state.reachedNewest = !page.hasMore
+          nextNewerCursor = page.hasMore
+            ? (page.nextCursor ?? page.items[0]?.id ?? null)
+            : null
         }
         if (kind === 'older') {
-          const requested = Math.abs(query.count ?? 30)
-          state.reachedOldest = !page.hasMore && page.items.length < requested
+          state.reachedOldest = !page.hasMore
         }
         if (kind === 'initial' || kind === 'older') {
           nextOlderCursor = page.hasMore
@@ -107,7 +116,8 @@ export function createCommentsStore(api: CommentsApi) {
         }
         if (kind === 'replacement') {
           state.reachedNewest = false
-          state.reachedOldest = !page.hasMore && page.items.length === 0
+          // 编号查询只返回目标留言本身,不能据此判定旧端已到底。
+          state.reachedOldest = query.number ? false : !page.hasMore
         }
       })
       .catch((error: unknown) => {
@@ -134,7 +144,8 @@ export function createCommentsStore(api: CommentsApi) {
 
   async function refresh(): Promise<void> {
     resetForReplacement()
-    await Promise.all([load('initial', {}, true), refreshTodayCount()])
+    await load('initial', {}, true)
+    if (!todayCountFresh) await refreshTodayCount()
   }
 
   function initialize(): Promise<void> {
@@ -145,22 +156,35 @@ export function createCommentsStore(api: CommentsApi) {
         Promise.resolve()
       )
     }
-    return Promise.all([load('initial', {}, true), refreshTodayCount()]).then(
-      () => undefined,
-    )
+    return load('initial', {}, true).then(() => {
+      if (!todayCountFresh) return refreshTodayCount()
+    })
   }
 
   function loadNewer(count = 10): Promise<void> {
-    if (state.jumping || state.reachedNewest) return Promise.resolve()
+    if (
+      state.jumping ||
+      state.reachedNewest ||
+      state.loadingInitial ||
+      state.loadingNewer
+    )
+      return pending.get('newer') ?? Promise.resolve()
     const newest = state.items[0]
+    const cursor = nextNewerCursor ?? newest?.id
     return load(
       'newer',
-      newest ? { cursor: newest.id, direction: 'after', count: -count } : {},
+      cursor ? { cursor, direction: 'after', count: -count } : {},
     )
   }
 
   function loadOlder(count = 30): Promise<void> {
-    if (state.jumping || state.reachedOldest) return Promise.resolve()
+    if (
+      state.jumping ||
+      state.reachedOldest ||
+      state.loadingInitial ||
+      state.loadingOlder
+    )
+      return pending.get('older') ?? Promise.resolve()
     const oldest = state.items.at(-1)
     const cursor = nextOlderCursor ?? oldest?.id
     return load(
@@ -193,7 +217,9 @@ export function createCommentsStore(api: CommentsApi) {
     state.reachedNewest = false
     state.reachedOldest = false
     state.currentVisibleTime = null
+    nextNewerCursor = null
     nextOlderCursor = null
+    todayCountFresh = false
     state.initialError = false
   }
 
@@ -202,19 +228,28 @@ export function createCommentsStore(api: CommentsApi) {
     state.jumping = false
   }
 
-  function gotoNumber(value: number | string): Promise<void> {
-    const number = Number(value)
-    if (!Number.isInteger(number) || number < 1) return Promise.resolve()
+  function beginJump(displayId: number, query: CommentQuery): Promise<void> {
     resetForReplacement()
-    state.jumpNumber = number
+    state.jumpNumber = displayId
     state.jumping = true
     const jumpGeneration = generation
-    return load('replacement', { number }, true).catch((error: unknown) => {
-      if (jumpGeneration === generation && state.jumpNumber === number) {
+    return load('replacement', query, true).catch((error: unknown) => {
+      if (jumpGeneration === generation && state.jumpNumber === displayId) {
         finishJump()
       }
       throw error
     })
+  }
+
+  function gotoNumber(value: number | string): Promise<void> {
+    const number = Number(value)
+    if (!Number.isInteger(number) || number < 1) return Promise.resolve()
+    return beginJump(number, { number })
+  }
+
+  function gotoId(value: number): Promise<void> {
+    if (!Number.isSafeInteger(value) || value < 1) return Promise.resolve()
+    return beginJump(value, { from: value, count: 1 })
   }
 
   function loadAtTime(time: number): Promise<void> {
@@ -272,6 +307,7 @@ export function createCommentsStore(api: CommentsApi) {
   return {
     hasItems: computed(() => state.items.length > 0),
     finishJump,
+    gotoId,
     gotoNumber,
     initialize,
     insertCreatedComment,

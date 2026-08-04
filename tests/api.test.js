@@ -413,7 +413,7 @@ describe('EdgeOne comments, uploads and moderation API', () => {
         const second = await call(state, 'POST', 'comments/post', { comment: '第二条留言' })
         assert.equal(second.response.status, 201)
         const newest = await call(state, 'GET', 'comments?count=2')
-        assert.deepEqual(newest.payload.data.map(comment => comment.displayId), [2, 1])
+        assert.deepEqual(newest.payload.data.items.map(comment => comment.displayId), [2, 1])
     })
 
     it('accepts reports from others, rejects self-report and duplicates', async () => {

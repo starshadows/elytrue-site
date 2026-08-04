@@ -13,7 +13,7 @@ import type {
 } from '../features/comments/comment-types'
 import { BACKGROUNDS } from '../config/assets'
 
-const props = defineProps<{ record: CommentRecord }>()
+const props = defineProps<{ record: CommentRecord; eager?: boolean }>()
 const emit = defineEmits<{ lift: []; reply: [number: number] }>()
 const reply = computed<ReplyPreview | null>(
   () => props.record.replyPreview ?? null,
@@ -60,8 +60,13 @@ function openImage(image: string): void {
 }
 
 function openReply(): void {
-  if (reply.value && !reply.value.deleted)
-    void commentsStore.gotoNumber(reply.value.displayId).catch(() => undefined)
+  if (!reply.value || reply.value.deleted) return
+  const jump = reply.value.number
+    ? commentsStore.gotoNumber(reply.value.number)
+    : reply.value.id
+      ? commentsStore.gotoId(reply.value.id)
+      : commentsStore.gotoNumber(reply.value.displayId)
+  void jump.catch(() => undefined)
 }
 
 function report(): void {
@@ -93,7 +98,7 @@ function report(): void {
 <template>
   <div
     :id="`#${record.id}`"
-    class="commentBox commentItem"
+    class="commentBox commentItem commentVisualCard"
     :class="{ hidden: record.hidden }"
     :data-uid="record.uid ?? ''"
     :data-number="record.displayId"
@@ -101,7 +106,7 @@ function report(): void {
   >
     <img
       class="bg"
-      loading="lazy"
+      :loading="eager ? 'eager' : 'lazy'"
       :src="background"
       alt=""
       :style="record.hidden ? { display: 'none' } : undefined"
@@ -109,7 +114,7 @@ function report(): void {
     <div class="bgcover"></div>
     <img
       class="avatar"
-      loading="lazy"
+      :loading="eager ? 'eager' : 'lazy'"
       :src="avatarPath(record.avatar)"
       :alt="`${record.sender}的头像`"
       role="button"

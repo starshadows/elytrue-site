@@ -176,6 +176,39 @@ describe('comments store', () => {
     })
   })
 
+  test('uses the server cursor when a newer page scans hidden comments', async () => {
+    const queries: CommentQuery[] = []
+    const store = createCommentsStore(
+      apiWith({
+        async list(query = {}) {
+          queries.push(query)
+          if (query.number) {
+            return { items: [comment(20)], hasMore: false }
+          }
+          if (queries.length === 2) {
+            return {
+              items: [comment(21)],
+              hasMore: true,
+              nextCursor: 25,
+            }
+          }
+          return { items: [comment(26)], hasMore: false }
+        },
+      }),
+    )
+
+    await store.gotoNumber(20)
+    store.finishJump()
+    await store.loadNewer()
+    await store.loadNewer()
+
+    assert.deepEqual(queries[2], {
+      cursor: 25,
+      direction: 'after',
+      count: -10,
+    })
+  })
+
   test('does not request an older page when the initial page is complete', async () => {
     let calls = 0
     const store = createCommentsStore(
@@ -192,6 +225,138 @@ describe('comments store', () => {
 
     assert.equal(calls, 1)
     assert.equal(store.state.reachedOldest, true)
+  })
+
+  test('marks the newest end after the first page without auto loadNewer', async () => {
+    let calls = 0
+    const store = createCommentsStore(
+      apiWith({
+        async list() {
+          calls += 1
+          return {
+            items: Array.from({ length: 30 }, (_, index) =>
+              comment(30 - index),
+            ),
+            hasMore: true,
+          }
+        },
+      }),
+    )
+
+    await store.initialize()
+    assert.equal(store.state.reachedNewest, true)
+    assert.equal(store.state.reachedOldest, false)
+    await store.loadNewer()
+    assert.equal(calls, 1, '首次加载后不得再请求更新留言')
+    await store.loadOlder()
+    assert.equal(calls, 2, '只有历史方向可以继续分页')
+  })
+
+  test('reaches the oldest end when the last page is full but hasMore is false', async () => {
+    let calls = 0
+    const store = createCommentsStore(
+      apiWith({
+        async list() {
+          calls += 1
+          if (calls === 1) {
+            return {
+              items: Array.from({ length: 30 }, (_, index) =>
+                comment(60 - index),
+              ),
+              hasMore: true,
+              nextCursor: 30,
+            }
+          }
+          return {
+            items: Array.from({ length: 30 }, (_, index) =>
+              comment(30 - index),
+            ),
+            hasMore: false,
+          }
+        },
+      }),
+    )
+
+    await store.initialize()
+    assert.equal(store.state.reachedOldest, false)
+    await store.loadOlder()
+    assert.equal(calls, 2)
+    assert.equal(
+      store.state.reachedOldest,
+      true,
+      '最后一页刚好满 30 条且 hasMore=false 也必须到达末端',
+    )
+    await store.loadOlder()
+    assert.equal(calls, 2, '到达末端后不得再请求下一页')
+  })
+
+  test('does not start a duplicate pagination request while one is in flight', async () => {
+    const request = deferred<CommentPage>()
+    let calls = 0
+    const store = createCommentsStore(
+      apiWith({
+        async list() {
+          calls += 1
+          if (calls === 1) {
+            return { items: [comment(10)], hasMore: true, nextCursor: 9 }
+          }
+          return request.promise
+        },
+      }),
+    )
+
+    await store.initialize()
+    const first = store.loadOlder()
+    const duplicate = store.loadOlder()
+    assert.equal(first, duplicate, '请求未结束时禁止重复触发')
+    await nextTick()
+    assert.equal(calls, 2)
+    request.resolve({ items: [comment(9)], hasMore: false })
+    await Promise.all([first, duplicate])
+    assert.equal(calls, 2)
+  })
+
+  test('clears the loading state after a failed older page and stays retryable', async () => {
+    let calls = 0
+    const store = createCommentsStore(
+      apiWith({
+        async list() {
+          calls += 1
+          if (calls === 1) {
+            return { items: [comment(10)], hasMore: true, nextCursor: 9 }
+          }
+          throw new Error('offline')
+        },
+      }),
+    )
+
+    await store.initialize()
+    await assert.rejects(store.loadOlder(), /offline/)
+    assert.equal(store.state.loadingOlder, false)
+    assert.equal(store.state.reachedOldest, false, '失败后仍可重试')
+    assert.equal(store.state.items[0]?.id, 10, '已有留言保持不变')
+  })
+
+  test('uses todayCount from the initial page response and skips the count request', async () => {
+    let countCalls = 0
+    let listCalls = 0
+    const store = createCommentsStore(
+      apiWith({
+        async list() {
+          listCalls += 1
+          return { items: [comment(1)], hasMore: false, todayCount: 7 }
+        },
+        async getCount() {
+          countCalls += 1
+          return 7
+        },
+      }),
+    )
+
+    await store.initialize()
+    assert.equal(store.state.todayCount, 7)
+    assert.equal(countCalls, 0, '初始页已含今日数量,不得再发 /comments/count')
+    assert.equal(listCalls, 1)
   })
 
   test('stops initial loading and remains retryable after failure', async () => {
@@ -291,7 +456,7 @@ describe('comments store', () => {
         async list(query = {}) {
           queries.push(query)
           if (query.number) {
-            return { items: [comment(20)], hasMore: true }
+            return { items: [comment(20)], hasMore: false }
           }
           if (query.time) {
             return { items: [comment(10)], hasMore: true }
@@ -305,6 +470,7 @@ describe('comments store', () => {
     )
 
     await store.gotoNumber(20)
+    assert.equal(store.state.reachedOldest, false)
     await store.loadNewer()
     await store.loadOlder()
     assert.equal(queries.length, 1)
@@ -326,6 +492,25 @@ describe('comments store', () => {
       store.state.items.map((item) => item.id),
       [10],
     )
+  })
+
+  test('uses legacy from semantics when jumping by an internal id', async () => {
+    const queries: CommentQuery[] = []
+    const legacyId = 1_755_000_000_000_123
+    const store = createCommentsStore(
+      apiWith({
+        async list(query = {}) {
+          queries.push(query)
+          return { items: [comment(legacyId)], hasMore: false }
+        },
+      }),
+    )
+
+    await store.gotoId(legacyId)
+
+    assert.deepEqual(queries[0], { from: legacyId, count: 1 })
+    assert.equal(store.state.jumpNumber, legacyId)
+    assert.equal(store.state.jumping, true)
   })
 
   test('deduplicates a pending like and allows the next toggle immediately after it settles', async () => {

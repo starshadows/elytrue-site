@@ -304,6 +304,8 @@ function replyPreview(comment, fallbackId = null) {
         }
     }
     return {
+        id: comment.id,
+        ...(comment.number ? { number: comment.number } : {}),
         displayId: comment.number ?? comment.id,
         sender: comment.sender || '',
         avatar: comment.avatar || '',
@@ -311,7 +313,7 @@ function replyPreview(comment, fallbackId = null) {
     }
 }
 
-/** @typedef {{displayId: number, sender: string, avatar: string, comment: string, deleted?: boolean}} ReplyPreview */
+/** @typedef {{id?: number, number?: number, displayId: number, sender: string, avatar: string, comment: string, deleted?: boolean}} ReplyPreview */
 
 /** @returns {Promise<Map<number, ReplyPreview>>} */
 async function loadReplyPreviews(data, comments, viewer, timing) {
@@ -350,6 +352,13 @@ export async function countLikeRecords(data, commentId) {
     return count
 }
 
+/**
+ * 读取点赞计数展示值。普通读取路径禁止扫描点赞事实记录:
+ *  1. 独立点赞缓存存在 → 用缓存;
+ *  2. 留言本体有可信计数(likeCountVersion === 1)→ 直接用;
+ *  3. 都没有 → 显示 0 并写 repair marker,由维护脚本精确重建,
+ *     第一个访问该留言的用户不承担历史数据迁移成本。
+ */
 async function getCachedLikeCount(data, comment, timing) {
     const cacheKey = blobKeys.commentLikeCountCache(comment.id)
     const cached = await measure(timing, 'likes', () => getJSON(data, cacheKey))
@@ -357,14 +366,13 @@ async function getCachedLikeCount(data, comment, timing) {
     if (comment.likeCountVersion === 1) {
         return Math.max(0, Number(comment.likeCount) || 0)
     }
-
-    const count = await measure(timing, 'likes', () => countLikeRecords(data, comment.id))
-    await data.setJSON(cacheKey, {
+    await data.setJSON(blobKeys.commentLikeCountRepair(comment.id), {
         commentId: comment.id,
-        count,
-        updatedAt: Date.now(),
+        status: 'open',
+        createdAt: Date.now(),
+        error: 'legacy comment without a trusted like count read on the list path',
     }, { onlyIfNew: true }).catch(() => {})
-    return count
+    return 0
 }
 
 /**
@@ -405,6 +413,7 @@ async function listRecentNumberedComments(data, count, scanCap, viewer, options 
     let number = startNumber === null ? hint : Math.min(hint, startNumber)
     let scanned = 0
     let nextCursor = null
+    let truncated = false
 
     while (number > 0 && scanned < scanCap && comments.length < count) {
         const batchSize = Math.min(NUMBER_BATCH_SIZE, number, scanCap - scanned)
@@ -430,10 +439,17 @@ async function listRecentNumberedComments(data, count, scanCap, viewer, options 
         for (let index = 0; index < bodies.length; index += 1) {
             const comment = bodies[index]
             const consumedId = batchIds[index]
-            if (consumedId) nextCursor = consumedId
-            if (comment && isVisibleFor(comment, viewer)) comments.push(comment)
-            if (comments.length >= count) {
-                break
+            if (comment && isVisibleFor(comment, viewer)) {
+                comments.push(comment)
+                if (consumedId) nextCursor = consumedId
+                if (comments.length >= count) {
+                    // 批次或剩余编号里还有内容时不得误判到底;
+                    // 游标取最后一条已推送留言,避免跳过头尾部已扫描但未返回的留言
+                    truncated = index < bodies.length - 1 || number > 0
+                    break
+                }
+            } else if (consumedId) {
+                nextCursor = consumedId
             }
         }
     }
@@ -441,7 +457,63 @@ async function listRecentNumberedComments(data, count, scanCap, viewer, options 
         items: comments.sort((left, right) => right.id - left.id),
         ids,
         exhausted: number <= 0,
-        truncated: comments.length < count && number > 0,
+        truncated: truncated || (comments.length < count && number > 0),
+        nextCursor,
+        hasNumberedData: hint > 0,
+    }
+}
+
+async function listNewerNumberedComments(data, count, scanCap, viewer, options = {}) {
+    const { startNumber, timing } = options
+    const hint = Number(await measure(timing, 'index', async () =>
+        (await getJSON(data, blobKeys.commentNumberHint))?.value || 0))
+    const comments = []
+    const ids = []
+    let number = Math.max(1, Number(startNumber) || 1)
+    let scanned = 0
+    let nextCursor = null
+    let truncated = false
+
+    while (number <= hint && scanned < scanCap && comments.length < count) {
+        const batchSize = Math.min(NUMBER_BATCH_SIZE, hint - number + 1, scanCap - scanned)
+        const numbers = Array.from({ length: batchSize }, (_, index) => number + index)
+        const seats = await measure(timing, 'index', () => mapWithConcurrency(
+            numbers,
+            item => getJSON(data, blobKeys.commentNumber(item)),
+            READ_CONCURRENCY,
+        ))
+        scanned += batchSize
+        number += batchSize
+
+        const batchIds = seats
+            .filter(seat => seat?.commentId && !seat.tombstone)
+            .map(seat => Number(seat.commentId))
+        ids.push(...batchIds)
+        const bodies = await measure(timing, 'comments', () => mapWithConcurrency(
+            batchIds,
+            id => getJSON(data, blobKeys.comment(id)),
+            READ_CONCURRENCY,
+        ))
+        for (let index = 0; index < bodies.length; index += 1) {
+            const comment = bodies[index]
+            const consumedId = batchIds[index]
+            if (comment && isVisibleFor(comment, viewer)) {
+                comments.push(comment)
+                if (consumedId) nextCursor = consumedId
+                if (comments.length >= count) {
+                    truncated = index < bodies.length - 1 || number <= hint
+                    break
+                }
+            } else if (consumedId) {
+                nextCursor = consumedId
+            }
+        }
+    }
+    return {
+        items: comments.sort((left, right) => right.id - left.id),
+        ids,
+        exhausted: number > hint,
+        truncated: truncated || (comments.length < count && number <= hint),
         nextCursor,
         hasNumberedData: hint > 0,
     }
@@ -580,7 +652,7 @@ export async function listComments(data, query, viewer, options = {}) {
         ? await resolveCommentId(data, from)
         : null
     let cursorNumber = 0
-    if (cursorMode && rawCount > 0) {
+    if (cursorMode) {
         const reverse = await measure(timing, 'index', () =>
             getJSON(data, blobKeys.commentNumberReverse(from)))
         cursorNumber = Number(reverse?.number) || 0
@@ -591,18 +663,23 @@ export async function listComments(data, query, viewer, options = {}) {
         }
     }
     const recent = !numberParam && !directTarget && (!from || cursorMode) && !beforeTime
-        ? await listRecentNumberedComments(
-            data,
-            count,
-            scanCap,
-            viewer,
-            {
-                lowerId: cursorMode && rawCount < 0 ? from : 0,
-                upperId: cursorMode && rawCount > 0 ? from : 0,
-                startNumber: cursorNumber > 0 ? cursorNumber - 1 : null,
+        ? await (cursorMode && rawCount < 0 && cursorNumber > 0
+            ? listNewerNumberedComments(data, count, scanCap, viewer, {
+                startNumber: cursorNumber + 1,
                 timing,
-            },
-        )
+            })
+            : listRecentNumberedComments(
+                data,
+                count,
+                scanCap,
+                viewer,
+                {
+                    lowerId: cursorMode && rawCount < 0 ? from : 0,
+                    upperId: cursorMode && rawCount > 0 ? from : 0,
+                    startNumber: cursorNumber > 0 ? cursorNumber - 1 : null,
+                    timing,
+                },
+            ))
         : null
     /** @type {number[]} */
     let ids = directTarget ? [directTarget] : (recent?.ids || []).sort((a, b) => a - b)
@@ -878,21 +955,12 @@ export async function setLike(data, commentId, user, liked, options = {}) {
     let likes = await measure(timing, 'likes', () => countLikeRecords(data, commentId))
     const repairKey = blobKeys.commentLikeCountRepair(commentId)
     try {
-        let stable = false
-        for (let attempt = 0; attempt < 3; attempt += 1) {
-            await measure(timing, 'likes', () => data.setJSON(
-                blobKeys.commentLikeCountCache(commentId),
-                { commentId, count: likes, updatedAt: Date.now() },
-            ))
-            const verified = await measure(timing, 'likes', () =>
-                countLikeRecords(data, commentId))
-            if (verified === likes) {
-                stable = true
-                break
-            }
-            likes = verified
-        }
-        if (!stable) throw new Error('点赞计数在缓存更新期间持续变化')
+        // 点赞响应只做一次精确计数:写缓存后不再反复扫描验证,
+        // 缓存持久化失败时留 repair marker 交给维护脚本精确修复。
+        await measure(timing, 'likes', () => data.setJSON(
+            blobKeys.commentLikeCountCache(commentId),
+            { commentId, count: likes, updatedAt: Date.now() },
+        ))
         await data.delete(repairKey).catch(() => {})
     } catch (error) {
         await data.setJSON(repairKey, {
@@ -901,7 +969,7 @@ export async function setLike(data, commentId, user, liked, options = {}) {
             status: 'open',
             createdAt: Date.now(),
             error: String(error?.message || error).slice(0, 300),
-        })
+        }).catch(() => {})
         console.error(JSON.stringify({
             event: 'comment_like_count_cache_update_failed',
             commentId,

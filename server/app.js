@@ -260,6 +260,22 @@ async function getComments(context, stores, path, auth) {
     // 用户列表:{ items, hasMore, nextCursor };主列表:数组(scanCap 截断时返回 { items, hasMore })
     if (Array.isArray(result)) return apiResponse(result, { cookies: auth?.refreshCookies || [] })
     if (url.searchParams.get('uid')) return apiResponse(result, { cookies: auth?.refreshCookies || [] })
+    // 首次主页列表合并今日留言数量,避免额外的 /comments/count 请求;
+    // 跳转(number/time/from)与分页(cursor)请求保持原有形态。
+    const params = url.searchParams
+    const isInitialPage = params.get('cursor') === null
+        && params.get('number') === null
+        && params.get('time') === null
+        && params.get('from') === null
+    if (isInitialPage) {
+        const todayCount = await countComments(stores.data, params)
+        return apiResponse({
+            items: result.items,
+            hasMore: result.hasMore,
+            ...(result.nextCursor ? { nextCursor: result.nextCursor } : {}),
+            todayCount,
+        }, { cookies: auth?.refreshCookies || [] })
+    }
     if (result.hasMore) {
         return apiResponse({
             items: result.items,

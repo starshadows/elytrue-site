@@ -93,7 +93,7 @@ describe('declarative API route contract', () => {
     assert.match(entry, /export default function onRequest\(context\)/u)
   })
 
-  test('keeps post insertion and loading indicators tied to real requests', async () => {
+  test('keeps post insertion and pagination triggers tied to real requests', async () => {
     const [panel, editor, userHome] = await Promise.all([
       readFile(
         new URL('../src/components/CommentsPanel.vue', import.meta.url),
@@ -113,14 +113,11 @@ describe('declarative API route contract', () => {
       panel,
       /setTimeout\(\(\) => void commentsStore\.refresh\(\), 1_000\)/u,
     )
-    assert.match(
-      panel,
-      /loadingInitial \|\| commentsStore\.state\.loadingOlder/u,
-    )
-    assert.doesNotMatch(
-      panel,
-      /display: commentsStore\.state\.reachedOldest/u,
-    )
+    assert.doesNotMatch(panel, /setInterval\(handleScroll, 1_000\)/u)
+    assert.match(panel, /new IntersectionObserver/u)
+    assert.match(panel, /paginationSentinel/u)
+    assert.match(panel, /commentsLoadingHint/u)
+    assert.doesNotMatch(panel, /id="loadingIndicator"/u)
     assert.match(editor, /emit\('sent', created\)/u)
     assert.match(editor, /await Promise\.allSettled/u)
     assert.match(

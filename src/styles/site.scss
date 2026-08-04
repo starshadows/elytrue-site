@@ -548,6 +548,11 @@ body:not(.fullscreen) #lowerPanel.animating:not(.lowerPanelUp) {
     white-space: normal;
     overflow: hidden;
     transition: none;
+}
+
+/* 置顶与普通留言共用的入场动画:仅视觉卡片使用,
+   加载器/错误块/sentinel/编辑器均不得继承 */
+.commentVisualCard {
     animation-name: commentBoxAppear;
     animation-duration: 0.5s;
 }
@@ -567,6 +572,14 @@ body:not(.fullscreen) #lowerPanel.animating:not(.lowerPanelUp) {
         opacity: 1;
         transform: scale(1);
     }
+}
+
+#comments .paginationSentinel {
+    flex-shrink: 0;
+    width: 1px;
+    min-width: 1px;
+    margin-right: 0.25rem;
+    pointer-events: none;
 }
 
 #comments .commentBox.hidden {
@@ -1064,15 +1077,6 @@ body:not(.fullscreen) #lowerPanel.animating:not(.lowerPanelUp) {
     text-decoration: underline;
 }
 
-#comments .loadingIndicator {
-    width: auto;
-    border-radius: 0;
-    margin-left: -1vh;
-    margin-right: 0;
-    line-height: 1vh;
-    transition: line-height 0.5s;
-}
-
 #comments .commentsLoadError {
     display: flex;
     flex-direction: column;
@@ -1089,11 +1093,6 @@ body:not(.fullscreen) #lowerPanel.animating:not(.lowerPanelUp) {
     color: inherit;
     background: rgba(255, 255, 255, 0.28);
     cursor: pointer;
-}
-
-#lowerPanel:hover:not(.lowerPanelDown) #comments .loadingIndicator,
-#lowerPanel.lowerPanelUp #comments .loadingIndicator {
-    line-height: 55vh;
 }
 
 .pullRefresh {
@@ -2500,15 +2499,6 @@ body.fullscreen {
     height: 23.75rem;
     max-width: 80vw;
     max-height: 90vh;
-}
-
-.fullscreen #comments .loadingIndicator {
-    width: 100% !important;
-    max-width: 100% !important;
-    height: auto !important;
-    line-height: normal !important;
-    margin: 0;
-    text-align: center;
 }
 
 .fullscreen #comments .pullRefresh {

@@ -17,6 +17,8 @@ export interface CommentRecord {
 }
 
 export interface ReplyPreview {
+  id?: number
+  number?: number
   displayId: number
   sender: string
   avatar: string
@@ -28,6 +30,7 @@ export interface CommentPage {
   items: CommentRecord[]
   hasMore: boolean
   nextCursor?: number | null
+  todayCount?: number
 }
 
 export interface UserCommentRecord {
@@ -74,6 +77,12 @@ function parseReplyPreview(value: unknown): ReplyPreview | undefined {
     throw new Error('回复摘要字段无效')
   }
   return {
+    ...(numberField(value, 'id') === undefined
+      ? {}
+      : { id: numberField(value, 'id') }),
+    ...(numberField(value, 'number') === undefined
+      ? {}
+      : { number: numberField(value, 'number') }),
     displayId,
     sender,
     avatar,
@@ -153,10 +162,18 @@ export function parseCommentPage(value: unknown): CommentPage {
   )) {
     throw new Error('留言游标无效')
   }
+  const todayCount = Reflect.get(value, 'todayCount')
+  if (
+    todayCount !== undefined &&
+    (typeof todayCount !== 'number' || !Number.isFinite(todayCount))
+  ) {
+    throw new Error('今日留言数量无效')
+  }
   return {
     items: items.map(parseCommentRecord),
     hasMore,
     ...(cursor === undefined ? {} : { nextCursor: cursor }),
+    ...(todayCount === undefined ? {} : { todayCount }),
   }
 }
 

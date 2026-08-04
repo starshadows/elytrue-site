@@ -222,9 +222,9 @@ describe('stable public comment numbers', () => {
         assert.equal(removed.response.status, 200)
 
         const listed = await call(state, 'GET', 'comments?count=10')
-        const numbers = listed.payload.data.map(comment => comment.displayId)
+        const numbers = listed.payload.data.items.map(comment => comment.displayId)
         assert.deepEqual(numbers, [3, 1])
-        assert.deepEqual(listed.payload.data.map(comment => comment.comment), ['第三条', '第一条'])
+        assert.deepEqual(listed.payload.data.items.map(comment => comment.comment), ['第三条', '第一条'])
 
         // 新留言取得未占用的 4
         published.d = await postComment(state, '第四条')
@@ -241,6 +241,8 @@ describe('stable public comment numbers', () => {
         assert.equal(reply.number, 5)
         assert.equal(reply.replyid, published.a.id, 'replyid 应解析为内部 ID')
         assert.deepEqual(reply.replyPreview, {
+            id: published.a.id,
+            number: 1,
             displayId: 1,
             sender: '编号用户',
             avatar: '',
@@ -248,8 +250,10 @@ describe('stable public comment numbers', () => {
         })
         published.reply = reply
         const listed = await call(state, 'GET', 'comments?count=10')
-        const replyRecord = listed.payload.data.find(comment => comment.id === reply.id)
+        const replyRecord = listed.payload.data.items.find(comment => comment.id === reply.id)
         assert.deepEqual(replyRecord.replyPreview, {
+            id: published.a.id,
+            number: 1,
             displayId: 1,
             sender: '编号用户',
             avatar: '',
@@ -264,7 +268,7 @@ describe('stable public comment numbers', () => {
         })
         assert.equal(hidden.response.status, 200)
         const adminView = await call(state, 'GET', 'comments?count=10')
-        const afterHide = adminView.payload.data.find(comment => comment.comment === '回复第一条')
+        const afterHide = adminView.payload.data.items.find(comment => comment.comment === '回复第一条')
         assert.equal(afterHide.displayId, 5)
         assert.equal(afterHide.hidden, true)
 
@@ -662,8 +666,8 @@ describe('visible-comment pagination', () => {
 
         // 以普通用户视角分页(同一毫秒发布的留言 id 顺序不保证,按集合+降序断言)
         const newest = await call(viewer, 'GET', 'comments?count=3')
-        assert.deepEqual(newest.payload.data.map(comment => comment.comment).sort(), ['留言3', '留言5', '留言6'])
-        assertIdsDescending(newest.payload.data)
+        assert.deepEqual(newest.payload.data.items.map(comment => comment.comment).sort(), ['留言3', '留言5', '留言6'])
+        assertIdsDescending(newest.payload.data.items)
 
         const older = await call(viewer, 'GET', `comments?from=${posts[2].id - 1}&count=2`)
         assert.deepEqual(older.payload.data.map(comment => comment.comment), ['留言1'])
@@ -681,7 +685,7 @@ describe('visible-comment pagination', () => {
 
         // 管理员可见隐藏留言
         const adminView = await call(state, 'GET', 'comments?count=6')
-        assert.equal(adminView.payload.data.length, 6)
+        assert.equal(adminView.payload.data.items.length, 6)
     })
 
     it('keeps scanning past a fully-hidden first page on both lists', async () => {
@@ -694,8 +698,8 @@ describe('visible-comment pagination', () => {
 
         // 最新两页全隐藏,可见内容在更早位置:count=2 应返回后面的可见留言而非空
         const page = await call(viewer, 'GET', 'comments?count=2')
-        assert.deepEqual(page.payload.data.map(comment => comment.comment).sort(), ['乙1', '乙2'])
-        assertIdsDescending(page.payload.data)
+        assert.deepEqual(page.payload.data.items.map(comment => comment.comment).sort(), ['乙1', '乙2'])
+        assertIdsDescending(page.payload.data.items)
 
         const me = await call(state, 'GET', 'user/me')
         const uid = me.payload.data.id
@@ -742,7 +746,7 @@ describe('bounded main comment reads', () => {
         assert.equal(page[0].likes, 501)
     })
 
-    it('warms an exact cache for legacy comments without a trusted count', async () => {
+    it('never scans like facts on the list path and flags legacy comments for repair', async () => {
         const data = new TrackingStore()
         const id = 1752000000000999
         await data.setJSON(`comments/${id}.json`, {
@@ -755,17 +759,24 @@ describe('bounded main comment reads', () => {
         })
         await data.setJSON(`likes/${id}/legacy-user.json`, { userId: 'legacy-user' })
 
+        // 历史留言缺缓存且无 likeCountVersion=1:列表路径不得扫描点赞事实,
+        // 显示 0 并写 repair marker,由维护脚本精确重建。
         const first = await listComments(data, new URLSearchParams({ from: String(id), count: '1' }), user)
-        assert.equal(first.items[0].likes, 1)
-        assert.ok(data.listPrefixes.some(prefix => prefix === `likes/${id}/`))
+        assert.equal(first.items[0].likes, 0)
+        assert.equal(data.listPrefixes.some(prefix => prefix.startsWith('likes/')), false)
+        const marker = await data.get(`repairs/comment-like-count/${id}.json`, { type: 'json' })
+        assert.equal(marker.status, 'open')
+        assert.equal(marker.commentId, id)
 
         data.listPrefixes = []
         const second = await listComments(data, new URLSearchParams({ from: String(id), count: '1' }), user)
-        assert.equal(second.items[0].likes, 1)
-        assert.equal(data.listPrefixes.some(prefix => prefix === `likes/${id}/`), false)
+        assert.equal(second.items[0].likes, 0)
+        assert.equal(data.listPrefixes.some(prefix => prefix.startsWith('likes/')), false)
+        const markers = await data.list({ prefix: 'repairs/comment-like-count/' })
+        assert.equal(markers.blobs.length, 1, 'marker 只写一次')
     })
 
-    it('does not let delayed legacy warming overwrite a newer like count', async () => {
+    it('keeps the like cache driven by like operations, not list reads', async () => {
         const data = new DelayedCacheWarmStore()
         const id = 1752000000000888
         await data.setJSON(`comments/${id}.json`, {
@@ -782,11 +793,13 @@ describe('bounded main comment reads', () => {
             new URLSearchParams({ from: String(id), count: '1' }),
             user,
         )
-        await data.warmStarted
-        await setLike(data, id, user, true)
-        data.resolveWarmRelease()
         await listing
-
+        // 列表路径不再写点赞缓存(只可能写 repair marker)
+        assert.equal(
+            await data.get(`cache/comment-like-count/${id}.json`, { type: 'json' }),
+            null,
+        )
+        await setLike(data, id, user, true)
         assert.equal(
             (await data.get(`cache/comment-like-count/${id}.json`, { type: 'json' })).count,
             1,
@@ -825,7 +838,7 @@ describe('bounded main comment reads', () => {
         assert.equal(data.listOptions.some(options => String(options.prefix).startsWith('likes/')), false)
         assert.ok(data.maxActive > 1)
         assert.ok(data.maxActive <= 8)
-        assert.equal(page.hasMore, false)
+        assert.equal(page.hasMore, true)
         assert.equal(page.nextCursor, base + 51)
 
         data.getKeys = []
@@ -838,7 +851,49 @@ describe('bounded main comment reads', () => {
             second.items.map(comment => comment.number),
             Array.from({ length: 30 }, (_, index) => 50 - index),
         )
+        assert.equal(second.hasMore, true)
         assert.equal(second.nextCursor, base + 21)
+
+        const third = await listComments(data, new URLSearchParams({
+            count: '30',
+            cursor: String(second.nextCursor),
+            direction: 'before',
+        }), user)
+        assert.deepEqual(
+            third.items.map(comment => comment.number),
+            Array.from({ length: 20 }, (_, index) => 20 - index),
+        )
+        assert.equal(third.hasMore, false)
+        const allNumbers = [
+            ...page.items.map(comment => comment.number),
+            ...second.items.map(comment => comment.number),
+            ...third.items.map(comment => comment.number),
+        ]
+        assert.equal(new Set(allNumbers).size, 80, '分页不得重复或遗漏')
+        assert.deepEqual(allNumbers, [...allNumbers].sort((left, right) => right - left), '保持编号降序')
+
+        const newer = await listComments(data, new URLSearchParams({
+            count: '-10',
+            cursor: String(base + 20),
+            direction: 'after',
+        }), user)
+        assert.deepEqual(
+            newer.items.map(comment => comment.number),
+            Array.from({ length: 10 }, (_, index) => 30 - index),
+        )
+        assert.equal(newer.hasMore, true)
+        assert.equal(newer.nextCursor, base + 30)
+
+        const newest = await listComments(data, new URLSearchParams({
+            count: '-10',
+            cursor: String(base + 70),
+            direction: 'after',
+        }), user)
+        assert.deepEqual(
+            newest.items.map(comment => comment.number),
+            Array.from({ length: 10 }, (_, index) => 80 - index),
+        )
+        assert.equal(newest.hasMore, false)
     })
 
     it('starts an older page near its numbered cursor instead of rescanning from newest', async () => {
@@ -1268,7 +1323,7 @@ describe('hard-delete failure consistency and repair markers', () => {
     it('aborts cleanly when the tombstone write fails, leaving everything intact', async () => {
         const state = await setup('10.0.24.1')
         const posted = await call(state, 'GET', 'comments?count=5')
-        const targetId = posted.payload.data[0].id
+        const targetId = posted.payload.data.items[0].id
         const originalValues = state.stores.data.values
         state.stores.data = new FlakyStore({ setJSON: key => key.startsWith('indexes/comments/number/') })
         state.stores.data.values = originalValues
@@ -1295,7 +1350,7 @@ describe('hard-delete failure consistency and repair markers', () => {
     it('writes a repair marker when the user index delete fails', async () => {
         const state = await setup('10.0.24.2')
         const me = await call(state, 'GET', 'user/me')
-        const targetId = (await call(state, 'GET', 'comments?count=5')).payload.data[0].id
+        const targetId = (await call(state, 'GET', 'comments?count=5')).payload.data.items[0].id
         const originalValues = state.stores.data.values
         const uid = me.payload.data.id
         const byUserKey = `indexes/comments/by-user/${uid}/${String(targetId).padStart(16, '0')}.json`

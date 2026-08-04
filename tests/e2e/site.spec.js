@@ -674,7 +674,7 @@ test('留言加载失败：停止动画并提供重试入口', async ({ page }) 
   await page.goto('/')
   await liftPanel(page)
   await expect(page.locator('#comments .commentsLoadError')).toBeVisible()
-  await expect(page.locator('#loadingIndicator .loadingCircle')).toBeHidden()
+  await expect(page.locator('#comments .loadingCircle')).toHaveCount(0)
   await expect(
     page.getByRole('button', { name: /重新加载|Retry/ }),
   ).toBeVisible()

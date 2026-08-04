@@ -86,7 +86,7 @@
       </div>
     </div>
     <div
-      v-if="showCommentsLoader"
+      v-if="showCommentsLoader && !authLoading"
       class="loadingIndicator userCommentsLoading"
       aria-label="正在加载留言"
     >
@@ -186,7 +186,7 @@ const user = ref<UserProfile>(
   },
 )
 const showAction = ref(Boolean(props.profile || props.loadingAuth))
-const authLoading = ref(Boolean(props.loadingAuth))
+const authLoading = ref(false)
 const comments = ref<UserComment[]>([])
 const scrollPaused = ref(false)
 const loadingComments = ref(false)
@@ -195,6 +195,7 @@ const commentsError = ref(false)
 const toEnd = ref(false)
 const nextCursor = ref<number | string | null>(null)
 let loaderTimer: number | undefined
+let authLoaderTimer: number | undefined
 let disposed = false
 
 watch(
@@ -204,9 +205,26 @@ watch(
   },
 )
 
+watch(
+  () => props.loadingAuth,
+  (loading) => {
+    if (authLoaderTimer !== undefined) window.clearTimeout(authLoaderTimer)
+    if (!loading) {
+      authLoaderTimer = undefined
+      authLoading.value = false
+      return
+    }
+    authLoaderTimer = window.setTimeout(() => {
+      authLoading.value = true
+      authLoaderTimer = undefined
+    }, 400)
+  },
+  { immediate: true },
+)
+
 watch(loadingComments, (loading) => {
   if (loaderTimer !== undefined) window.clearTimeout(loaderTimer)
-  if (!loading) {
+  if (!loading || authLoading.value) {
     loaderTimer = undefined
     showCommentsLoader.value = false
     return
@@ -214,7 +232,7 @@ watch(loadingComments, (loading) => {
   loaderTimer = window.setTimeout(() => {
     showCommentsLoader.value = true
     loaderTimer = undefined
-  }, 200)
+  }, 400)
 })
 
 function convertAvatarPath(path: string): string {
@@ -301,9 +319,14 @@ async function getUser(): Promise<void> {
   if (props.loadingAuth) {
     const profile = await authStore.ready()
     if (disposed) return
+    if (authLoaderTimer !== undefined) {
+      window.clearTimeout(authLoaderTimer)
+      authLoaderTimer = undefined
+    }
     authLoading.value = false
     if (!profile) {
-      Popups.close()
+      // 登录状态确认后在同一容器内切换:不播完用户弹窗的离场动画再开登录框
+      Popups.closeInstant()
       Popups.show('loginPopup')
       finishPerformanceMark('user-popup-open')
       return
@@ -349,9 +372,10 @@ function handleScroll(event: Event): void {
 function gotoComment(index: number): void {
   const comment = comments.value[index]
   if (!comment) return
-  void commentsStore
-    .gotoNumber(comment.number ?? comment.id)
-    .catch(() => undefined)
+  const jump = comment.number
+    ? commentsStore.gotoNumber(comment.number)
+    : commentsStore.gotoId(comment.id)
+  void jump.catch(() => undefined)
   Popups.close()
 }
 
@@ -362,5 +386,6 @@ onMounted(() => {
 onBeforeUnmount(() => {
   disposed = true
   if (loaderTimer !== undefined) window.clearTimeout(loaderTimer)
+  if (authLoaderTimer !== undefined) window.clearTimeout(authLoaderTimer)
 })
 </script>

@@ -23,18 +23,19 @@ import { finishPerformanceMark, startPerformanceMark } from '../lib/performance'
 const emit = defineEmits<{ fullscreen: []; install: [] }>()
 const container = useTemplateRef<HTMLDivElement>('container')
 const panel = useTemplateRef<HTMLDivElement>('panel')
+const newestSentinel = useTemplateRef<HTMLDivElement>('newestSentinel')
+const oldestSentinel = useTemplateRef<HTMLDivElement>('oldestSentinel')
 const editorOpen = ref(false)
 const replyNumber = ref<number>()
 type PanelMode = 'auto' | 'forced-up' | 'forced-down'
 const panelMode = ref<PanelMode>('auto')
 const pinnedHidden = computed(() => Settings.pinnedHidden)
+const showInitialLoadingHint = ref(false)
+let initialLoadingHintTimer: number | undefined
 let scrollPaused = false
 let pauseTimer: number | undefined
-let scrollTimer: number | undefined
-const showLeadingLoader = ref(false)
-const showTrailingLoader = ref(false)
-let leadingLoaderTimer: number | undefined
-let trailingLoaderTimer: number | undefined
+let paginationObserver: IntersectionObserver | undefined
+let bodyObserver: MutationObserver | undefined
 let pointerInside = false
 let previousOverscroll: { document: string; body: string } | undefined
 
@@ -147,9 +148,14 @@ async function loadNewer(): Promise<void> {
   const element = container.value
   const anchor = element?.querySelector<HTMLElement>('.commentItem')
   const before = anchor?.getBoundingClientRect()
-  await commentsStore.loadNewer(
-    document.body.classList.contains('fullscreen') ? 18 : 10,
-  )
+  await commentsStore
+    .loadNewer(document.body.classList.contains('fullscreen') ? 18 : 10)
+    .catch(() => {
+      FloatMsgs.show({
+        type: 'error',
+        msg: '<span class="ui zh">加载新留言失败</span><span class="ui en">Failed to load newer messages</span>',
+      })
+    })
   await nextTick()
   if (element && anchor && before) {
     const after = anchor.getBoundingClientRect()
@@ -159,27 +165,87 @@ async function loadNewer(): Promise<void> {
   }
 }
 
-function handleScroll(): void {
+async function loadOlder(): Promise<void> {
+  await commentsStore.loadOlder().catch(() => {
+    FloatMsgs.show({
+      type: 'error',
+      msg: '<span class="ui zh">加载历史留言失败</span><span class="ui en">Failed to load older messages</span>',
+    })
+  })
+}
+
+function checkNewest(): void {
   if (
-    scrollPaused ||
-    !container.value ||
-    !commentsStore.state.items.length ||
-    commentsStore.state.jumping
+    commentsStore.state.jumping ||
+    commentsStore.state.loadingInitial ||
+    commentsStore.state.loadingNewer ||
+    commentsStore.state.reachedNewest
   )
     return
-  updateVisibleTime()
-  const element = container.value
+  void loadNewer()
+}
+
+function checkOldest(): void {
+  if (
+    commentsStore.state.jumping ||
+    commentsStore.state.loadingInitial ||
+    commentsStore.state.loadingOlder ||
+    commentsStore.state.reachedOldest
+  )
+    return
+  void loadOlder()
+}
+
+function setupPaginationObserver(): void {
+  if (paginationObserver) return
+  paginationObserver = new IntersectionObserver(
+    (entries) => {
+      for (const entry of entries) {
+        if (!entry.isIntersecting) continue
+        if (entry.target === newestSentinel.value) checkNewest()
+        else if (entry.target === oldestSentinel.value) checkOldest()
+      }
+    },
+    {
+      root: container.value,
+      threshold: 0,
+    },
+  )
+  if (newestSentinel.value) paginationObserver.observe(newestSentinel.value)
+  if (oldestSentinel.value) paginationObserver.observe(oldestSentinel.value)
+}
+
+function disposePaginationObserver(): void {
+  paginationObserver?.disconnect()
+  paginationObserver = undefined
+}
+
+function sentinelInView(
+  element: HTMLDivElement | null | undefined,
+  rootElement: HTMLDivElement | null,
+): boolean {
+  if (!element || !rootElement) return false
+  const target = element.getBoundingClientRect()
+  const root = rootElement.getBoundingClientRect()
+  const pad = 8
   const vertical = document.body.classList.contains('fullscreen')
-  const start = vertical ? element.scrollTop : element.scrollLeft
-  const end = vertical
-    ? element.scrollHeight - element.clientHeight - element.scrollTop
-    : element.scrollWidth - element.clientWidth - element.scrollLeft
-  const threshold =
-    (currentItem()?.getBoundingClientRect()[vertical ? 'height' : 'width'] ??
-      80) / 8
-  if (start <= threshold && !commentsStore.state.reachedNewest) void loadNewer()
-  if (end <= threshold && !commentsStore.state.reachedOldest)
-    void commentsStore.loadOlder()
+  return vertical
+    ? target.bottom > root.top + pad && target.top < root.bottom - pad
+    : target.right > root.left + pad && target.left < root.right - pad
+}
+
+function requestPaginationCheck(): void {
+  void nextTick(() => {
+    // 布局变化(分页追加/隐藏置顶/全屏切换)后按当前几何位置复核,
+    // 避免 sentinel 已被推出视口却仍触发请求
+    if (sentinelInView(newestSentinel.value, container.value)) checkNewest()
+    if (sentinelInView(oldestSentinel.value, container.value)) checkOldest()
+  })
+}
+
+function handleScroll(): void {
+  if (scrollPaused || !container.value) return
+  updateVisibleTime()
 }
 
 watch(
@@ -209,6 +275,32 @@ watch(
     commentsStore.finishJump()
   },
   { flush: 'post' },
+)
+
+watch(
+  () => commentsStore.state.items,
+  () => requestPaginationCheck(),
+  { flush: 'post' },
+)
+
+function delayInitialLoadingHint(loading: boolean): void {
+  if (initialLoadingHintTimer !== undefined)
+    window.clearTimeout(initialLoadingHintTimer)
+  if (!loading) {
+    initialLoadingHintTimer = undefined
+    showInitialLoadingHint.value = false
+    return
+  }
+  initialLoadingHintTimer = window.setTimeout(() => {
+    showInitialLoadingHint.value = true
+    initialLoadingHintTimer = undefined
+  }, 400)
+}
+
+watch(
+  () => commentsStore.state.loadingInitial,
+  (loading) => delayInitialLoadingHint(loading),
+  { immediate: true },
 )
 
 function handleWheel(event: WheelEvent): void {
@@ -244,40 +336,6 @@ function retryInitialLoad(): void {
   void commentsStore.initialize().catch(() => undefined)
 }
 
-function delayLoader(
-  loading: boolean,
-  target: typeof showLeadingLoader,
-  timer: 'leading' | 'trailing',
-): void {
-  const current = timer === 'leading' ? leadingLoaderTimer : trailingLoaderTimer
-  if (current !== undefined) window.clearTimeout(current)
-  if (!loading) {
-    target.value = false
-    if (timer === 'leading') leadingLoaderTimer = undefined
-    else trailingLoaderTimer = undefined
-    return
-  }
-  const next = window.setTimeout(() => {
-    target.value = true
-    if (timer === 'leading') leadingLoaderTimer = undefined
-    else trailingLoaderTimer = undefined
-  }, 200)
-  if (timer === 'leading') leadingLoaderTimer = next
-  else trailingLoaderTimer = next
-}
-
-watch(
-  () => commentsStore.state.loadingNewer,
-  (loading) => delayLoader(loading, showLeadingLoader, 'leading'),
-  { immediate: true },
-)
-
-watch(
-  () => commentsStore.state.loadingInitial || commentsStore.state.loadingOlder,
-  (loading) => delayLoader(loading, showTrailingLoader, 'trailing'),
-  { immediate: true },
-)
-
 function hidePinned(): void {
   Settings.pinnedHidden = true
   FloatMsgs.show({
@@ -311,7 +369,12 @@ onMounted(() => {
   document.addEventListener('elytrue:seek-comment', onSeek)
   document.addEventListener('elytrue:open-comment-editor', onOpenEditor)
   document.addEventListener('pointermove', handleDocumentPointerMove)
-  scrollTimer = window.setInterval(handleScroll, 1_000)
+  setupPaginationObserver()
+  bodyObserver = new MutationObserver(() => requestPaginationCheck())
+  bodyObserver.observe(document.body, {
+    attributes: true,
+    attributeFilter: ['class'],
+  })
   if (getConfig('showTimeline') === 'false')
     document
       .getElementById('timelineContainer')
@@ -325,10 +388,11 @@ onBeforeUnmount(() => {
   document.removeEventListener('elytrue:open-comment-editor', onOpenEditor)
   document.removeEventListener('pointermove', handleDocumentPointerMove)
   if (pauseTimer !== undefined) window.clearTimeout(pauseTimer)
-  if (scrollTimer !== undefined) window.clearInterval(scrollTimer)
-  if (leadingLoaderTimer !== undefined) window.clearTimeout(leadingLoaderTimer)
-  if (trailingLoaderTimer !== undefined)
-    window.clearTimeout(trailingLoaderTimer)
+  if (initialLoadingHintTimer !== undefined)
+    window.clearTimeout(initialLoadingHintTimer)
+  disposePaginationObserver()
+  bodyObserver?.disconnect()
+  bodyObserver = undefined
   panelMode.value = 'auto'
   setOverscrollContainment(false)
   document.body.classList.remove('touchKeyboardShowing')
@@ -353,9 +417,22 @@ defineExpose({ forceLowerPanelDown, forceLowerPanelUp, pauseScroll })
       <span class="ui zh">今日留言: </span
       ><span class="ui en">Messages today: </span
       ><span id="todayCommentCount">{{ commentsStore.state.todayCount }}</span>
+      <span v-if="showInitialLoadingHint" id="commentsLoadingHint" class="ui zh"
+        >正在加载留言…</span
+      >
     </div>
     <div id="comments" ref="container" class="noscrollbar">
-      <div v-show="!pinnedHidden" id="topComment" class="commentBox">
+      <div
+        ref="newestSentinel"
+        class="paginationSentinel"
+        data-direction="newer"
+        aria-hidden="true"
+      ></div>
+      <div
+        v-show="!pinnedHidden"
+        id="topComment"
+        class="commentBox commentVisualCard"
+      >
         <img class="bg" src="/assets/elytrue-20260724/bg/portrait1.webp" />
         <div class="bgcover"></div>
         <img class="avatar" src="/res/favicon-320.png" />
@@ -414,17 +491,11 @@ defineExpose({ forceLowerPanelDown, forceLowerPanelUp, pauseScroll })
         @focus="forceLowerPanelUp"
         @sent="handleSent"
       />
-      <div
-        id="loadingIndicatorBefore"
-        class="commentBox loadingIndicator"
-        :style="{ display: showLeadingLoader ? '' : 'none' }"
-      >
-        <div class="loadingCircle"></div>
-      </div>
       <CommentCard
-        v-for="record in commentsStore.state.items"
+        v-for="(record, index) in commentsStore.state.items"
         :key="record.id"
         :record="record"
+        :eager="index < 4"
         @lift="forceLowerPanelUp"
         @reply="openEditor"
       />
@@ -432,7 +503,7 @@ defineExpose({ forceLowerPanelDown, forceLowerPanelUp, pauseScroll })
         v-if="
           commentsStore.state.initialError && !commentsStore.state.items.length
         "
-        class="commentBox loadingIndicator commentsLoadError"
+        class="commentBox commentsLoadError"
       >
         <span class="ui zh">留言加载失败</span>
         <span class="ui en">Failed to load messages</span>
@@ -441,12 +512,11 @@ defineExpose({ forceLowerPanelDown, forceLowerPanelUp, pauseScroll })
         </button>
       </div>
       <div
-        id="loadingIndicator"
-        class="commentBox loadingIndicator"
-        :style="{ display: showTrailingLoader ? '' : 'none' }"
-      >
-        <div class="loadingCircle"></div>
-      </div>
+        ref="oldestSentinel"
+        class="paginationSentinel"
+        data-direction="older"
+        aria-hidden="true"
+      ></div>
     </div>
     <TimelinePanel />
     <button
