@@ -1,6 +1,7 @@
 import test from 'node:test'
 import assert from 'node:assert/strict'
-import { middleware } from '../middleware.js'
+import { middleware, RATE_LIMIT_POLICIES } from '../middleware.js'
+import { resolveTrustedClientAddress } from '../shared/client-identity.js'
 
 class MemoryKV {
     values = new Map()
@@ -10,6 +11,7 @@ class MemoryKV {
     }
 
     async put(key, value) {
+        assert.match(key, /^[A-Za-z0-9_]+$/u)
         this.values.set(key, String(value))
     }
 
@@ -28,9 +30,14 @@ class MemoryKV {
     }
 }
 
-function createContext(pathname, kv, clientIp = '203.0.113.10') {
+function createContext(pathname, kv, clientIp = '203.0.113.10', options = {}) {
+    const request = new Request(`https://preview.example${pathname}`, {
+        method: options.method || 'POST',
+        headers: options.headers,
+    })
+    if (options.edgeIp) Object.defineProperty(request, 'eo', { value: { clientIp: options.edgeIp } })
     return {
-        request: new Request(`https://preview.example${pathname}`, { method: 'POST' }),
+        request,
         clientIp,
         env: { ELYTRUE_RATE_LIMIT_KV: kv },
         next: () => new Response('next'),
@@ -38,6 +45,28 @@ function createContext(pathname, kv, clientIp = '203.0.113.10') {
         waitUntil: (promise) => promise,
     }
 }
+
+test('rate-limit policy actions produce valid EdgeOne KV keys', () => {
+    for (const policy of Object.values(RATE_LIMIT_POLICIES)) {
+        assert.match(policy.action, /^[A-Za-z0-9_]+$/u)
+    }
+})
+
+test('trusted platform identity overrides forged proxy headers', () => {
+    const request = new Request('https://preview.example/api/user/register', {
+        headers: {
+            'x-forwarded-for': '198.51.100.90',
+            'cf-connecting-ip': '198.51.100.91',
+        },
+    })
+    Object.defineProperty(request, 'eo', { value: { clientIp: '203.0.113.20' } })
+    assert.equal(
+        resolveTrustedClientAddress(request, { clientIp: '203.0.113.21' }),
+        '203.0.113.20',
+    )
+    const untrustedOnly = new Request(request.url, { headers: request.headers })
+    assert.equal(resolveTrustedClientAddress(untrustedOnly, {}), null)
+})
 
 test('middleware applies document-only CSP while keeping API and binary responses distinct', async () => {
     const htmlContext = createContext('/', new MemoryKV())
@@ -119,6 +148,44 @@ test('middleware does not create a site-wide registration bucket without a clien
         assert.equal(response.status, 200)
     }
     assert.equal(kv.values.size, 0)
+})
+
+test('forged proxy headers cannot create or switch a rate-limit bucket', async () => {
+    const kv = new MemoryKV()
+    for (let index = 0; index < 25; index += 1) {
+        const context = createContext('/api/user/register', kv, '', {
+            headers: { 'x-forwarded-for': `198.51.100.${index}` },
+        })
+        assert.equal((await middleware(context)).status, 200)
+    }
+    assert.equal(kv.values.size, 0)
+})
+
+test('only configured methods consume a rate-limit window', async () => {
+    const kv = new MemoryKV()
+    for (const method of ['GET', 'HEAD', 'OPTIONS', 'DELETE']) {
+        const response = await middleware(createContext('/api/user/register', kv, '203.0.113.30', { method }))
+        assert.equal(response.status, 200)
+    }
+    assert.equal(kv.values.size, 0)
+    await middleware(createContext('/api/user/register', kv, '203.0.113.30'))
+    assert.equal(kv.values.size, 1)
+})
+
+test('a new fixed window restores the edge allowance', async () => {
+    const kv = new MemoryKV()
+    const originalNow = Date.now
+    try {
+        Date.now = () => 1_800_000_000_000
+        for (let index = 0; index < 5; index += 1) {
+            assert.equal((await middleware(createContext('/api/user/recover', kv))).status, 200)
+        }
+        assert.equal((await middleware(createContext('/api/user/recover', kv))).status, 429)
+        Date.now = () => 1_800_003_600_000
+        assert.equal((await middleware(createContext('/api/user/recover', kv))).status, 200)
+    } finally {
+        Date.now = originalNow
+    }
 })
 
 test('middleware keeps canonical host redirect ahead of API handling', async () => {

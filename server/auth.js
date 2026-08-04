@@ -331,17 +331,19 @@ export async function getSession(data, request, { slide = true, env = {} } = {})
 export async function requireSession(data, request, { csrf = true, env = {} } = {}) {
     const auth = await getSession(data, request, { env })
     if (!auth) throw httpError(401, '请先登录')
-    if (csrf) {
-        const csrfHeader = request.headers.get('x-csrf-token') || ''
-        if (
-            !csrfHeader
-            || csrfHeader !== auth.session.csrfToken
-            || sha256(csrfHeader) !== auth.session.csrfHash
-        ) {
-            throw httpError(403, '安全校验失败，请刷新页面后重试')
-        }
-    }
+    if (csrf) verifyCsrfToken(auth, request)
     return auth
+}
+
+export function verifyCsrfToken(auth, request) {
+    const csrfHeader = request.headers.get('x-csrf-token') || ''
+    if (
+        !csrfHeader
+        || csrfHeader !== auth.session.csrfToken
+        || sha256(csrfHeader) !== auth.session.csrfHash
+    ) {
+        throw httpError(403, '安全校验失败，请刷新页面后重试')
+    }
 }
 
 export async function destroySession(data, request, auth, env = {}) {

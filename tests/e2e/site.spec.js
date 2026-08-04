@@ -426,7 +426,7 @@ test('回复：点击回复出现引用块，发送后新卡片含回复引用',
   await expect(replyCard.locator('.reply-quote .quote-id')).toHaveText('#1')
 })
 
-test('点赞快速双击只计一次，且无网络错误提示', async ({ page }) => {
+test('点赞支持键盘操作，快速重复触发只计一次', async ({ page }) => {
   await page.goto('/')
   await expectVisitor(page)
 
@@ -449,8 +449,10 @@ test('点赞快速双击只计一次，且无网络错误提示', async ({ page 
     await route.continue()
   })
 
-  await likeBtn.click()
+  await likeBtn.focus()
+  await page.keyboard.press('Enter')
   await expect(likeBtn).toHaveClass(/busy/)
+  await expect(likeBtn).toHaveAttribute('aria-pressed', 'true')
   await expect.poll(() => likeRequests).toBe(1)
   await likeBtn.click({ force: true })
   expect(likeRequests).toBe(1)

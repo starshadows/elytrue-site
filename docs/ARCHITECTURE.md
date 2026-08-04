@@ -23,7 +23,7 @@ middleware.js：Edge Runtime / Web APIs / ES2023+
   ├─ 静态 HTML、/assets/*、/res/* ──> EdgeOne 静态资源
   └─ /api/* ──> middleware.js（边缘跳转/限流/按内容类型附加安全头）
                   └─ cloud-functions/api/[[default]].js
-                       └─ server/app.js + routes/registry.js
+                        └─ server/app.js + routes/registry.js + routes/policy.js
                             ├─ middleware/：来源、环境、身份
                              ├─ services/：图片、账号恢复、举报与管理员用例
                             ├─ repositories/：图片、用户、举报的一致性存储访问
@@ -45,7 +45,7 @@ Comments store 以 `jumping` 和 `jumpNumber` 管理公开编号跳转：请求�
 
 ## API 与存储兼容
 
-`server/routes/registry.js` 声明 method、path、鉴权、CSRF 和管理员要求；`server/domain/blob-keys.js` 集中生产 key。下列合同保持不变：
+`server/routes/registry.js` 声明 method、path、鉴权、CSRF 和管理员要求；`routes/policy.js` 在调用 Handler 前统一执行来源检查、Session 解析、角色与 CSRF 策略，启动时同时验证每条声明都有完整策略和实际 Handler。`server/domain/blob-keys.js` 集中生产 key。下列合同保持不变：
 
 - Blob Store：`elytrue-data`、`elytrue-uploads`。
 - Cookie 名称/属性、CSRF 流程、密码散列和邮箱加密格式。
@@ -67,6 +67,18 @@ Comments store 以 `jumping` 和 `jumpNumber` 管理公开编号跳转：请求�
 
 新留言会建立按内部留言 ID 指向公开编号的轻量反向记录；新举报同时保存 `commentNumber`。读取历史举报时依次使用举报字段、仍存在的留言本体和反向记录。仅对无法解析且已删除的旧举报执行每页 100、最多 10 页的兼容扫描，结果（含未命中）缓存 5 分钟，命中后渐进回填举报与反向记录；不要求生产全量迁移。
 
+### 留言读取
+
+- 主时间线优先从 `meta/comments-number-hint.json` 向下读取稳定编号座位，每次受 `scanCap` 限制；`cursor + direction` 表示严格的内部 ID 分页边界，公开编号跳转和历史 `from` 语义保持不变。仅当编号索引不存在或不足以覆盖历史未编号数据时回退旧 `comments/` 枚举。
+- 新留言保留 `likeCount: 0` 作为兼容字段，但精确计数始终以 `likes/{id}/{uid}.json` 记录为准，避免无 CAS 的留言本体聚合在并发下永久覆盖新值；点赞/取消点赞的 `onlyIfNew` 记录保持幂等，响应直接返回 `{ liked, likes }`，旧客户端 envelope 兼容。
+- 一页内的 `replyid` 先去重，再直接读取目标留言并返回最小 `replyPreview`；目标删除或对当前用户不可见时返回删除占位，不暴露隐藏内容。`CommentCard` 不再挂载后逐卡发请求。
+
+### 图片操作
+
+- 上传和删除分别写 `operations/image-uploads/{imageId}.json` 与 `operations/image-deletes/{imageId}.json`。上传别名失败会删除本次 Blob；补偿失败或用量缓存失败保留未完成 phase，供只读审计定位。
+- 删除先用 `onlyIfNew` 认领操作，再按 Blob、alias、usage 阶段推进；扣减前先持久化 `usage-adjusting`，无法判定扣减是否落盘时转为 `usage-repair-needed`，不冒险重复扣减。其余部分失败写 `lastError` 并可重试，完成后重复请求保持幂等。
+- alias/物理 Blob inventory 是恢复依据，`usage/uploads.json` 是可重建缓存。`npm run audit:uploads` 只读报告孤立 Blob、悬空别名、非法 size、未完成 operation 和用量偏差；显式运行 `scripts/rebuild-usage.mjs --fix --confirm-production-migration` 会在重算后完成 `usage-repair-needed` marker，部署不会自动删除或迁移数据。
+
 ## 缓存与 CSP
 
 - `/assets/*` 是 Vite hash 或 `elytrue-20260724` 版本目录：`public, max-age=31536000, immutable`。
@@ -80,11 +92,9 @@ Comments store 以 `jumping` 和 `jumpNumber` 管理公开编号跳转：请求�
 
 `check:runtime` 同时运行无 Node 类型的 WebWorker/ES2023 middleware 类型检查和导入静态扫描，并阻断 Node 21+ 的 SQLite、`process.getBuiltinModule`、新版 `import.meta` 与文件系统 glob API。`check:server` 使用独立 `tsconfig.server.json` 和 Node 20 类型对生产服务端做 `checkJs`，已启用 `strictNullChecks`、`noUncheckedIndexedAccess`、`alwaysStrict` 等增量严格选项；`test:server` 不加载 Vite、Vue SFC 或 Playwright。`check:build` 扫描最终部署资源，证明服务端、测试、维护脚本、环境文件、source map、EdgeOne CLI 和 Node 专属模块不进入前端 bundle。
 
-2026-08-03 本次交互状态收尾未启动或安装 Chromium；Playwright/E2E 按任务要求未执行。
-
 ## 平台限制
 
 - Blob 单 key 强一致读取与 `onlyIfNew` 可用，但跨 key 业务事务依赖补偿回滚。
-- KV 读改写不是跨边缘原子计数；Cloud Functions 进程内限流只提供单实例第二层保护。
-- `usage/uploads.json` 跨实例增减可能偏差，使用 `scripts/rebuild-usage.mjs` 只读核对或显式确认修复。
+- Edge KV 只有读写、没有原子增量/CAS，固定窗口是多节点 best-effort 计数；Cloud Functions 进程内限流只提供单实例第二层保护。可信地址只来自平台上下文，伪造转发 Header 不参与身份。
+- `usage/uploads.json` 跨实例增减可能偏差，使用 `npm run audit:uploads` 做物理一致性审计，再按授权使用 `scripts/rebuild-usage.mjs` 只读核对或显式确认修复。
 - 真实 Blob 集成测试需要独立非生产项目凭据，默认安全跳过；普通 CI 不访问真实 Blob/KV。

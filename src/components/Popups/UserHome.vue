@@ -1,7 +1,15 @@
 <template>
   <div class="userHome" @scroll="handleScroll">
     <div class="userinfo">
-      <img :src="convertAvatarPath(user.avatar)" @click="viewUserAvatar" />
+      <img
+        :src="convertAvatarPath(user.avatar)"
+        :alt="`${user.name}的头像`"
+        role="button"
+        tabindex="0"
+        @click="viewUserAvatar"
+        @keydown.enter="viewUserAvatar"
+        @keydown.space.prevent="viewUserAvatar"
+      />
       <div>
         <div>{{ user.name }}</div>
         <div>
@@ -61,8 +69,16 @@
           </li>
         </ul>
       </div>
-      <div v-if="user.role === 'admin'" @click="openAdmin">
-        <img src="/res/edit.svg" /><span class="ui zh">管理举报与留言</span
+      <div
+        v-if="user.role === 'admin'"
+        role="button"
+        tabindex="0"
+        @click="openAdmin"
+        @keydown.enter="openAdmin"
+        @keydown.space.prevent="openAdmin"
+      >
+        <img src="/res/edit.svg" alt="" /><span class="ui zh"
+          >管理举报与留言</span
         ><span class="ui en">Moderation</span>
       </div>
     </div>
@@ -76,14 +92,28 @@
         }}<span>#{{ item.number ?? item.displayId ?? item.id }}</span>
       </p>
       <p>
-        <span @click="gotoComment(index)">{{ item.comment }}</span>
+        <span
+          role="button"
+          tabindex="0"
+          @click="gotoComment(index)"
+          @keydown.enter="gotoComment(index)"
+          @keydown.space.prevent="gotoComment(index)"
+          >{{ item.comment }}</span
+        >
         <i></i>
         <img
           v-for="image in item.images"
           :key="image"
           :src="`/api/data/images/posts/${image}.jpg`"
           loading="lazy"
+          alt="留言图片"
+          role="button"
+          tabindex="0"
           @click="viewImageUrl(`/api/data/images/posts/${image}.jpg`)"
+          @keydown.enter="viewImageUrl(`/api/data/images/posts/${image}.jpg`)"
+          @keydown.space.prevent="
+            viewImageUrl(`/api/data/images/posts/${image}.jpg`)
+          "
         />
       </p>
     </div>

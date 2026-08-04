@@ -2,7 +2,8 @@ import assert from 'node:assert/strict'
 import { describe, it } from 'node:test'
 import { handleApiRequest } from '../server/app.js'
 import { MemoryStore } from '../server/storage.js'
-import { createComment, newCommentId, shanghaiDateString } from '../server/comments.js'
+import { createComment, listComments, newCommentId, shanghaiDateString } from '../server/comments.js'
+import { resetMemoryRateLimitsForTests } from '../server/rate-limit.js'
 
 class FlakyStore extends MemoryStore {
     constructor(failures = {}) {
@@ -11,13 +12,25 @@ class FlakyStore extends MemoryStore {
     }
 
     async setJSON(key, value, options = {}) {
-        if (this.failures.setJSON?.(key, options)) throw new Error('injected setJSON failure')
+        if (this.failures.setJSON?.(key, options, value)) throw new Error('injected setJSON failure')
         return super.setJSON(key, value, options)
     }
 
     async delete(key) {
         if (this.failures.delete?.(key)) throw new Error('injected delete failure')
         return super.delete(key)
+    }
+}
+
+class TrackingStore extends MemoryStore {
+    constructor() {
+        super()
+        this.listPrefixes = []
+    }
+
+    async list(options = {}) {
+        this.listPrefixes.push(options.prefix || '')
+        return super.list(options)
     }
 }
 
@@ -150,6 +163,14 @@ describe('stable public comment numbers', () => {
         assert.equal(reply.number, 5)
         assert.equal(reply.replyid, published.a.id, 'replyid 应解析为内部 ID')
         published.reply = reply
+        const listed = await call(state, 'GET', 'comments?count=10')
+        const replyRecord = listed.payload.data.find(comment => comment.id === reply.id)
+        assert.deepEqual(replyRecord.replyPreview, {
+            displayId: 1,
+            sender: '编号用户',
+            avatar: '',
+            comment: '第一条',
+        })
     })
 
     it('keeps numbers unaffected by hide and restore', async () => {
@@ -207,6 +228,23 @@ describe('stable public comment numbers', () => {
         const numbers = results.map(result => result.payload.data.number)
         assert.equal(new Set(numbers).size, 2)
         assert.deepEqual(numbers.slice().sort(), numbers)
+    })
+
+    it('derives concurrent likes from authoritative like records', async () => {
+        const pair = [createState('10.0.5.4'), createState('10.0.5.5')]
+        const stores = { data: new MemoryStore(), uploads: new MemoryStore() }
+        pair.forEach(state => { state.stores = stores })
+        await register(pair[0], '点赞甲', 'like-a@example.com')
+        await register(pair[1], '点赞乙', 'like-b@example.com')
+        const comment = await postComment(pair[0], '并发点赞留言')
+
+        const results = await Promise.all(pair.map(state =>
+            call(state, 'POST', `comments/like?commentId=${comment.id}`)))
+        assert.ok(results.every(result => result.payload.data.likes >= 1))
+        assert.equal(Math.max(...results.map(result => result.payload.data.likes)), 2)
+
+        const listed = await call(pair[0], 'GET', `comments?number=${comment.number}`)
+        assert.equal(listed.payload.data[0].likes, 2)
     })
 })
 
@@ -575,6 +613,33 @@ describe('visible-comment pagination', () => {
     })
 })
 
+describe('bounded main comment reads', () => {
+    it('uses stable number seats instead of listing every comment key', async () => {
+        const data = new TrackingStore()
+        const ids = [1752000000000001, 1752000000000002, 1752000000000003]
+        for (const [index, id] of ids.entries()) {
+            await createComment(data, user, { comment: `有界读取${index + 1}` }, {
+                idFactory: () => id,
+            })
+        }
+        data.listPrefixes = []
+        const page = await listComments(data, new URLSearchParams({ count: '2' }), user)
+        assert.deepEqual(page.items.map(comment => comment.id), ids.slice(1).reverse())
+        assert.equal(data.listPrefixes.includes('comments/'), false)
+        assert.equal(data.listPrefixes.filter(prefix => prefix.startsWith('likes/')).length, 2)
+    })
+
+    it('counts likes across Blob list pages', async () => {
+        const data = new MemoryStore()
+        const comment = await createComment(data, user, { comment: '分页点赞计数' })
+        await Promise.all(Array.from({ length: 501 }, (_, index) =>
+            data.setJSON(`likes/${comment.id}/user-${index}.json`, { userId: `user-${index}` })))
+
+        const page = await listComments(data, new URLSearchParams({ number: String(comment.number) }), user)
+        assert.equal(page[0].likes, 501)
+    })
+})
+
 describe('comment image status consistency', () => {
     const state = createState('10.0.12.1')
     const png = 'iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mP8/x8AAusB9Wl2nfsAAAAASUVORK5CYII='
@@ -686,9 +751,9 @@ describe('upload usage accounting', () => {
         assert.equal(removed.response.status, 200)
         assert.equal(await usageBytes(), afterUploads - Buffer.from(png, 'base64').length)
 
-        // 重复删除 404,不重复扣减
+        // 重复删除幂等成功,不重复扣减
         const again = await call(state, 'DELETE', `uploads/image?imageId=${id2}`)
-        assert.equal(again.response.status, 404)
+        assert.equal(again.response.status, 200)
         assert.equal(await usageBytes(), afterUploads - Buffer.from(png, 'base64').length)
     })
 
@@ -723,6 +788,76 @@ describe('upload usage accounting', () => {
         assert.equal(after, before - oneImage + oneImage, '旧 pending 被清理,新图计入')
         assert.equal(await state.stores.data.get(`uploads/aliases/comments/${stale}.json`, { type: 'json' }), null)
         assert.ok(fresh)
+    })
+
+    it('claims concurrent deletes once and never double-decrements usage', async () => {
+        resetMemoryRateLimitsForTests()
+        const id = await upload()
+        const before = await usageBytes()
+        const results = await Promise.all([
+            call(state, 'DELETE', `uploads/image?imageId=${id}`),
+            call(state, 'DELETE', `uploads/image?imageId=${id}`),
+        ])
+        const statuses = results.map(result => result.response.status)
+        assert.ok(statuses.includes(200))
+        assert.ok(statuses.every(status => status === 200 || status === 409))
+        assert.equal(await usageBytes(), before - Buffer.from(png, 'base64').length)
+        assert.equal((await call(state, 'DELETE', `uploads/image?imageId=${id}`)).response.status, 200)
+        assert.equal(await usageBytes(), before - Buffer.from(png, 'base64').length)
+    })
+
+    it('does not repeat an ambiguous usage decrement after the marker write fails', async () => {
+        const id = await upload()
+        const before = await usageBytes()
+        const data = state.stores.data
+        const flaky = new FlakyStore()
+        flaky.values = data.values
+        flaky.failures.setJSON = (key, _options, value) =>
+            key === `operations/image-deletes/${id}.json` && value?.usageApplied === true
+        state.stores.data = flaky
+
+        const failed = await call(state, 'DELETE', `uploads/image?imageId=${id}`)
+        assert.equal(failed.response.status, 500)
+        const afterFirst = await usageBytes()
+        assert.equal(afterFirst, before - Buffer.from(png, 'base64').length)
+
+        flaky.failures.setJSON = null
+        const retried = await call(state, 'DELETE', `uploads/image?imageId=${id}`)
+        assert.equal(retried.response.status, 200)
+        assert.equal(await usageBytes(), afterFirst)
+        const operation = await flaky.get(`operations/image-deletes/${id}.json`, { type: 'json' })
+        assert.equal(operation.phase, 'usage-repair-needed')
+    })
+})
+
+describe('upload compensation operations', () => {
+    const png = 'iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mP8/x8AAusB9Wl2nfsAAAAASUVORK5CYII='
+
+    it('removes the uploaded Blob when alias creation fails', async () => {
+        const state = createState('10.0.10.20')
+        state.stores.data = new FlakyStore()
+        await register(state, '补偿用户', 'compensate@example.com')
+        state.stores.data.failures.setJSON = key => key.startsWith('uploads/aliases/comments/')
+        const result = await call(state, 'POST', 'uploads/image', { image: png })
+        assert.equal(result.response.status, 500)
+        assert.equal((await state.stores.uploads.list({ prefix: 'comments/' })).blobs.length, 0)
+        const operations = await state.stores.data.list({ prefix: 'operations/image-uploads/' })
+        const operation = await state.stores.data.get(operations.blobs[0].key, { type: 'json' })
+        assert.equal(operation.phase, 'rolled-back')
+    })
+
+    it('keeps a committed alias usable when the usage cache write fails', async () => {
+        const state = createState('10.0.10.21')
+        state.stores.data = new FlakyStore()
+        await register(state, '用量修复用户', 'usage-repair@example.com')
+        state.stores.data.failures.setJSON = key => key === 'usage/uploads.json'
+        const result = await call(state, 'POST', 'uploads/image', { image: png })
+        assert.equal(result.response.status, 201)
+        const imageId = result.payload.data.imageId
+        assert.ok(await state.stores.data.get(`uploads/aliases/comments/${imageId}.json`, { type: 'json' }))
+        const operation = await state.stores.data.get(`operations/image-uploads/${imageId}.json`, { type: 'json' })
+        assert.equal(operation.phase, 'usage-repair-needed')
+        assert.equal(operation.usageApplied, false)
     })
 })
 

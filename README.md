@@ -66,11 +66,16 @@ npm run test:server
 npm run check:assets
 npm run build:edgeone
 npm run test:e2e
+npm run audit:uploads # 需要 EdgeOne 凭据，只读审计图片与用量
 ```
 
 CI 的 `verify` 和 `e2e` 使用 Node 22.17.1；独立 `server-node20` 任务只运行 `check:server` 与 `test:server`，不会导入 Vite、Vue SFC 或 Playwright。
 
 页面安全头由 Edge Runtime 按响应类型附加：HTML 保持 `script-src 'self'`，API JSON 与图片二进制不附加页面 CSP；所有 HTTPS 响应带一年期、含子域但不含 preload 的 HSTS。会话 Cookie 的 `Secure` 依次依据边缘转发协议、请求 URL 和 `PUBLIC_SITE_URL`，因此 EdgeOne TLS 终止后的内部 HTTP URL 与本地 HTTP Mock 均保持正确行为。
+
+API 路由的 `auth` 与 `csrf` 声明由统一分发策略实际执行，Handler 不再各自重复通用权限检查。留言列表优先按稳定公开编号座位进行有界读取，直接返回由幂等点赞记录计算的计数与回复摘要；历史未编号留言继续兼容读取，不要求自动全量迁移。
+
+Edge KV 固定窗口限流是多节点 best-effort 保护，可信客户端地址只取平台 `request.eo.clientIp` 或运行时注入的 `context.clientIp`，不信任转发 Header。Cloud Functions 另有单实例内存限流；生产仍应配置 EdgeOne WAF/频率控制，代码不宣称严格全局计数。
 
 ## 账号恢复密钥
 
@@ -88,6 +93,6 @@ CI 的 `verify` 和 `e2e` 使用 Node 22.17.1；独立 `server-node20` 任务只
 
 ## 权利与使用说明
 
-仓库公开用于项目展示、学习和协作查看。仓库未附带开源许可证，也未主动授予复制、修改或再分发代码及素材的许可。
+仓库公开用于项目展示、学习和协作查看。仓库未附带开源许可证，也未主动授予复制、修改或再分发代码的许可；本站原创文字与页面内容同样不因公开而获得再分发许可，第三方素材继续受各自权利人的规则约束。
 
 素材来源与画师致谢见 [ASSETS.md](ASSETS.md)，完整权利说明见 [NOTICE.md](NOTICE.md)。角色、作品、图片与音乐权利归各自原作者或官方权利人所有。

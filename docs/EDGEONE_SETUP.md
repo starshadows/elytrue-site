@@ -40,7 +40,9 @@ middleware.js：Edge Runtime / Web APIs / ES2023+
 - `elytrue-data`：用户、索引、会话、恢复密钥版本认领、留言、点赞、举报和元数据。
 - `elytrue-uploads`：头像和留言图片。
 
-绑定 Edge KV 为 `ELYTRUE_RATE_LIMIT_KV`。`middleware.js` 只从 `context.env` 获取此绑定；缺少绑定时边缘层跳过计数，Cloud Functions 的进程内限流仍工作，但生产验收必须确认 KV 已绑定。
+绑定 Edge KV 为 `ELYTRUE_RATE_LIMIT_KV`。`middleware.js` 只从 `context.env` 获取此绑定；客户端地址只信任 `request.eo.clientIp` 或平台注入的 `context.clientIp`，不会使用可伪造的 `x-forwarded-for`/`cf-connecting-ip`。缺少绑定或可信地址时边缘层跳过该桶，Cloud Functions 的账号维度/单实例内存限流仍工作。
+
+Edge KV 不提供原子增量或 CAS，应用内固定窗口在多节点并发下只能 best-effort，不能替代 EdgeOne WAF/频率控制。生产项目应在平台侧额外覆盖注册、登录、恢复、发布、上传、举报和管理员写接口。
 
 ## 3. 首次管理员
 
@@ -71,8 +73,6 @@ npm audit
 
 完整 `npm audit` 可能报告只属于精确锁定 EdgeOne CLI 的传递开发依赖；按 `docs/REFACTOR_AUDIT.md` 逐项复核，不使用 `npm audit fix --force`，也不把 CLI 改成运行时 `npx` 下载。
 
-2026-08-03 本轮维护明确禁止浏览器验证，因此只执行上述非浏览器命令；Playwright/E2E 按任务要求未执行。现有 E2E 与视觉基线保留，日常发布流程仍可在获准环境中执行。
-
 部署预览后检查：
 
 - `GET /api/health` 返回目标 `version`、`buildTime` 和 `commitTime`。
@@ -100,9 +100,10 @@ npm audit
 
 ```powershell
 npm run export:data
+npm run audit:uploads
 ```
 
-导出写入 Git 忽略的 `exports/`。完成后清除 Token。普通构建、测试和本次重构均不访问真实 Blob/KV。
+导出写入 Git 忽略的 `exports/`。`audit:uploads` 只读分页检查 alias、物理 Blob、图片 operation marker 和 usage 缓存，异常时退出码为 1，不自动删除或修复。完成后清除 Token。普通构建和测试不访问真实 Blob/KV。
 
 以下命令默认只读：
 
@@ -128,9 +129,9 @@ node --test tests/integration.test.js
 
 ## 8. 平台限制与修复工具
 
-- Blob 跨 key 操作非事务化，服务层保留补偿回滚与 repair marker。
-- KV 限流是边缘读改写，跨节点不保证严格原子；服务端进程内限流是第二层保护。
-- `usage/uploads.json` 可能因跨实例并发出现偏差；以 alias `size` 重算为准。
+- Blob 跨 key 操作非事务化，服务层通过图片上传/删除 operation marker 和留言 repair marker 保留可重试的补偿状态。
+- KV 限流是边缘读改写，跨节点不保证严格原子；服务端进程内限流是第二层保护，平台 WAF 才是生产强制层。
+- `usage/uploads.json` 可能因跨实例并发出现偏差；以 alias 和物理 Blob inventory 审计结果为恢复依据。确认备份和停写后，`scripts/rebuild-usage.mjs --fix --confirm-production-migration` 会重算缓存并完成待修复的图片 usage operation marker。
 - 图片先 pending，留言成功后 active；清理任务不得删除已被历史留言引用的图片。
 - 留言硬删除永久保留公开编号墓碑和日期“曾发布”记录，避免编号重排。
 - 新数据自动写公开编号反向记录；旧举报仅在字段、本体和反向记录均无法解析时进行每页 100、最多 10 页的有限兼容扫描，并以 5 分钟缓存和渐进回填避免重复扫描。该方案不要求生产数据迁移。

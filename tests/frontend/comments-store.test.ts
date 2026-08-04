@@ -190,8 +190,8 @@ describe('comments store', () => {
     await store.loadNewer()
     await store.loadOlder()
     assert.deepEqual(queries.slice(1, 3), [
-      { from: 21, count: -10 },
-      { from: 19, count: 30 },
+      { cursor: 20, direction: 'after', count: -10 },
+      { cursor: 20, direction: 'before', count: 30 },
     ])
 
     await store.gotoNumber(20)
@@ -272,6 +272,26 @@ describe('comments store', () => {
     assert.equal(store.isLikePending(1), false)
     assert.equal(store.state.items[0]?.liked, false)
     assert.equal(store.state.items[0]?.likes, 2)
+  })
+
+  test('uses the like response without fetching the comment again', async () => {
+    let listCalls = 0
+    const store = createCommentsStore(
+      apiWith({
+        async list() {
+          listCalls += 1
+          return { items: [comment(1)], hasMore: false }
+        },
+        async like() {
+          return { liked: true, likes: 4 }
+        },
+      }),
+    )
+    await store.initialize()
+    await store.toggleLike(1)
+    assert.equal(listCalls, 1)
+    assert.equal(store.state.items[0]?.liked, true)
+    assert.equal(store.state.items[0]?.likes, 4)
   })
 
   test('does not roll a failed like back over a refreshed comment snapshot', async () => {

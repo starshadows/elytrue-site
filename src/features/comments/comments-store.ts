@@ -118,13 +118,19 @@ export function createCommentsStore(api: CommentsApi) {
   function loadNewer(count = 10): Promise<void> {
     if (state.jumping || state.reachedNewest) return Promise.resolve()
     const newest = state.items[0]
-    return load('newer', newest ? { from: newest.id + 1, count: -count } : {})
+    return load(
+      'newer',
+      newest ? { cursor: newest.id, direction: 'after', count: -count } : {},
+    )
   }
 
   function loadOlder(count = 30): Promise<void> {
     if (state.jumping || state.reachedOldest) return Promise.resolve()
     const oldest = state.items.at(-1)
-    return load('older', oldest ? { from: oldest.id - 1, count } : { count })
+    return load(
+      'older',
+      oldest ? { cursor: oldest.id, direction: 'before', count } : { count },
+    )
   }
 
   function resetForReplacement(): void {
@@ -186,7 +192,15 @@ export function createCommentsStore(api: CommentsApi) {
     item.likes = Math.max(0, item.likes + (item.liked ? 1 : -1))
     const request = Promise.resolve()
       .then(() => api.like(id, before.liked))
-      .then(async () => {
+      .then(async (result) => {
+        if (result) {
+          const target = state.items.find((comment) => comment.id === id)
+          if (target) {
+            target.liked = result.liked
+            target.likes = result.likes
+          }
+          return
+        }
         const current = await getComment(api, id)
         if (!current) return
         const target = state.items.find((comment) => comment.id === id)

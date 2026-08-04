@@ -343,8 +343,9 @@ defineExpose({ forceLowerPanelDown, forceLowerPanelUp, pauseScroll })
             >
           </div>
         </div>
-        <div
-          class="time"
+        <button
+          type="button"
+          class="time semanticButton"
           style="
             text-decoration: underline;
             font-size: 1rem;
@@ -355,7 +356,7 @@ defineExpose({ forceLowerPanelDown, forceLowerPanelUp, pauseScroll })
           @click="hidePinned"
         >
           <span class="ui zh">隐藏 ×</span><span class="ui en">Hide ×</span>
-        </div>
+        </button>
       </div>
       <CommentEditor
         v-if="editorOpen"
@@ -387,16 +388,28 @@ defineExpose({ forceLowerPanelDown, forceLowerPanelUp, pauseScroll })
       </div>
     </div>
     <TimelinePanel />
-    <div class="commentSeekArrow" style="left: 2vw" @click="seek(-1)">
-      <img src="/res/arrow_left.svg" />
-    </div>
-    <div class="commentSeekArrow" style="right: 2vw" @click="seek(1)">
-      <img src="/res/arrow_right.svg" />
+    <button
+      type="button"
+      class="commentSeekArrow semanticButton"
+      style="left: 2vw"
+      aria-label="上一页留言"
+      @click="seek(-1)"
+    >
+      <img src="/res/arrow_left.svg" alt="" />
+    </button>
+    <button
+      type="button"
+      class="commentSeekArrow semanticButton"
+      style="right: 2vw"
+      aria-label="下一页留言"
+      @click="seek(1)"
+    >
+      <img src="/res/arrow_right.svg" alt="" />
       <div id="mouseScrollTooltip" class="tooltip">
         <span class="ui zh">用鼠标滚轮也可滚动</span
         ><span class="ui en">Scrollable with wheel</span>
       </div>
-    </div>
+    </button>
     <ToolsPanel
       @new-comment="openEditor()"
       @fullscreen="emit('fullscreen')"

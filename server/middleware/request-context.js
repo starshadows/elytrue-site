@@ -1,18 +1,23 @@
 import { httpError, requestOriginAllowed } from '../http.js'
+import { resolveTrustedClientAddress } from '../../shared/client-identity.js'
 
+/** @param {import('../types.js').RequestContext} context */
 export function environmentFor(context) {
     return context.env || process.env
 }
 
+/**
+ * @param {import('../types.js').RequestContext} context
+ * @param {string} [suffix]
+ * @returns {string | null}
+ */
 export function clientIdentity(context, suffix = '') {
-    const ip =
-        context.clientIp ||
-        context.request.headers.get('cf-connecting-ip') ||
-        context.request.headers.get('x-forwarded-for')?.split(',')[0]?.trim()
+    const ip = resolveTrustedClientAddress(context.request, context)
     if (!ip && !suffix) return null
     return `${ip || 'unknown'}:${suffix}`
 }
 
+/** @param {import('../types.js').RequestContext} context */
 export function ensureWriteOrigin(context) {
     if (!requestOriginAllowed(context.request, environmentFor(context))) {
         const request = context.request

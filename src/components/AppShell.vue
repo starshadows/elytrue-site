@@ -33,8 +33,15 @@ function action(value: ProfileAction): void {
       </a>
     </div>
     <br />
-    <div class="mainTitleUnder" @click="Popups.show('themeSelectorPopup')">
-      <img class="musicPlayingIndicator" src="/res/music_note.svg" />
+    <div
+      class="mainTitleUnder"
+      role="button"
+      tabindex="0"
+      @click="Popups.show('themeSelectorPopup')"
+      @keydown.enter="Popups.show('themeSelectorPopup')"
+      @keydown.space.prevent="Popups.show('themeSelectorPopup')"
+    >
+      <img class="musicPlayingIndicator" src="/res/music_note.svg" alt="" />
       <div id="themeIndicator">
         <div class="currentSong"></div>
         <span
@@ -47,13 +54,17 @@ function action(value: ProfileAction): void {
           </span>
         </span>
       </div>
-      <img src="/res/arrow_right.svg" />
+      <img src="/res/arrow_right.svg" alt="" />
     </div>
     <br />
     <div
       id="userInfo"
       :class="{ nologin: !auth.loggedIn.value }"
+      role="button"
+      tabindex="0"
       @click="openUser"
+      @keydown.enter="openUser"
+      @keydown.space.prevent="openUser"
     >
       <img id="userInfoAvatar" :src="avatar" alt="" />
       <span id="userInfoName">

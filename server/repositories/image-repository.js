@@ -16,6 +16,9 @@ export function createImageRepository(data, uploads) {
         listUserCommentIndexes: (userId, limit = 1000) =>
             listAll(data, blobKeys.commentsByUserPrefix(userId), limit),
         getComment: commentId => getJSON(data, blobKeys.comment(commentId)),
+        getOperation: key => getJSON(data, key),
+        createOperation: (key, value) => data.setJSON(key, value, { onlyIfNew: true }),
+        setOperation: (key, value) => data.setJSON(key, value),
         putBlob: (key, value) => uploads.set(key, value),
         getBlob: key => uploads.get(key, {
             type: 'arrayBuffer',

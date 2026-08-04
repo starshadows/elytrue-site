@@ -12,6 +12,15 @@ export interface CommentRecord {
   hidden: boolean
   liked: boolean
   likes: number
+  replyPreview?: ReplyPreview
+}
+
+export interface ReplyPreview {
+  displayId: number
+  sender: string
+  avatar: string
+  comment: string
+  deleted?: boolean
 }
 
 export interface CommentPage {
@@ -48,6 +57,30 @@ function stringField(value: object, key: string): string | undefined {
   return typeof field === 'string' ? field : undefined
 }
 
+function parseReplyPreview(value: unknown): ReplyPreview | undefined {
+  if (value === undefined) return undefined
+  if (!isObject(value)) throw new Error('回复摘要无效')
+  const displayId = numberField(value, 'displayId')
+  const sender = stringField(value, 'sender')
+  const avatar = stringField(value, 'avatar')
+  const comment = stringField(value, 'comment')
+  if (
+    displayId === undefined ||
+    sender === undefined ||
+    avatar === undefined ||
+    comment === undefined
+  ) {
+    throw new Error('回复摘要字段无效')
+  }
+  return {
+    displayId,
+    sender,
+    avatar,
+    comment,
+    ...(Reflect.get(value, 'deleted') === true ? { deleted: true } : {}),
+  }
+}
+
 export function parseCommentRecord(value: unknown): CommentRecord {
   if (!isObject(value)) throw new Error('留言响应不是对象')
   const id = numberField(value, 'id')
@@ -75,6 +108,7 @@ export function parseCommentRecord(value: unknown): CommentRecord {
   const displayId = numberField(value, 'displayId') ?? id
   const number = numberField(value, 'number')
   const replyid = numberField(value, 'replyid')
+  const replyPreview = parseReplyPreview(Reflect.get(value, 'replyPreview'))
   return {
     id,
     ...(number === undefined ? {} : { number }),
@@ -93,6 +127,7 @@ export function parseCommentRecord(value: unknown): CommentRecord {
     hidden: Reflect.get(value, 'hidden') === true,
     liked,
     likes,
+    ...(replyPreview ? { replyPreview } : {}),
   }
 }
 

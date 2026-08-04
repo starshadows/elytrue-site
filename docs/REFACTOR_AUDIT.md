@@ -8,6 +8,16 @@
 - 新接口为 `POST user/recover` 与需会话/CSRF/当前密码的 `POST user/recovery-key`。历史用户无需迁移，缺少恢复字段按尚未设置处理；历史 `password-resets/*` Blob 不再读取且不会自动删除。
 - 留言面板以 `auto`、`forced-up`、`forced-down` 三态代替永久命令式 class。编辑器关闭或 Escape 后暂时抑制当前 hover，指针离开后恢复自动悬停；卸载时恢复 overscroll、键盘 class 和定时器。
 
+## 2026-08-04 安全与数据路径收敛
+
+- API 路由表的 `auth`/`csrf` 已由统一 policy 在分发前执行，路由缺少策略或 Handler 会在启动/合同测试中失败；Handler 只保留所有权等业务授权。
+- 主留言时间线优先按公开编号座位做有界读取，双向分页使用严格 cursor；点赞计数以幂等用户记录为权威来源，避免无 CAS 聚合覆盖；回复摘要按页去重读取，移除每卡 HTTP 请求。
+- 客户端身份只取 EdgeOne/runtime 注入地址，忽略代理 Header。Edge KV 固定窗口和 Cloud Functions 单实例 Map 的真实保证均已记录为 best-effort；高风险写端点两层覆盖，生产仍需平台 WAF。
+- 图片上传/删除增加可重试 operation marker，usage 作为可审计缓存；新增只读 `audit:uploads`，不在部署时运行迁移或删除。
+- 关键路由、Auth Context、Session、Blob Store 和限流动作增加 JSDoc/声明类型；没有使用 `@ts-ignore` 或关闭检查。
+- CI 第三方 Actions 固定到官方 release SHA，Dependabot 每月更新 npm/Actions；生产 audit 阻断 high，开发 audit 单独报告 EdgeOne CLI 风险。
+- 留言核心操作补原生按钮、键盘访问、`aria-pressed`、替代文本和 `:focus-visible`，CSS reset 保持原布局与视觉参数。
+
 ## 2026-08-03 交互状态收尾
 
 本次从同步后的远端 `main` 提交 `9348c77` 开始，只修复前端交互状态，不改变 API、Cookie、CSRF、数据格式、存储或管理员初始化行为。

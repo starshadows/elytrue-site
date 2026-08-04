@@ -4,10 +4,8 @@ import {
     destroySession,
     findUserById,
     findUserByIdentifier,
-    getSession,
     privateProfile,
     registerUser,
-    requireSession,
     revokeAllSessions,
     updateUser,
 } from './auth.js'
@@ -22,6 +20,7 @@ import {
     binaryResponse,
     errorResponse,
     httpError,
+    parseCookies,
     readJSON,
 } from './http.js'
 import { enforceRateLimit } from './rate-limit.js'
@@ -29,10 +28,10 @@ import { sha256 } from './crypto.js'
 import { createStores } from './storage.js'
 import {
     clientIdentity,
-    ensureWriteOrigin,
     environmentFor,
 } from './middleware/request-context.js'
-import { matchApiRoute } from './routes/registry.js'
+import { API_ROUTES, matchApiRoute, validateApiRouteRegistry } from './routes/registry.js'
+import { enforceRoutePolicy } from './routes/policy.js'
 import { apiRoutePath } from './lib/routing.js'
 import {
     cleanupStalePendingImages,
@@ -46,7 +45,6 @@ import {
 } from './services/account-recovery-service.js'
 import { createReport } from './services/report-service.js'
 import {
-    authorizeAdmin,
     bootstrapAdministrator,
     getAdminReports,
     getAdminUsage,
@@ -84,7 +82,6 @@ async function serveImage(stores, kind, imageId) {
 }
 
 async function register(context, stores) {
-    await ensureWriteOrigin(context)
     await enforceRateLimit('register', clientIdentity(context))
     const body = await readJSON(context.request, 32 * 1024)
     const { user, recoveryKey } = await registerUser(stores.data, environmentFor(context), {
@@ -109,7 +106,6 @@ async function register(context, stores) {
 }
 
 async function login(context, stores) {
-    await ensureWriteOrigin(context)
     const body = await readJSON(context.request, 32 * 1024)
     const identifier = body.identifier || body.email || body.name || ''
     await enforceRateLimit('login', clientIdentity(context, String(identifier).toLowerCase()))
@@ -131,11 +127,11 @@ async function login(context, stores) {
     })
 }
 
-async function logout(context, stores, allDevices = false) {
-    await ensureWriteOrigin(context)
-    const auth = await requireSession(stores.data, context.request, {
-        env: environmentFor(context),
-    })
+async function logout(context, stores, path, auth, allDevices = false) {
+    await enforceRateLimit(
+        allDevices ? 'logoutAll' : 'logout',
+        clientIdentity(context, auth.user.id),
+    )
     if (allDevices) await revokeAllSessions(stores.data, auth.user)
     const cookies = await destroySession(
         stores.data,
@@ -146,11 +142,11 @@ async function logout(context, stores, allDevices = false) {
     return apiResponse(null, { message: '已退出登录', cookies })
 }
 
-async function getMe(context, stores) {
-    const auth = await requireSession(stores.data, context.request, {
-        csrf: false,
-        env: environmentFor(context),
-    })
+async function getMe(context, stores, path, auth) {
+    if (!auth) {
+        if (parseCookies(context.request).elytrue_session) throw httpError(401, '请先登录')
+        return apiResponse(null)
+    }
     return apiResponse(authenticatedProfile(auth.user, environmentFor(context), auth.session), {
         cookies: auth.refreshCookies,
     })
@@ -178,11 +174,7 @@ async function findUsers(context, stores) {
     return apiResponse(result)
 }
 
-async function updateProfile(context, stores) {
-    await ensureWriteOrigin(context)
-    const auth = await requireSession(stores.data, context.request, {
-        env: environmentFor(context),
-    })
+async function updateProfile(context, stores, path, auth) {
     await enforceRateLimit('userUpdate', clientIdentity(context, auth.user.id))
     const body = await readJSON(context.request, 2 * 1024 * 1024)
     const updates = {}
@@ -217,7 +209,6 @@ async function updateProfile(context, stores) {
 }
 
 async function recoverUser(context, stores) {
-    await ensureWriteOrigin(context)
     const body = await readJSON(context.request, 32 * 1024)
     const identifier = String(body.identifier || '').normalize('NFKC').trim().toLowerCase()
     await enforceRateLimit('recoverIp', clientIdentity(context))
@@ -230,22 +221,14 @@ async function recoverUser(context, stores) {
     return apiResponse(result, { message: '账号已恢复，请使用新密码重新登录' })
 }
 
-async function updateRecoveryKey(context, stores) {
-    await ensureWriteOrigin(context)
-    const auth = await requireSession(stores.data, context.request, {
-        env: environmentFor(context),
-    })
+async function updateRecoveryKey(context, stores, path, auth) {
     await enforceRateLimit('recoveryKey', `user:${sha256(auth.user.id)}`)
     const body = await readJSON(context.request, 32 * 1024)
     const result = await rotateRecoveryKey(stores.data, auth.user, body.currentPassword)
     return apiResponse(result, { message: '恢复密钥已更新，旧密钥已失效' })
 }
 
-async function uploadCommentImage(context, stores) {
-    await ensureWriteOrigin(context)
-    const auth = await requireSession(stores.data, context.request, {
-        env: environmentFor(context),
-    })
+async function uploadCommentImage(context, stores, path, auth) {
     await enforceRateLimit('upload', clientIdentity(context, auth.user.id))
     const body = await readJSON(context.request, 3 * 1024 * 1024)
     const saved = await saveImage(stores, auth.user, body.image, 'comment')
@@ -253,32 +236,21 @@ async function uploadCommentImage(context, stores) {
     return apiResponse({ imageId: saved.imageId }, { status: 201, message: '图片已上传' })
 }
 
-async function deleteUploadedImage(context, stores) {
-    await ensureWriteOrigin(context)
-    const auth = await requireSession(stores.data, context.request, {
-        env: environmentFor(context),
-    })
+async function deleteUploadedImage(context, stores, path, auth) {
     await enforceRateLimit('upload', clientIdentity(context, auth.user.id))
     const imageId = String(new URL(context.request.url).searchParams.get('imageId') || '')
     await deletePendingImage(stores, auth.user, imageId)
     return apiResponse(null, { message: '图片已删除' })
 }
 
-async function postComment(context, stores) {
-    await ensureWriteOrigin(context)
-    const auth = await requireSession(stores.data, context.request, {
-        env: environmentFor(context),
-    })
+async function postComment(context, stores, path, auth) {
     await enforceRateLimit('comment', clientIdentity(context, auth.user.id))
     const body = await readJSON(context.request, 64 * 1024)
     const comment = await createComment(stores.data, auth.user, body)
     return apiResponse(comment, { status: 201, message: '留言已发布' })
 }
 
-async function getComments(context, stores) {
-    const auth = await getSession(stores.data, context.request, {
-        env: environmentFor(context),
-    })
+async function getComments(context, stores, path, auth) {
     const url = new URL(context.request.url)
     const result = await listComments(stores.data, url.searchParams, auth?.user)
     // 用户列表:{ items, hasMore, nextCursor };主列表:数组(scanCap 截断时返回 { items, hasMore })
@@ -294,23 +266,15 @@ async function commentsCount(context, stores) {
     return apiResponse(count)
 }
 
-async function likeComment(context, stores, liked) {
-    await ensureWriteOrigin(context)
-    const auth = await requireSession(stores.data, context.request, {
-        env: environmentFor(context),
-    })
+async function likeComment(context, stores, path, auth, liked) {
     await enforceRateLimit('like', clientIdentity(context, auth.user.id))
     const commentId = Number(new URL(context.request.url).searchParams.get('commentId'))
     if (!Number.isSafeInteger(commentId)) throw httpError(400, '留言编号无效')
-    await setLike(stores.data, commentId, auth.user, liked)
-    return apiResponse(null, { message: liked ? '已点赞' : '已取消点赞' })
+    const result = await setLike(stores.data, commentId, auth.user, liked)
+    return apiResponse(result, { message: liked ? '已点赞' : '已取消点赞' })
 }
 
-async function reportComment(context, stores) {
-    await ensureWriteOrigin(context)
-    const auth = await requireSession(stores.data, context.request, {
-        env: environmentFor(context),
-    })
+async function reportComment(context, stores, path, auth) {
     await enforceRateLimit('report', clientIdentity(context, auth.user.id))
     const body = await readJSON(context.request, 16 * 1024)
     const commentId = Number(body.commentId || new URL(context.request.url).searchParams.get('commentId'))
@@ -318,20 +282,8 @@ async function reportComment(context, stores) {
     return apiResponse(null, { message: '举报已提交' })
 }
 
-async function requireAdmin(context, stores) {
-    return authorizeAdmin(
-        stores.data,
-        context.request,
-        environmentFor(context),
-        user => enforceRateLimit('admin', clientIdentity(context, user.id)),
-    )
-}
-
-async function bootstrapAdmin(context, stores) {
-    await ensureWriteOrigin(context)
-    const auth = await requireSession(stores.data, context.request, {
-        env: environmentFor(context),
-    })
+async function bootstrapAdmin(context, stores, path, auth) {
+    await enforceRateLimit('bootstrap', clientIdentity(context, auth.user.id))
     await bootstrapAdministrator(
         stores.data,
         auth.user,
@@ -341,25 +293,24 @@ async function bootstrapAdmin(context, stores) {
     return apiResponse(null, { message: '唯一管理员已初始化，入口已永久关闭' })
 }
 
-async function adminReports(context, stores) {
-    await requireAdmin(context, stores)
+async function adminReports(context, stores, path, auth) {
+    await enforceRateLimit('admin', clientIdentity(context, auth.user.id))
     return apiResponse(await getAdminReports(stores.data))
 }
 
-async function adminModerate(context, stores) {
-    await ensureWriteOrigin(context)
-    await requireAdmin(context, stores)
+async function adminModerate(context, stores, path, auth) {
+    await enforceRateLimit('admin', clientIdentity(context, auth.user.id))
     const body = await readJSON(context.request, 16 * 1024)
     await moderateAdminComment(stores.data, Number(body.commentId), body.action)
     return apiResponse(null, { message: '管理操作已完成' })
 }
 
-async function adminUsage(context, stores) {
-    await requireAdmin(context, stores)
+async function adminUsage(context, stores, path, auth) {
+    await enforceRateLimit('admin', clientIdentity(context, auth.user.id))
     return apiResponse(await getAdminUsage(stores))
 }
 
-const routeHandlers = Object.freeze({
+export const API_ROUTE_HANDLERS = Object.freeze({
     health: async () => {
         const build = await loadBuildInfo()
         return apiResponse({
@@ -373,7 +324,7 @@ const routeHandlers = Object.freeze({
     register,
     login,
     logout,
-    logoutAll: (context, stores) => logout(context, stores, true),
+    logoutAll: (context, stores, path, auth) => logout(context, stores, path, auth, true),
     me: getMe,
     findUsers,
     updateProfile,
@@ -394,14 +345,16 @@ const routeHandlers = Object.freeze({
     comments: getComments,
     commentCount: commentsCount,
     postComment,
-    likeComment: (context, stores) => likeComment(context, stores, true),
-    unlikeComment: (context, stores) => likeComment(context, stores, false),
+    likeComment: (context, stores, path, auth) => likeComment(context, stores, path, auth, true),
+    unlikeComment: (context, stores, path, auth) => likeComment(context, stores, path, auth, false),
     reportComment,
     bootstrapAdmin,
     adminReports,
     adminModerate,
     adminUsage,
 })
+
+validateApiRouteRegistry(API_ROUTES, Object.keys(API_ROUTE_HANDLERS))
 
 export async function handleApiRequest(context, injectedStores) {
     const stores = createStores(injectedStores)
@@ -413,9 +366,10 @@ export async function handleApiRequest(context, injectedStores) {
         if (method === 'OPTIONS') return new Response(null, { status: 204 })
         const route = matchApiRoute(method, path)
         if (!route) return errorResponse(404, '接口不存在')
-        const handler = routeHandlers[route.handler]
+        const handler = API_ROUTE_HANDLERS[route.handler]
         if (!handler) throw new Error(`API route handler is not registered: ${route.handler}`)
-        return await handler(context, stores, path)
+        const auth = await enforceRoutePolicy({ context, stores, route })
+        return await handler(context, stores, path, auth)
     } catch (error) {
         if (Number.isInteger(error?.status)) {
             return errorResponse(error.status, error.message, error.code || error.status)

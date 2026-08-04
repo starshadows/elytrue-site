@@ -1,11 +1,14 @@
-const exact = path => ({ kind: 'exact', path })
-const prefix = path => ({ kind: 'prefix', path })
+/** @param {string} path */
+const exact = path => /** @type {const} */ ({ kind: 'exact', path })
+/** @param {string} path */
+const prefix = path => /** @type {const} */ ({ kind: 'prefix', path })
 
 /**
  * Public API contract. Authentication, CSRF, and admin metadata describe the
  * requirements enforced by each handler and are also consumed by contract
  * tests and architecture documentation.
  */
+/** @type {readonly import('../types.js').ApiRoute[]} */
 export const API_ROUTES = Object.freeze([
     { methods: ['GET'], match: exact(''), handler: 'health', auth: 'public', csrf: false },
     { methods: ['GET'], match: exact('health'), handler: 'health', auth: 'public', csrf: false },
@@ -89,10 +92,37 @@ export const API_ROUTES = Object.freeze([
     { methods: ['GET'], match: exact('admin/usage'), handler: 'adminUsage', auth: 'admin', csrf: false },
 ])
 
+/** @param {string} method @param {string} path */
 export function matchApiRoute(method, path) {
     return API_ROUTES.find(route => {
         if (!route.methods.includes(method)) return false
         return route.match.kind === 'exact' ? path === route.match.path : path.startsWith(route.match.path)
     })
+}
+
+/**
+ * @param {readonly import('../types.js').ApiRoute[]} [routes]
+ * @param {string[]} [handlerNames]
+ */
+export function validateApiRouteRegistry(routes = API_ROUTES, handlerNames = []) {
+    const signatures = new Set()
+    const handlers = new Set(handlerNames)
+    for (const route of routes) {
+        if (!['public', 'optional', 'session', 'admin'].includes(route.auth)) {
+            throw new Error(`Invalid API route auth policy: ${route.handler}`)
+        }
+        if (typeof route.csrf !== 'boolean') {
+            throw new Error(`Missing API route CSRF policy: ${route.handler}`)
+        }
+        if (!handlers.has(route.handler)) {
+            throw new Error(`Missing API route handler: ${route.handler}`)
+        }
+        for (const method of route.methods) {
+            const signature = `${method} ${route.match.kind}:${route.match.path}`
+            if (signatures.has(signature)) throw new Error(`Duplicate API route: ${signature}`)
+            signatures.add(signature)
+        }
+    }
+    return true
 }
 

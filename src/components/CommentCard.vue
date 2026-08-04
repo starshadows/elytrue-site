@@ -1,5 +1,5 @@
 <script setup lang="ts">
-import { computed, onMounted, ref } from 'vue'
+import { computed } from 'vue'
 import FloatMsgs from './FloatMsgs'
 import ImgViewer from './ImgViewer'
 import Popups from './Popups'
@@ -7,12 +7,17 @@ import { avatarPath, ensureLoggedIn } from '../features/auth/auth-actions'
 import { authStore } from '../features/auth/auth-store'
 import { commentsApi } from '../features/comments/comments-api'
 import { commentsStore } from '../features/comments/comments-store'
-import type { CommentRecord } from '../features/comments/comment-types'
+import type {
+  CommentRecord,
+  ReplyPreview,
+} from '../features/comments/comment-types'
 import { BACKGROUNDS } from '../config/assets'
 
 const props = defineProps<{ record: CommentRecord }>()
 const emit = defineEmits<{ lift: []; reply: [number: number] }>()
-const reply = ref<CommentRecord | null>(null)
+const reply = computed<ReplyPreview | null>(
+  () => props.record.replyPreview ?? null,
+)
 const likePending = computed(() => commentsStore.isLikePending(props.record.id))
 const images = computed(() =>
   props.record.image ? props.record.image.split(',').filter(Boolean) : [],
@@ -27,16 +32,6 @@ const canReport = computed(
     authStore.state.userId !== null &&
     authStore.state.userId !== props.record.uid,
 )
-
-onMounted(async () => {
-  if (!props.record.replyid) return
-  reply.value =
-    (
-      await commentsApi
-        .list({ from: props.record.replyid, count: 1 })
-        .catch(() => null)
-    )?.items[0] ?? null
-})
 
 async function toggleLike(): Promise<void> {
   if (likePending.value || !(await ensureLoggedIn())) return
@@ -65,10 +60,8 @@ function openImage(image: string): void {
 }
 
 function openReply(): void {
-  if (reply.value)
-    void commentsStore
-      .gotoNumber(reply.value.number ?? reply.value.displayId)
-      .catch(() => undefined)
+  if (reply.value && !reply.value.deleted)
+    void commentsStore.gotoNumber(reply.value.displayId).catch(() => undefined)
 }
 
 function report(): void {
@@ -110,6 +103,7 @@ function report(): void {
       class="bg"
       loading="lazy"
       :src="background"
+      alt=""
       :style="record.hidden ? { display: 'none' } : undefined"
     />
     <div class="bgcover"></div>
@@ -117,28 +111,37 @@ function report(): void {
       class="avatar"
       loading="lazy"
       :src="avatarPath(record.avatar)"
+      :alt="`${record.sender}的头像`"
+      role="button"
+      tabindex="0"
       @click="openUser"
+      @keydown.enter="openUser"
+      @keydown.space.prevent="openUser"
     />
-    <div class="sender" @click="openUser">
+    <button type="button" class="sender semanticButton" @click="openUser">
       <template v-if="record.sender === '匿名用户'"
         ><span class="ui zh">匿名用户</span
         ><span class="ui en">Anonymous</span></template
       >
       <template v-else>{{ record.sender }}</template>
-    </div>
+    </button>
     <div class="id">#{{ record.displayId }}</div>
     <div class="comment">
       {{ record.comment }}
       <div
         v-if="reply"
         class="reply-quote comment-reply-quote clickable"
+        :role="reply.deleted ? undefined : 'button'"
+        :tabindex="reply.deleted ? undefined : 0"
         @click="openReply"
+        @keydown.enter="openReply"
+        @keydown.space.prevent="openReply"
       >
-        <img class="reply-icon" src="/res/reply.svg" />
+        <img class="reply-icon" src="/res/reply.svg" alt="" />
         <div class="quote-content">
           <div class="quote-head">
-            <img class="quote-avatar" :src="avatarPath(reply.avatar)" />
-            <div class="quote-sender">{{ reply.sender }}</div>
+            <img class="quote-avatar" :src="avatarPath(reply.avatar)" alt="" />
+            <div class="quote-sender">{{ reply.sender || '留言已删除' }}</div>
             <div class="quote-id">#{{ reply.displayId }}</div>
           </div>
           <div class="quote-body">{{ reply.comment }}</div>
@@ -150,7 +153,12 @@ function report(): void {
         :key="image"
         loading="lazy"
         :src="`/api/data/images/posts/${image}.jpg`"
+        alt="留言图片"
+        role="button"
+        tabindex="0"
         @click="openImage(image)"
+        @keydown.enter="openImage(image)"
+        @keydown.space.prevent="openImage(image)"
       />
     </div>
     <div class="time">
@@ -158,9 +166,13 @@ function report(): void {
       }}{{ record.hidden ? ' (hidden)' : '' }}
     </div>
     <div class="action">
-      <span
-        class="btn like"
+      <button
+        type="button"
+        class="btn like semanticButton"
         :class="{ liked: record.liked, busy: likePending }"
+        :disabled="likePending"
+        :aria-pressed="record.liked"
+        :aria-label="record.liked ? '取消点赞' : '点赞'"
         @click="toggleLike"
       >
         <span
@@ -168,11 +180,23 @@ function report(): void {
           :style="{ display: record.likes ? 'block' : 'none' }"
           >{{ record.likes }}</span
         >
-      </span>
-      <img class="btn reply" src="/res/reply.svg" @click="replyToComment" />
-      <span v-if="canReport" class="btn report" @click="report"
-        ><span class="ui zh">举报</span><span class="ui en">Report</span></span
+      </button>
+      <button
+        type="button"
+        class="btn reply semanticButton"
+        aria-label="回复留言"
+        @click="replyToComment"
       >
+        <img src="/res/reply.svg" alt="" />
+      </button>
+      <button
+        v-if="canReport"
+        type="button"
+        class="btn report semanticButton"
+        @click="report"
+      >
+        <span class="ui zh">举报</span><span class="ui en">Report</span>
+      </button>
     </div>
   </div>
 </template>

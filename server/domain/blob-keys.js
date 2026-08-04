@@ -43,6 +43,8 @@ export const blobKeys = Object.freeze({
     commentDeleteRepair: commentId => `repairs/comment-delete/${commentId}.json`,
 
     uploadUsage: 'usage/uploads.json',
+    imageUploadOperation: imageId => `operations/image-uploads/${imageId}.json`,
+    imageDeleteOperation: imageId => `operations/image-deletes/${imageId}.json`,
     imageAlias: (kind, imageId) =>
         `uploads/aliases/${kind === 'avatar' || kind === 'avatars' ? 'avatars' : 'comments'}/${imageId}.json`,
     uploadBlob: (kind, userId, imageId, extension) =>

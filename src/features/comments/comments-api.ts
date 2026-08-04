@@ -11,6 +11,7 @@ import {
 export interface CommentQuery {
   count?: number
   cursor?: number
+  direction?: 'after' | 'before'
   from?: number
   number?: number | string
   time?: number
@@ -23,11 +24,16 @@ export interface CreateCommentPayload {
   replyid?: number
 }
 
+export interface LikeResult {
+  liked: boolean
+  likes: number
+}
+
 export interface CommentsApi {
   create(payload: CreateCommentPayload): Promise<void>
   deleteUpload(imageId: string): Promise<void>
   getCount(): Promise<number>
-  like(commentId: number, liked: boolean): Promise<void>
+  like(commentId: number, liked: boolean): Promise<LikeResult | void>
   list(query?: CommentQuery): Promise<CommentPage>
   listUser(uid: string, cursor?: number): Promise<UserCommentPage>
   report(commentId: number, reason: string): Promise<void>
@@ -64,7 +70,20 @@ export const commentsApi: CommentsApi = {
   },
   async like(commentId, liked) {
     const path = `comments/like?commentId=${commentId}`
-    requireSuccess(liked ? await XHR.delete(path) : await XHR.post(path))
+    const response = liked ? await XHR.delete(path) : await XHR.post(path)
+    requireSuccess(response)
+    if (
+      typeof response.data === 'object' &&
+      response.data !== null &&
+      typeof Reflect.get(response.data, 'liked') === 'boolean' &&
+      typeof Reflect.get(response.data, 'likes') === 'number'
+    ) {
+      return {
+        liked: Reflect.get(response.data, 'liked'),
+        likes: Reflect.get(response.data, 'likes'),
+      }
+    }
+    return undefined
   },
   async report(commentId, reason) {
     requireSuccess(await XHR.post('comments/report', { commentId, reason }))

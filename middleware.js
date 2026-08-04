@@ -1,13 +1,18 @@
-const RATE_LIMIT_POLICIES = {
-  '/api/user/register': ['register', 20, 60 * 60],
-  '/api/user/login': ['login', 12, 15 * 60],
-  '/api/user/recover': ['recover', 5, 60 * 60],
-  '/api/user/recovery-key': ['recovery-key', 5, 60 * 60],
-  '/api/user/update': ['user-update', 30, 10 * 60],
-  '/api/comments/post': ['comment', 10, 10 * 60],
-  '/api/comments/like': ['like', 60, 10 * 60],
-  '/api/comments/report': ['report', 10, 60 * 60],
-  '/api/uploads/image': ['upload', 12, 10 * 60],
+import { resolveTrustedClientAddress } from './shared/client-identity.js'
+
+export const RATE_LIMIT_POLICIES = {
+  '/api/user/register': { methods: ['POST'], action: 'register', limit: 20, windowSeconds: 60 * 60 },
+  '/api/user/login': { methods: ['POST'], action: 'login', limit: 12, windowSeconds: 15 * 60 },
+  '/api/user/logout': { methods: ['POST'], action: 'logout', limit: 30, windowSeconds: 10 * 60 },
+  '/api/user/resettoken': { methods: ['POST'], action: 'logout_all', limit: 10, windowSeconds: 60 * 60 },
+  '/api/user/recover': { methods: ['POST'], action: 'recover', limit: 5, windowSeconds: 60 * 60 },
+  '/api/user/recovery-key': { methods: ['POST'], action: 'recovery_key', limit: 5, windowSeconds: 60 * 60 },
+  '/api/user/update': { methods: ['PUT'], action: 'user_update', limit: 30, windowSeconds: 10 * 60 },
+  '/api/comments/post': { methods: ['POST'], action: 'comment', limit: 10, windowSeconds: 10 * 60 },
+  '/api/comments/like': { methods: ['POST', 'DELETE'], action: 'like', limit: 60, windowSeconds: 10 * 60 },
+  '/api/comments/report': { methods: ['POST'], action: 'report', limit: 10, windowSeconds: 60 * 60 },
+  '/api/uploads/image': { methods: ['POST', 'DELETE'], action: 'upload', limit: 12, windowSeconds: 10 * 60 },
+  '/api/admin/bootstrap': { methods: ['POST'], action: 'admin_bootstrap', limit: 5, windowSeconds: 60 * 60 },
 }
 
 const TRANSPORT_SECURITY_HEADERS = {
@@ -80,23 +85,19 @@ function jsonResponse(status, message) {
 async function enforceEdgeRateLimit(context, pathname) {
   let policy = RATE_LIMIT_POLICIES[pathname]
   if (!policy && pathname.startsWith('/api/admin/')) {
-    policy = ['admin', 30, 10 * 60]
+    policy = { methods: ['POST', 'DELETE'], action: 'admin', limit: 30, windowSeconds: 10 * 60 }
   }
-  if (
-    !policy ||
-    context.request.method === 'GET' ||
-    context.request.method === 'HEAD'
-  ) {
+  const method = context.request.method.toUpperCase()
+  if (!policy || !policy.methods.includes(method)) {
     return null
   }
 
   const kv = context.env?.ELYTRUE_RATE_LIMIT_KV
   if (!kv?.get || !kv?.put) return null
 
-  const [action, limit, windowSeconds] = policy
+  const { action, limit, windowSeconds } = policy
   const bucket = Math.floor(Date.now() / 1000 / windowSeconds)
-  const identity =
-    context.clientIp || context.request.headers.get('x-forwarded-for')
+  const identity = resolveTrustedClientAddress(context.request, context)
   // 缺少可信客户端 IP 时跳过这一层限流，避免所有访客共享全站注册桶。
   // Cloud Functions 仍会执行输入校验、唯一索引和可用身份下的二次限流。
   if (!identity) return null

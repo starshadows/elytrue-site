@@ -157,6 +157,7 @@ export async function createComment(data, user, body, { idFactory = newCommentId
      *   image: string,
      *   replyid: number | null,
      *   hidden: boolean,
+     *   likeCount: number,
      *   createdAt: number,
      *   time: number,
      * }} */
@@ -173,6 +174,7 @@ export async function createComment(data, user, body, { idFactory = newCommentId
             image: imageIds.join(','),
             replyid,
             hidden: false,
+            likeCount: 0,
             createdAt,
             time: Math.floor(createdAt / 1000),
         }
@@ -264,23 +266,104 @@ export async function createComment(data, user, body, { idFactory = newCommentId
     return comment
 }
 
-/** 读取单条留言,附加展示编号与点赞状态 */
-export async function getCommentDetail(data, comment, viewer) {
-    const likes = await listAll(data, blobKeys.commentLikePrefix(comment.id), Infinity)
+function replyPreview(comment, fallbackId = null) {
+    if (!comment) {
+        return {
+            displayId: fallbackId || 0,
+            sender: '',
+            avatar: '',
+            comment: '留言已删除',
+            deleted: true,
+        }
+    }
+    return {
+        displayId: comment.number ?? comment.id,
+        sender: comment.sender || '',
+        avatar: comment.avatar || '',
+        comment: comment.comment || '',
+    }
+}
+
+/** @typedef {{displayId: number, sender: string, avatar: string, comment: string, deleted?: boolean}} ReplyPreview */
+
+/** @returns {Promise<Map<number, ReplyPreview>>} */
+async function loadReplyPreviews(data, comments, viewer) {
+    const replyIds = [...new Set(
+        comments.map(comment => Number(comment.replyid)).filter(Number.isSafeInteger),
+    )]
+    const previews = new Map()
+    await Promise.all(replyIds.map(async id => {
+        const comment = await getJSON(data, blobKeys.comment(id))
+        previews.set(id, replyPreview(comment && isVisibleFor(comment, viewer) ? comment : null, id))
+    }))
+    return previews
+}
+
+async function countLikeRecords(data, commentId) {
+    let count = 0
+    let cursor
+    do {
+        const page = await data.list({
+            prefix: blobKeys.commentLikePrefix(commentId),
+            limit: 500,
+            paginate: false,
+            ...(cursor ? { cursor } : {}),
+            consistency: 'strong',
+        })
+        const blobs = page?.blobs || []
+        count += blobs.length
+        const nextCursor = page?.cursor
+        if (!nextCursor || nextCursor === cursor || blobs.length < 500) break
+        cursor = nextCursor
+    } while (true)
+    return count
+}
+
+/**
+ * 读取单条留言,附加展示编号与点赞状态。
+ * @param {Map<number, ReplyPreview> | null} [replyPreviews]
+ */
+export async function getCommentDetail(data, comment, viewer, replyPreviews = null) {
+    const likes = await countLikeRecords(data, comment.id)
     const liked = viewer
         ? Boolean(await getJSON(data, blobKeys.commentLike(comment.id, viewer.id)))
         : false
     return {
         ...comment,
         displayId: comment.number ?? comment.id,
-        likes: likes.length,
+        likes,
         liked,
+        ...(comment.replyid
+            ? { replyPreview: replyPreviews?.get(comment.replyid) || await loadReplyPreviews(data, [comment], viewer).then(map => map.get(comment.replyid)) }
+            : {}),
     }
 }
 
 async function listAllCommentKeys(data) {
     const blobs = await listAll(data, blobPrefixes.comments, Infinity)
     return blobs.map(blob => blob.key)
+}
+
+async function listRecentNumberedIds(data, limit, lowerId = 0, upperId = 0) {
+    const hint = Number((await getJSON(data, blobKeys.commentNumberHint))?.value || 0)
+    const ids = []
+    let number = hint
+    let scanned = 0
+    for (; number > 0 && scanned < limit; number -= 1) {
+        scanned += 1
+        const seat = await getJSON(data, blobKeys.commentNumber(number))
+        if (seat?.commentId) {
+            const commentId = Number(seat.commentId)
+            if (lowerId && commentId <= lowerId) continue
+            if (upperId && commentId >= upperId) continue
+            ids.push(commentId)
+        }
+    }
+    return {
+        ids: ids.sort((left, right) => left - right),
+        truncated: number > 0,
+        hasNumberedData: hint > 0,
+    }
 }
 
 function keyToId(key) {
@@ -306,6 +389,7 @@ async function collectVisibleComments(data, ids, {
     beforeTime,
     viewer,
     centered,
+    sourceTruncated = false,
 }) {
     let selected = []
     if (from && rawCount === 1) {
@@ -347,16 +431,32 @@ async function collectVisibleComments(data, ids, {
         if (!isVisibleFor(comment, viewer)) continue
         comments.push(comment)
     }
-    return { items: comments, truncated: comments.length < count && selected.length > scanCap }
+    return {
+        items: comments,
+        truncated: comments.length < count && (sourceTruncated || selected.length > scanCap),
+    }
 }
 
 export async function listComments(data, query, viewer) {
     const uid = query.get('uid')
     if (uid) return listUserComments(data, query, viewer, uid)
 
+    const cursorParam = query.get('cursor')
+    const cursorMode = cursorParam !== null
     const fromRaw = query.get('from')
-    const from = fromRaw ? Number(fromRaw) : 0
-    const rawCount = Number(query.get('count') || 30)
+    const from = cursorMode ? Number(cursorParam) : (fromRaw ? Number(fromRaw) : 0)
+    const requestedCount = Number(query.get('count') || 30)
+    const rawCount = cursorMode
+        ? (query.get('direction') === 'after'
+            ? -Math.abs(requestedCount)
+            : Math.abs(requestedCount))
+        : requestedCount
+    if (cursorMode && (!Number.isSafeInteger(from) || from <= 0)) {
+        throw httpError(400, '留言游标无效')
+    }
+    if (cursorMode && !['after', 'before'].includes(query.get('direction'))) {
+        throw httpError(400, '留言游标方向无效')
+    }
     const count = Math.min(100, Math.max(1, Math.abs(rawCount)))
     const beforeTime = Number(query.get('time') || 0)
 
@@ -375,8 +475,29 @@ export async function listComments(data, query, viewer) {
         return [await getCommentDetail(data, comment, viewer)]
     }
 
-    const keys = await listAllCommentKeys(data)
-    const ids = keys.map(keyToId).filter(Boolean)
+    const scanCap = Math.max(200, count * 20 + 200)
+    const directTarget = from && rawCount === 1 && !cursorMode
+        ? await resolveCommentId(data, from)
+        : null
+    const recent = !numberParam && !directTarget && (!from || cursorMode) && !beforeTime
+        ? await listRecentNumberedIds(
+            data,
+            scanCap,
+            cursorMode && rawCount < 0 ? from : 0,
+            cursorMode && rawCount > 0 ? from : 0,
+        )
+        : null
+    /** @type {number[]} */
+    let ids = directTarget ? [directTarget] : (recent?.ids || [])
+    let sourceTruncated = recent?.truncated || false
+    if (
+        (!ids?.length && (!recent || !recent.hasNumberedData))
+        || (recent && !from && ids.length < count && !recent.truncated)
+    ) {
+        const keys = await listAllCommentKeys(data)
+        ids = keys.map(keyToId).filter(id => id !== null)
+        sourceTruncated = false
+    }
 
     // 按可见留言数量收集(count=1 与居中窗口保持跳转语义)
     const collected = await collectVisibleComments(data, ids, {
@@ -385,7 +506,8 @@ export async function listComments(data, query, viewer) {
         rawCount,
         beforeTime,
         viewer,
-        centered: Boolean(from && rawCount !== 1 && ids.includes(from)),
+        centered: Boolean(!cursorMode && from && rawCount !== 1 && ids.includes(from)),
+        sourceTruncated,
     })
 
     // 旧数据(未迁移)缺少 number 字段时,用 id 顺序作为展示编号
@@ -394,10 +516,11 @@ export async function listComments(data, query, viewer) {
         ? new Map(ids.map((id, index) => [id, index + 1]))
         : null
 
+    const previews = await loadReplyPreviews(data, collected.items, viewer)
     const items = await Promise.all(collected.items.map(comment => getCommentDetail(data, {
         ...comment,
         number: comment.number ?? fallbackRanks?.get(comment.id) ?? comment.id,
-    }, viewer)))
+    }, viewer, previews)))
     return { items, hasMore: collected.truncated }
 }
 
@@ -478,6 +601,8 @@ export async function setLike(data, commentId, user, liked) {
     } else {
         await data.delete(key)
     }
+    const likes = await countLikeRecords(data, commentId)
+    return { liked: Boolean(liked), likes }
 }
 
 export async function moderateComment(data, commentId, action) {

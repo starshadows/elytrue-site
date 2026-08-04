@@ -748,6 +748,28 @@ body:not(.fullscreen) #lowerPanel.animating:not(.lowerPanelUp) {
     border-radius: 0.375em;
 }
 
+.semanticButton {
+    margin: 0;
+    border: 0;
+    background: none;
+    color: inherit;
+    font: inherit;
+    letter-spacing: 0;
+    text-align: inherit;
+    cursor: pointer;
+}
+
+.semanticButton:focus-visible,
+[role="button"]:focus-visible {
+    outline: 0.125rem solid #ffb5da;
+    outline-offset: 0.125rem;
+}
+
+#comments .commentBox .action .btn.reply img {
+    width: 1.5em;
+    height: 1.5em;
+}
+
 #comments .commentBox .action .btn:hover {
     background-color: rgba(255, 255, 255, 0.25);
 }

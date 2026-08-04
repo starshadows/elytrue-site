@@ -117,15 +117,29 @@ async function send(): Promise<void> {
       id="msgPopupAvatar"
       class="avatar"
       :src="avatar"
+      :alt="`${sender}的头像`"
+      role="button"
+      tabindex="0"
       @click="runProfileAction('changeAvatar')"
+      @keydown.enter="runProfileAction('changeAvatar')"
+      @keydown.space.prevent="runProfileAction('changeAvatar')"
     />
-    <div id="senderText" class="sender" @click="runProfileAction('changeName')">
+    <button
+      id="senderText"
+      type="button"
+      class="sender semanticButton"
+      @click="runProfileAction('changeName')"
+    >
       {{ sender }}
-    </div>
-    <div class="id" @click="Popups.show('loginPopup')">
+    </button>
+    <button
+      type="button"
+      class="id semanticButton"
+      @click="Popups.show('loginPopup')"
+    >
       <span class="ui zh">注册/登录</span
       ><span class="ui en">Login / Register</span>
-    </div>
+    </button>
     <div class="comment">
       <div
         ref="text"
@@ -139,10 +153,10 @@ async function send(): Promise<void> {
         id="newCommentReplyQuote"
         class="comment-reply-quote dark"
       >
-        <img class="reply-icon" src="/res/reply.svg" />
+        <img class="reply-icon" src="/res/reply.svg" alt="" />
         <div class="quote-content">
           <div class="quote-head">
-            <img class="quote-avatar" :src="avatarPath(reply.avatar)" />
+            <img class="quote-avatar" :src="avatarPath(reply.avatar)" alt="" />
             <div class="quote-sender">{{ reply.sender }}</div>
             <div class="quote-id">#{{ reply.displayId }}</div>
           </div>
@@ -154,8 +168,19 @@ async function send(): Promise<void> {
           <img
             :src="source"
             class="uploadImg"
+            alt="待上传图片"
+            role="button"
+            tabindex="0"
             @click="ImgViewer.view(source)"
-          /><button @click="uploads.splice(index, 1)">❌</button>
+            @keydown.enter="ImgViewer.view(source)"
+            @keydown.space.prevent="ImgViewer.view(source)"
+          /><button
+            type="button"
+            :aria-label="`移除第 ${index + 1} 张图片`"
+            @click="uploads.splice(index, 1)"
+          >
+            ❌
+          </button>
         </div>
       </div>
     </div>
@@ -174,10 +199,15 @@ async function send(): Promise<void> {
       ></label
     >
     <div class="messageActions">
-      <button id="cancelSendBtn" :disabled="sending" @click="emit('close')">
+      <button
+        id="cancelSendBtn"
+        type="button"
+        :disabled="sending"
+        @click="emit('close')"
+      >
         <span class="ui zh">取消发送</span
         ><span class="ui en">Cancel</span></button
-      ><button id="sendBtn" :disabled="sending" @click="send">
+      ><button id="sendBtn" type="button" :disabled="sending" @click="send">
         <span class="ui zh">{{ sending ? '正在发送…' : '发送 ✔' }}</span
         ><span class="ui en">{{ sending ? 'Sending…' : 'Send ✔' }}</span>
       </button>

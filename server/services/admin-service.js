@@ -1,20 +1,10 @@
-import { mutateUserRecord, requireSession } from '../auth.js'
+import { mutateUserRecord } from '../auth.js'
 import { blobKeys } from '../domain/blob-keys.js'
 import { httpError } from '../http.js'
 import { getJSON } from '../storage.js'
 import { moderateComment } from '../comments.js'
 import { getUploadUsage } from './image-service.js'
 import { listReports } from './report-service.js'
-
-export async function authorizeAdmin(data, request, env, enforceLimit) {
-    const auth = await requireSession(data, request, {
-        csrf: !['GET', 'HEAD'].includes(request.method.toUpperCase()),
-        env,
-    })
-    if (auth.user.role !== 'admin') throw httpError(403, '无管理权限')
-    await enforceLimit(auth.user)
-    return auth
-}
 
 export async function bootstrapAdministrator(data, user, configuredSecret, suppliedSecret) {
     if (!configuredSecret || suppliedSecret !== configuredSecret) {

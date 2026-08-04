@@ -2,7 +2,12 @@ import assert from 'node:assert/strict'
 import { readFile } from 'node:fs/promises'
 import { describe, test } from 'node:test'
 import { blobKeys } from '../server/domain/blob-keys.js'
-import { API_ROUTES, matchApiRoute } from '../server/routes/registry.js'
+import { API_ROUTE_HANDLERS } from '../server/app.js'
+import {
+  API_ROUTES,
+  matchApiRoute,
+  validateApiRouteRegistry,
+} from '../server/routes/registry.js'
 
 describe('historical Blob key contract', () => {
   test('preserves every production key shape', () => {
@@ -47,6 +52,8 @@ describe('historical Blob key contract', () => {
       'comments/u-1/image-1.jpg',
     )
     assert.equal(blobKeys.uploadUsage, 'usage/uploads.json')
+    assert.equal(blobKeys.imageUploadOperation('image-1'), 'operations/image-uploads/image-1.json')
+    assert.equal(blobKeys.imageDeleteOperation('image-1'), 'operations/image-deletes/image-1.json')
   })
 })
 
@@ -67,6 +74,16 @@ describe('declarative API route contract', () => {
     assert.equal(matchApiRoute('GET', 'missing'), undefined)
   })
 
+  test('requires complete policies and registered handlers', () => {
+    assert.equal(validateApiRouteRegistry(API_ROUTES, Object.keys(API_ROUTE_HANDLERS)), true)
+    assert.throws(
+      () => validateApiRouteRegistry([
+        { methods: ['GET'], match: { kind: 'exact', path: 'test' }, handler: 'missing', auth: 'public' },
+      ], Object.keys(API_ROUTE_HANDLERS)),
+      /Missing API route CSRF policy/u,
+    )
+  })
+
   test('keeps the EdgeOne Cloud Function entry path and export unchanged', async () => {
     const entry = await readFile(
       new URL('../cloud-functions/api/[[default]].js', import.meta.url),
@@ -74,6 +91,18 @@ describe('declarative API route contract', () => {
     )
     assert.match(entry, /import \{ handleApiRequest \} from '\.\.\/\.\.\/server\/app\.js'/u)
     assert.match(entry, /export default function onRequest\(context\)/u)
+  })
+
+  test('keeps core comment actions keyboard accessible without card-level request fan-out', async () => {
+    const [card, panel] = await Promise.all([
+      readFile(new URL('../src/components/CommentCard.vue', import.meta.url), 'utf8'),
+      readFile(new URL('../src/components/CommentsPanel.vue', import.meta.url), 'utf8'),
+    ])
+    assert.match(card, /<button[\s\S]*class="btn like semanticButton"/u)
+    assert.match(card, /:aria-pressed="record\.liked"/u)
+    assert.match(card, /aria-label="回复留言"/u)
+    assert.doesNotMatch(card, /onMounted[\s\S]*commentsApi\.list/u)
+    assert.match(panel, /<button[^>]*class="commentSeekArrow semanticButton"/u)
   })
 })
 

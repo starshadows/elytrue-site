@@ -334,6 +334,37 @@ describe('EdgeOne public origin validation', () => {
     })
 })
 
+describe('declarative route security policy', () => {
+    it('enforces public, optional, session, admin, and CSRF policies', async () => {
+        const guest = createState('10.0.0.20')
+        assert.equal((await call(guest, 'GET', 'health')).response.status, 200)
+        assert.equal((await call(guest, 'GET', 'comments')).response.status, 200)
+        assert.equal((await call(guest, 'GET', 'user/me')).response.status, 200)
+        assert.equal((await call(guest, 'POST', 'user/logout')).response.status, 401)
+
+        const stores = guest.stores
+        const admin = guest
+        assert.equal((await call(admin, 'POST', 'user/register', {
+            name: '策略管理员',
+            email: 'policy-admin@example.com',
+            password: 'policy-admin-password',
+        })).response.status, 201)
+        const member = createState('10.0.0.21')
+        member.stores = stores
+        assert.equal((await call(member, 'POST', 'user/register', {
+            name: '策略普通用户',
+            email: 'policy-member@example.com',
+            password: 'policy-member-password',
+        })).response.status, 201)
+        assert.equal((await call(member, 'GET', 'admin/reports')).response.status, 403)
+
+        admin.csrfToken = ''
+        assert.equal((await call(admin, 'POST', 'comments/post', { comment: '缺少令牌' })).response.status, 403)
+        admin.csrfToken = 'incorrect-csrf-token'
+        assert.equal((await call(admin, 'POST', 'comments/post', { comment: '错误令牌' })).response.status, 403)
+    })
+})
+
 describe('EdgeOne comments, uploads and moderation API', () => {
     const state = createState('10.0.1.1')
     let commentId
