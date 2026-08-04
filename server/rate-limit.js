@@ -10,12 +10,15 @@ export function resetMemoryRateLimitsForTests() {
 const POLICIES = {
     register: [20, 60 * 60],
     login: [12, 15 * 60],
-    reset: [5, 60 * 60],
+    recoverIp: [5, 60 * 60],
+    recoverAccount: [5, 60 * 60],
+    recoveryKey: [5, 60 * 60],
     comment: [10, 10 * 60],
     upload: [12, 10 * 60],
     like: [60, 10 * 60],
     report: [10, 60 * 60],
     admin: [30, 10 * 60],
+    userUpdate: [30, 10 * 60],
 }
 
 export async function enforceRateLimit(action, identity) {

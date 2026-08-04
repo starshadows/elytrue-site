@@ -35,6 +35,16 @@
             <span class="ui zh">修改密码</span
             ><span class="ui en">Change password</span>
           </li>
+          <li @click="userAction('recoveryKey')">
+            <span class="ui zh">{{
+              user.hasRecoveryKey ? '重新生成恢复密钥' : '生成恢复密钥'
+            }}</span>
+            <span class="ui en">{{
+              user.hasRecoveryKey
+                ? 'Regenerate recovery key'
+                : 'Generate recovery key'
+            }}</span>
+          </li>
         </ul>
       </div>
       <div>
@@ -143,6 +153,7 @@ function userAction(
     | 'changeAvatar'
     | 'changeEmail'
     | 'changePassword'
+    | 'recoveryKey'
     | 'logout'
     | 'resetToken',
 ): void {

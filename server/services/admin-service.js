@@ -1,4 +1,4 @@
-import { requireSession } from '../auth.js'
+import { mutateUserRecord, requireSession } from '../auth.js'
 import { blobKeys } from '../domain/blob-keys.js'
 import { httpError } from '../http.js'
 import { getJSON } from '../storage.js'
@@ -22,13 +22,25 @@ export async function bootstrapAdministrator(data, user, configuredSecret, suppl
     }
     const marker = await getJSON(data, blobKeys.adminBootstrapClosed)
     if (marker) throw httpError(410, '管理员初始化入口已永久关闭')
-    user.role = 'admin'
-    user.updatedAt = Date.now()
-    await data.setJSON(blobKeys.user(user.id), user)
-    await data.setJSON(blobKeys.adminBootstrapClosed, {
-        userId: user.id,
-        closedAt: Date.now(),
-    }, { onlyIfNew: true })
+    try {
+        await data.setJSON(blobKeys.adminBootstrapClosed, {
+            userId: user.id,
+            closedAt: Date.now(),
+            manual: true,
+        }, { onlyIfNew: true })
+    } catch (error) {
+        if (
+            error?.name === 'PreconditionFailedError'
+            || error?.code === 'PRECONDITION_FAILED'
+            || error?.statusCode === 412
+        ) {
+            throw httpError(410, '管理员初始化入口已永久关闭')
+        }
+        throw error
+    }
+    await mutateUserRecord(data, user, current => {
+        current.role = 'admin'
+    }, { claimType: 'admin-bootstrap' })
 }
 
 export async function getAdminReports(data) {

@@ -2,6 +2,12 @@
 
 基线提交：`3b3b69d02869abcbfd20074e1d311e9af2517537`
 
+## 2026-08-04 账号恢复与留言面板修复
+
+- 邮件密码重置、外部邮件适配、重置链接和 token 消费接口已移除，改为注册时一次展示的账号恢复密钥。恢复密钥约 139 bit，仅保存独立 scrypt 哈希、创建时间和版本；账号恢复会同时轮换密码/密钥并增加 `sessionVersion`。
+- 新接口为 `POST user/recover` 与需会话/CSRF/当前密码的 `POST user/recovery-key`。历史用户无需迁移，缺少恢复字段按尚未设置处理；历史 `password-resets/*` Blob 不再读取且不会自动删除。
+- 留言面板以 `auto`、`forced-up`、`forced-down` 三态代替永久命令式 class。编辑器关闭或 Escape 后暂时抑制当前 hover，指针离开后恢复自动悬停；卸载时恢复 overscroll、键盘 class 和定时器。
+
 ## 2026-08-03 交互状态收尾
 
 本次从同步后的远端 `main` 提交 `9348c77` 开始，只修复前端交互状态，不改变 API、Cookie、CSRF、数据格式、存储或管理员初始化行为。
@@ -21,7 +27,7 @@
 - `@types/node` 声明与 lockfile 均固定为 `20.19.43`；服务端 target 保持 ES2022，运行时边界阻断 Node 21+ SQLite、`process.getBuiltinModule`、新版 `import.meta` 和文件系统 glob API。Node 20 CI 继续执行 `npm ci`、`check:server`、`test:server`。
 - `tsconfig.server.json` 已启用 `strictNullChecks`、`noUncheckedIndexedAccess`、`alwaysStrict`、`strictBindCallApply`、`strictBuiltinIteratorReturn` 和 `strictFunctionTypes`。`strict`、`noImplicitAny` 暂未整体开启：现有 JS 打开两者仍有 444 个错误，其中 357 个为 TS7006；只开启 `noImplicitAny` 仍有 426 个错误。`skipLibCheck` 暂留，因为此轮只收紧生产 JS，不把第三方声明升级风险混入行为重构；没有用 exclude、`@ts-ignore` 或 `any` 掩盖。
 - 前端迁移已收尾：删除旧命令式入口、类型垫片、外壳模板和兼容控制层。`App.vue` 现在是唯一 Vue 根应用；Comments store 负责留言查询、分页、跳转、计数和点赞，Auth store 负责登录状态，Theme/Music/Timeline/PWA/Viewport controller 负责各自生命周期。留言卡片、编辑器、时间轴、工具栏、弹窗、浮动消息和图片查看器均由根应用组件树渲染，不再导入即挂载子应用。
-- `server/app.js` 按仓库物理行从 594 行降到 423 行，主要保留路由匹配、解析、service 调用、响应适配和顶层错误边界。新增 image/user/report repositories，以及 image/password-reset/report/admin services；图片 pending/active、别名与用量、密码重置、举报和管理员流程已移出入口。只做转发的 auth/comment service 已删除。
+- `server/app.js` 主要保留路由匹配、解析、service 调用、响应适配和顶层错误边界。图片、账号恢复、举报和管理员流程由独立 service/repository 承担；只做转发的 auth/comment service 已删除。
 - 新留言建立按内部 ID 查询公开编号的轻量反向记录，新举报写 `commentNumber`。读取顺序为举报字段、留言本体、反向记录；只有仍无法解析且已删除的旧举报才每页 100、最多 10 页扫描旧编号座位。命中会渐进回填，命中与未命中均缓存 5 分钟，不要求生产迁移，正常管理请求不再用 `Infinity` 扫编号。
 - 旧外部服务器全屏代理入口、canonical/alternate、iframe、脚本和 4 个文件已彻底删除；生产源码与 `dist` 的路径和内容均有静态门禁，旧路径使用现有 SPA fallback。
 - `edgeone.json` 对所有响应加入一年期、含子域且不含 preload 的 HSTS。Edge Runtime 按 `Content-Type` 只给 HTML 添加页面 CSP、`X-Frame-Options` 与 Permissions Policy；API JSON 和图片二进制无页面 CSP。HTML `script-src` 仅 `'self'`；`style-src 'unsafe-inline'` 暂留给背景焦点、进度、手势、缩放、弹窗动画和 Vue 运行时样式。
@@ -80,7 +86,7 @@ middleware.js：Edge Runtime / Web APIs / ES2023+
 | `src/components/`                    | 多个独立 Vue app 分别挂载，部分组件仍使用内联事件和 `@ts-nocheck`                            |
 | `src/net/`                           | XHR 客户端；依赖 `window.baseUrl/bgBaseUrl`                                                  |
 | `server/app.js`                      | API 路由、上传、用量、认证编排和管理逻辑集中在单文件                                         |
-| `server/*.js`                        | 认证、留言、存储、图片、邮件、HTTP 和限流逻辑                                                |
+| `server/*.js`                        | 认证、留言、存储、图片、账号恢复、HTTP 和限流逻辑                                            |
 | `cloud-functions/api/[[default]].js` | 稳定的 EdgeOne Cloud Functions `/api/*` 入口                                                 |
 | `middleware.js`                      | 主域名重定向及 KV 边缘限流                                                                   |
 | `scripts/`                           | Mock、构建信息、导出、重复用户、索引和用量维护                                               |
@@ -104,7 +110,7 @@ middleware.js：Edge Runtime / Web APIs / ES2023+
 所有路径位于同源 `/api/*`，响应 envelope 保持 `{ code, message, data }`：
 
 - 健康：`GET /api`、`GET /api/health`。
-- 账号：`POST user/register|login|logout|resettoken|resetpassword`、`GET user/me|find`、`PUT user/update`、`POST action`。
+- 账号：`POST user/register|login|logout|resettoken|recover|recovery-key`、`GET user/me|find`、`PUT user/update`。
 - 上传：`POST|DELETE uploads/image`；头像、留言图和默认头像 GET 路径。
 - 留言：`GET comments|comments/count`、`POST comments/post|comments/like|comments/report`、`DELETE comments/like`。
 - 管理：`POST admin/bootstrap|admin/comments/moderate`、`GET admin/reports|admin/usage`。
@@ -124,7 +130,7 @@ Store 名称保持：
 - `indexes/users/name/{sha256}.json`
 - `indexes/users/email/{keyedDigest}.json`
 - `sessions/{tokenHash}.json`
-- `password-resets/{tokenHash}.json` 及 `.claimed`
+- `recovery-key-claims/{userId}/{version}.json`
 - `comments/{16位内部ID}.json`
 - `indexes/comments/number/{公开编号}.json`
 - `indexes/comments/by-user/{uid}/{16位内部ID}.json`
@@ -210,7 +216,7 @@ Store 名称保持：
 
 - `server/routes/registry.js` 是声明式 API 合同，逐项记录 method、path/prefix、鉴权、CSRF 和管理员要求；`server/app.js` 只按该表分发，未知 method/path 仍返回原 404 envelope。
 - `server/domain/blob-keys.js` 集中构造生产 Blob key。构造器保留原前缀、16 位内部 ID 补零、`.json` 后缀、编号座位、墓碑、repair marker 和图片别名字符串；已有数据无需迁移。
-- `server/middleware/` 只处理请求来源、环境和客户端标识；`server/services/` 现在真实承担图片、密码重置、举报与管理员用例；`server/repositories/` 封装图片、用户、举报的 Blob 访问；`server/storage.js` 继续持有唯一 Store 名称与 MemoryStore 注入点，`server/lib/` 保存无业务状态的路由解析。
+- `server/middleware/` 只处理请求来源、环境和客户端标识；`server/services/` 承担图片、账号恢复、举报与管理员用例；`server/repositories/` 封装图片、用户、举报的 Blob 访问；`server/storage.js` 继续持有唯一 Store 名称与 MemoryStore 注入点，`server/lib/` 保存无业务状态的路由解析。
 - `cloud-functions/api/[[default]].js` 入口及默认导出未改；生产代码未引入 Vue、Vite、Playwright、浏览器全局或 Node 22 独占 API。
 - 本阶段 `check:server`、运行时边界检查和全部服务端测试通过；另以 Node 20.19.5 执行服务端测试，87 项通过，真实 EdgeOne 凭据测试未进入该离线命令。
 

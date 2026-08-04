@@ -114,11 +114,7 @@ onMounted(() => {
   pwa.init()
   viewport.init()
   void initializeAuth()
-  if (location.hash.startsWith('#resetpassword=')) {
-    Popups.show('setPasswordPopup', {
-      passwordResetToken: location.hash.replace('#resetpassword=', ''),
-    })
-  } else if (location.hash.startsWith('#popup-')) {
+  if (location.hash.startsWith('#popup-')) {
     const popup = location.hash.slice(7)
     if (popup === 'loginPopup') Popups.show('loginPopup')
   }

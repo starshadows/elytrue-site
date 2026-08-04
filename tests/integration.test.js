@@ -25,7 +25,6 @@ const secret = process.env.ELYTRUE_TEST_APP_SECRET || 'integration-test-secret-t
 const origin = 'https://integration.elytrue.test'
 const env = {
     ELYTRUE_APP_SECRET: secret,
-    RESEND_API_KEY: '',
     PUBLIC_SITE_URL: origin,
     ADMIN_BOOTSTRAP_SECRET: 'integration-bootstrap-secret',
     ALLOWED_ORIGINS: origin,

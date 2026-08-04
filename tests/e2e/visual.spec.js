@@ -68,6 +68,12 @@ test('mobile home matches the pre-refactor visual baseline', async ({
   await page.goto('/')
   await expect(page.locator('#userInfoName')).toHaveText(/访客/)
   await page.evaluate(() => document.fonts.ready)
+  await page
+    .locator('#comments .commentItem .bg')
+    .first()
+    .evaluate(
+      (image) => (image.src = '/assets/elytrue-20260724/bg/portrait2.webp'),
+    )
   await waitForCommentImages(page)
   await expectBaseline(page, 'mobile-home')
 })

@@ -47,8 +47,6 @@ import { refreshAuth } from '../../features/auth/auth-actions'
 import { authStore } from '../../features/auth/auth-store'
 
 export default {
-  props: ['passwordResetToken'],
-
   data: () => ({
     password: '',
     passwordConfirm: '',
@@ -57,35 +55,19 @@ export default {
 
   methods: {
     submit() {
-      if (this.passwordResetToken) {
-        XHR.post('action', {
-          id: this.passwordResetToken,
-          data: this.password,
-        }).then((r) => {
-          if (r.code == 1) {
-            this.$emit('close')
-            FloatMsgs.show({
-              type: 'success',
-              msg: '<span class="ui zh">密码重置成功! 请重新登录</span><span class="ui en">Password reset successfully! Try log in again</span>',
-            })
-            location.hash = ''
-          }
-        })
-      } else {
-        XHR.put('user/update', { password: this.password }).then((r) => {
-          if (r.code == 1) {
-            this.$emit('close')
-            XHR.token = ''
-            XHR.csrfToken = ''
-            authStore.clear()
-            void refreshAuth()
-            FloatMsgs.show({
-              type: 'success',
-              msg: '<span class="ui zh">密码修改成功，请重新登录</span><span class="ui en">Password updated. Please log in again.</span>',
-            })
-          }
-        })
-      }
+      XHR.put('user/update', { password: this.password }).then((r) => {
+        if (r.code == 1) {
+          this.$emit('close')
+          XHR.token = ''
+          XHR.csrfToken = ''
+          authStore.clear()
+          void refreshAuth()
+          FloatMsgs.show({
+            type: 'success',
+            msg: '<span class="ui zh">密码修改成功，请重新登录</span><span class="ui en">Password updated. Please log in again.</span>',
+          })
+        }
+      })
     },
   },
 }

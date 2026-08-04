@@ -4,7 +4,7 @@
  *
  * 用法:
  *   EDGEONE_PROJECT_ID=<项目ID> EDGEONE_API_TOKEN=<API Token> \
- *     [ELYTRUE_APP_SECRET=<应用密钥>] \
+ *     [ELYTRUE_APP_SECRET=<应用密钥, --fix 必需>] \
  *     node scripts/check-duplicate-users.mjs [--fix]
  *
  * 行为:
@@ -13,9 +13,8 @@
  *     当前 indexes/users/name/ 索引指向),并把 JSON 报告写入 exports/。
  *   --fix 修复模式:先打印完整修复计划(dry-run),再执行:
  *     每个重复组保留 createdAt 最早的账号原用户名,其余账号改名 原名_2、原名_3 ...
- *     (新名被占用则继续递增后缀);每条改名按
- *     「改 users/{id}.json 的 name → 删除旧用户名索引(仅当索引指向本账号)→
- *     onlyIfNew 写新索引,失败回滚用户 name」执行;随后校正保留账号的索引;
+ *     (新名被占用则继续递增后缀);每条改名复用 updateUser 的索引事务与
+ *     用户版本认领,防止覆盖并发的账号恢复或资料更新;随后校正保留账号的索引;
  *     最后重新校验(无重复、每个用户有且仅有一个正确指向自己的用户名索引)。
  *
  * 危险操作:
@@ -35,6 +34,7 @@ import { getStore } from '@edgeone/pages-blob'
 import { getJSON, isPreconditionFailure, listAll } from '../server/storage.js'
 import { normalizeUsername } from '../shared/validation.js'
 import { decryptEmail, sha256 } from '../server/crypto.js'
+import { updateUser } from '../server/auth.js'
 
 const FIX = process.argv.includes('--fix')
 const DATA_STORE = 'elytrue-data'
@@ -161,24 +161,14 @@ async function buildPlan(data, dupGroups, allUsers) {
     return plan
 }
 
-async function renameUser(data, user, candidate) {
-    const key = userKey(user.id)
-    const oldKey = usernameIndexKey(user.name)
-    const oldIndex = await getJSON(data, oldKey)
-    const ownsOld = oldIndex?.userId === user.id
-    const previous = user
-
-    await data.setJSON(key, { ...user, name: candidate, updatedAt: Date.now() })
-    if (ownsOld) await data.delete(oldKey)
+async function renameUser(data, user, candidate, secret) {
     try {
-        await data.setJSON(usernameIndexKey(candidate), { userId: user.id }, { onlyIfNew: true })
+        await updateUser(data, null, { ELYTRUE_APP_SECRET: secret }, user, {
+            name: candidate,
+        })
         return { taken: false }
     } catch (error) {
-        await data.setJSON(key, { ...previous, updatedAt: Date.now() })
-        if (ownsOld) {
-            await data.setJSON(oldKey, { userId: user.id }, { onlyIfNew: true }).catch(() => {})
-        }
-        if (isPreconditionFailure(error)) return { taken: true }
+        if (error?.status === 409 || isPreconditionFailure(error)) return { taken: true }
         throw error
     }
 }
@@ -261,6 +251,9 @@ async function main() {
     const secret = process.env.ELYTRUE_APP_SECRET
     if (!projectId || !token) {
         throw new Error('缺少环境变量:必须设置 EDGEONE_PROJECT_ID 与 EDGEONE_API_TOKEN 后才能运行(可先执行 npm run export:data 备份)')
+    }
+    if (FIX && (!secret || secret.length < 32)) {
+        throw new Error('--fix 必须设置至少 32 个字符的 ELYTRUE_APP_SECRET,用于复用用户索引事务')
     }
 
     console.error(`连接 Blob 存储 ${DATA_STORE} ...`)
@@ -358,7 +351,7 @@ async function main() {
                 suffix += 1
                 continue
             }
-            result = await renameUser(data, user, candidate)
+            result = await renameUser(data, user, candidate, secret)
             if (!result.taken) {
                 executed.push(`已改名:${entry.from} → ${candidate} (${entry.userId})`)
                 break

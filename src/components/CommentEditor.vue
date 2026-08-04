@@ -10,14 +10,13 @@ import {
 } from '../features/auth/auth-actions'
 import { authStore } from '../features/auth/auth-store'
 import { commentsApi } from '../features/comments/comments-api'
-import { commentsStore } from '../features/comments/comments-store'
 import type { CommentRecord } from '../features/comments/comment-types'
 import FloatMsgs from './FloatMsgs'
 import ImgViewer from './ImgViewer'
 import Popups from './Popups'
 
 const props = defineProps<{ replyNumber?: number }>()
-const emit = defineEmits<{ close: []; focus: [] }>()
+const emit = defineEmits<{ close: []; focus: []; sent: [] }>()
 const text = useTemplateRef<HTMLDivElement>('text')
 const picker = useTemplateRef<HTMLInputElement>('picker')
 const uploads = ref<string[]>([])
@@ -96,7 +95,7 @@ async function send(): Promise<void> {
       if (!csrfRejected || !(await refreshAuth())) throw error
       await commentsApi.create(payload)
     }
-    window.setTimeout(() => void commentsStore.refresh(), 1_000)
+    emit('sent')
   } catch (error) {
     void Promise.allSettled(uploaded.map((id) => commentsApi.deleteUpload(id)))
     const reason =

@@ -10,6 +10,7 @@ const user1Name = unique('星花旅人')
 const user1Email = `owner_${Date.now()}@example.com`
 
 let user1Message = '第一条测试留言，愿星花与你同在'
+let user1RecoveryKey = ''
 
 async function expectVisitor(page) {
   await expect(page.locator('#userInfoName')).toHaveText(/访客/)
@@ -42,6 +43,29 @@ async function liftPanel(page) {
   await page.waitForTimeout(300)
 }
 
+async function expectPanelCollapsed(page) {
+  await expect
+    .poll(() =>
+      page
+        .locator('#lowerPanel')
+        .evaluate((panel) => panel.getBoundingClientRect().top),
+    )
+    .toBeGreaterThan(400)
+}
+
+async function leaveAndReliftPanel(page) {
+  await page.mouse.move(640, 100)
+  await expectPanelCollapsed(page)
+  await page.mouse.move(640, 690)
+  await expect
+    .poll(() =>
+      page
+        .locator('#lowerPanel')
+        .evaluate((panel) => panel.getBoundingClientRect().top),
+    )
+    .toBeLessThan(350)
+}
+
 async function openLoginPopup(page) {
   await page.locator('#userInfo').click()
   await expect(page.locator('#popups .loginPopup')).toBeVisible()
@@ -68,8 +92,20 @@ async function fillRegisterForm(page, name, email, password) {
   await popup.locator('.okBtn').click()
 }
 
+async function confirmRecoveryKey(page) {
+  const popup = page.locator('#popups .recoveryKeyPopup')
+  await expect(popup).toBeVisible()
+  const key = (await popup.getByTestId('recovery-key').textContent()).trim()
+  await expect(popup.getByTestId('confirm-recovery-key')).toBeDisabled()
+  await popup.locator('.recoveryConfirmation input').check()
+  await popup.getByTestId('confirm-recovery-key').click()
+  await expect(popup).toHaveCount(0)
+  return key
+}
+
 async function registerViaPopup(page, name, email, password) {
   await fillRegisterForm(page, name, email, password)
+  await confirmRecoveryKey(page)
   await expect(page.locator('#popups .popupContainer')).toHaveCount(0)
 }
 
@@ -106,7 +142,10 @@ test('页面加载后默认显示访客', async ({ page }) => {
   await expect(page.locator('#popups .loginPopup')).toHaveCount(0)
 })
 
-test('注册：弹登录框切换到注册并登录成功', async ({ page }) => {
+test('注册：展示一次性恢复密钥，支持复制下载并确认保存', async ({
+  page,
+  context,
+}) => {
   await page.goto('/')
   await expectVisitor(page)
 
@@ -124,8 +163,74 @@ test('注册：弹登录框切换到注册并登录成功', async ({ page }) => 
   await popup.locator('input').nth(3).fill(PASSWORD)
   await popup.locator('.okBtn').click()
 
+  const recoveryPopup = page.locator('#popups .recoveryKeyPopup')
+  await expect(recoveryPopup).toBeVisible()
+  user1RecoveryKey = (
+    await recoveryPopup.getByTestId('recovery-key').textContent()
+  ).trim()
+  expect(user1RecoveryKey).toMatch(
+    /^ELY-(?:[23456789ABCDEFGHJKMNPQRSTUVWXYZ]{4}-){6}[23456789ABCDEFGHJKMNPQRSTUVWXYZ]{4}$/,
+  )
+  await expect(recoveryPopup.getByText('Save your recovery key')).toHaveCount(1)
+  await page.keyboard.press('Escape')
+  await expect(recoveryPopup).toBeVisible()
+  await context.grantPermissions(['clipboard-read', 'clipboard-write'], {
+    origin: BASE,
+  })
+  await recoveryPopup.getByTestId('copy-recovery-key').click()
+  await expect
+    .poll(() => page.evaluate(() => navigator.clipboard.readText()))
+    .toBe(user1RecoveryKey)
+  const downloadPromise = page.waitForEvent('download')
+  await recoveryPopup.getByTestId('download-recovery-key').click()
+  const download = await downloadPromise
+  expect(download.suggestedFilename()).toBe('elytrue-recovery-key.txt')
+  await recoveryPopup.locator('.recoveryConfirmation input').check()
+  await recoveryPopup.getByTestId('confirm-recovery-key').click()
   await expect(page.locator('#popups .popupContainer')).toHaveCount(0)
   await expectLoggedIn(page, user1Name)
+})
+
+test('注册：登录态刷新失败时仍先展示一次性恢复密钥', async ({ page }) => {
+  let failProfileRefresh = false
+  let markProfileRefreshStarted
+  let releaseProfileRefresh
+  const profileRefreshStarted = new Promise((resolve) => {
+    markProfileRefreshStarted = resolve
+  })
+  const profileRefreshRelease = new Promise((resolve) => {
+    releaseProfileRefresh = resolve
+  })
+  await page.route('**/api/user/me', async (route) => {
+    if (!failProfileRefresh) {
+      await route.continue()
+      return
+    }
+    markProfileRefreshStarted()
+    await profileRefreshRelease
+    await route.fulfill({
+      status: 503,
+      contentType: 'application/json',
+      body: JSON.stringify({ code: 503, message: '测试刷新失败', data: null }),
+    })
+  })
+  await page.goto('/')
+  await expectVisitor(page)
+  failProfileRefresh = true
+  await fillRegisterForm(
+    page,
+    unique('刷新失败用户'),
+    `refresh_failure_${Date.now()}@example.com`,
+    PASSWORD,
+  )
+
+  const recoveryPopup = page.locator('#popups .recoveryKeyPopup')
+  await expect(recoveryPopup).toBeVisible()
+  await expect(recoveryPopup.getByTestId('recovery-key')).toHaveText(/^ELY-/)
+  await profileRefreshStarted
+  releaseProfileRefresh()
+  await recoveryPopup.locator('.recoveryConfirmation input').check()
+  await recoveryPopup.getByTestId('confirm-recovery-key').click()
 })
 
 test('重复用户名注册被拒绝并提示', async ({ page }) => {
@@ -185,19 +290,87 @@ test('登录状态恢复：注册后刷新页面仍保持登录', async ({ page 
   await expect(page.locator('#popups .loginPopup')).toHaveCount(0)
 })
 
-test('忘记密码：任意邮箱提交后统一提示', async ({ page }) => {
+test('忘记密码：使用恢复密钥并要求保存轮换后的新密钥', async ({
+  page,
+  request,
+}) => {
+  const name = unique('恢复旅人')
+  const email = `recover_${Date.now()}@example.com`
+  const registration = await request.post('/api/user/register', {
+    headers: { origin: BASE, 'x-forwarded-for': '203.0.113.91' },
+    data: { name, email, password: PASSWORD },
+  })
+  expect(registration.status()).toBe(201)
+  const originalKey = (await registration.json()).data.recoveryKey
+
   await page.goto('/')
   await expectVisitor(page)
 
   await openLoginPopup(page)
   await page.getByText(/忘记密码/).click()
 
-  const prompt = page.locator('#popups .popupContainer').last()
-  await expect(prompt.locator('h2')).toContainText('找回密码')
-  await prompt.locator('input').fill('nobody@example.com')
-  await prompt.locator('.okBtn').click()
+  const recoveryForm = page.locator('#popups .loginPopup')
+  await expect(recoveryForm.locator('h2')).toContainText('使用恢复密钥找回账号')
+  await expect(recoveryForm).not.toContainText('重置邮件')
+  await recoveryForm.locator('input').nth(0).fill(email)
+  await recoveryForm.locator('input').nth(1).fill(originalKey)
+  await recoveryForm.locator('input').nth(2).fill('recovered-password-123')
+  await recoveryForm.locator('input').nth(3).fill('recovered-password-123')
+  await recoveryForm.locator('.okBtn').click()
 
-  await expect(page.getByText(/如果账号存在/)).toBeVisible()
+  const newKey = await confirmRecoveryKey(page)
+  expect(newKey).not.toBe(originalKey)
+  const loginPopup = page.locator('#popups .loginPopup')
+  await expect(loginPopup).toBeVisible()
+  await loginPopup.locator('input').nth(0).fill(name)
+  await loginPopup.locator('input').nth(1).fill('recovered-password-123')
+  await loginPopup.locator('.okBtn').click()
+  await expectLoggedIn(page, name)
+})
+
+test('已有用户：输入当前密码后可重新生成恢复密钥', async ({ page }) => {
+  await page.goto('/')
+  await loginByIdentifier(page, user1Name, PASSWORD)
+  await page.locator('#userInfo').click()
+  const userHome = page.locator('#popups .userHome')
+  await expect(userHome).toBeVisible()
+  await userHome.locator('.useraction > div').first().hover()
+  await userHome.getByText('重新生成恢复密钥', { exact: true }).click()
+
+  const setup = page.locator('#popups .recoveryKeySetupPopup')
+  await expect(setup).toBeVisible()
+  await setup.locator('input').fill(PASSWORD)
+  await setup.locator('.okBtn').click()
+  const rotatedKey = await confirmRecoveryKey(page)
+  expect(rotatedKey).not.toBe(user1RecoveryKey)
+})
+
+test('取消发送后鼠标离开再进入可重新展开留言区', async ({ page }) => {
+  await page.goto('/')
+  await loginByIdentifier(page, user1Name, PASSWORD)
+  await liftPanel(page)
+  await page.locator('#newMsg').click()
+  await expect(page.locator('#newCommentBox')).toBeVisible()
+  await page.locator('#cancelSendBtn').click()
+  await expect(page.locator('#newCommentBox')).toHaveCount(0)
+  await expect
+    .poll(() =>
+      page.evaluate(
+        () => document.documentElement.style.overscrollBehavior || '',
+      ),
+    )
+    .toBe('')
+  await leaveAndReliftPanel(page)
+  await expect(page.locator('#newMsg')).toBeVisible()
+})
+
+test('按 Escape 收起后鼠标离开再进入可重新展开留言区', async ({ page }) => {
+  await page.goto('/')
+  await liftPanel(page)
+  await page.keyboard.press('Escape')
+  await expectPanelCollapsed(page)
+  await leaveAndReliftPanel(page)
+  await expect(page.locator('#comments')).toBeVisible()
 })
 
 test('发布留言：新留言卡片出现且编号为 #1', async ({ page }) => {
@@ -216,6 +389,7 @@ test('发布留言：新留言卡片出现且编号为 #1', async ({ page }) => 
   await expect(page.locator('#senderText')).toHaveText(user1Name)
   await typeMessage(page, user1Message)
   await sendMessageAndWaitNewCard(page, 1)
+  await leaveAndReliftPanel(page)
 
   const card = page.locator('#comments .commentItem').first()
   await expect(card.locator('.id')).toHaveText('#1')
@@ -457,13 +631,12 @@ test('举报按钮：留言先加载、用户后登录时自动出现', async ({
 
   // 第二个用户登录(其没有留言,user1 的留言可见 → 举报按钮出现)
   const reporter = unique('举报旅人')
-  await fillRegisterForm(
+  await registerViaPopup(
     page,
     reporter,
     `rp_${Date.now()}@example.com`,
     PASSWORD,
   )
-  await expect(page.locator('#popups .popupContainer')).toHaveCount(0)
   await expect(page.locator('#userInfoName')).toHaveText(reporter)
   await expect(page.locator('#comments .btn.report').first()).toBeVisible()
 

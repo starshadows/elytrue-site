@@ -23,24 +23,73 @@ const container = useTemplateRef<HTMLDivElement>('container')
 const panel = useTemplateRef<HTMLDivElement>('panel')
 const editorOpen = ref(false)
 const replyNumber = ref<number>()
+type PanelMode = 'auto' | 'forced-up' | 'forced-down'
+const panelMode = ref<PanelMode>('auto')
 const pinnedHidden = computed(() => Settings.pinnedHidden)
 let scrollPaused = false
 let pauseTimer: number | undefined
 let scrollTimer: number | undefined
+let refreshTimer: number | undefined
+let pointerInside = false
+let previousOverscroll: { document: string; body: string } | undefined
+
+function setOverscrollContainment(enabled: boolean): void {
+  if (enabled) {
+    if (!previousOverscroll) {
+      previousOverscroll = {
+        document: document.documentElement.style.overscrollBehavior,
+        body: document.body.style.overscrollBehavior,
+      }
+    }
+    document.documentElement.style.overscrollBehavior = 'contain'
+    document.body.style.overscrollBehavior = 'contain'
+    return
+  }
+  if (!previousOverscroll) return
+  document.documentElement.style.overscrollBehavior =
+    previousOverscroll.document
+  document.body.style.overscrollBehavior = previousOverscroll.body
+  previousOverscroll = undefined
+}
 
 function forceLowerPanelUp(): void {
-  panel.value?.classList.add('lowerPanelUp')
-  panel.value?.classList.remove('lowerPanelDown')
-  document.documentElement.style.overscrollBehavior = 'contain'
-  document.body.style.overscrollBehavior = 'contain'
+  panelMode.value = 'forced-up'
+  setOverscrollContainment(true)
 }
 
 function forceLowerPanelDown(): void {
-  panel.value?.classList.remove('lowerPanelUp')
-  panel.value?.classList.add('lowerPanelDown')
-  document.documentElement.style.removeProperty('overscroll-behavior')
-  document.body.style.removeProperty('overscroll-behavior')
+  panelMode.value = pointerInside ? 'forced-down' : 'auto'
+  setOverscrollContainment(false)
   document.getElementById('msgText')?.blur()
+}
+
+function handlePanelPointerEnter(event: PointerEvent): void {
+  pointerInside = true
+  if (panelMode.value === 'forced-down' && event.pointerType !== 'mouse') {
+    panelMode.value = 'auto'
+  }
+}
+
+function handlePanelPointerLeave(): void {
+  pointerInside = false
+  if (panelMode.value === 'forced-down') panelMode.value = 'auto'
+}
+
+function handlePanelPointerDown(event: PointerEvent): void {
+  if (panelMode.value === 'forced-down' && event.pointerType !== 'mouse') {
+    panelMode.value = 'auto'
+  }
+}
+
+function handleDocumentPointerMove(event: PointerEvent): void {
+  if (
+    panelMode.value === 'forced-down' &&
+    panel.value &&
+    !event.composedPath().includes(panel.value)
+  ) {
+    pointerInside = false
+    panelMode.value = 'auto'
+  }
 }
 
 function pauseScroll(milliseconds: number): void {
@@ -182,6 +231,11 @@ function closeEditor(): void {
   forceLowerPanelDown()
 }
 
+function refreshAfterSend(): void {
+  if (refreshTimer !== undefined) window.clearTimeout(refreshTimer)
+  refreshTimer = window.setTimeout(() => void commentsStore.refresh(), 1_000)
+}
+
 function hidePinned(): void {
   Settings.pinnedHidden = true
   FloatMsgs.show({
@@ -209,6 +263,7 @@ onMounted(() => {
   container.value?.addEventListener('wheel', handleWheel)
   document.addEventListener('elytrue:seek-comment', onSeek)
   document.addEventListener('elytrue:open-comment-editor', onOpenEditor)
+  document.addEventListener('pointermove', handleDocumentPointerMove)
   scrollTimer = window.setInterval(handleScroll, 1_000)
   if (getConfig('showTimeline') === 'false')
     document
@@ -221,15 +276,30 @@ onBeforeUnmount(() => {
   container.value?.removeEventListener('wheel', handleWheel)
   document.removeEventListener('elytrue:seek-comment', onSeek)
   document.removeEventListener('elytrue:open-comment-editor', onOpenEditor)
+  document.removeEventListener('pointermove', handleDocumentPointerMove)
   if (pauseTimer !== undefined) window.clearTimeout(pauseTimer)
   if (scrollTimer !== undefined) window.clearInterval(scrollTimer)
+  if (refreshTimer !== undefined) window.clearTimeout(refreshTimer)
+  panelMode.value = 'auto'
+  setOverscrollContainment(false)
+  document.body.classList.remove('touchKeyboardShowing')
 })
 
 defineExpose({ forceLowerPanelDown, forceLowerPanelUp, pauseScroll })
 </script>
 
 <template>
-  <div id="lowerPanel" ref="panel">
+  <div
+    id="lowerPanel"
+    ref="panel"
+    :class="{
+      lowerPanelUp: panelMode === 'forced-up',
+      lowerPanelDown: panelMode === 'forced-down',
+    }"
+    @pointerenter="handlePanelPointerEnter"
+    @pointerleave="handlePanelPointerLeave"
+    @pointerdown="handlePanelPointerDown"
+  >
     <div class="tooltip">
       <span class="ui zh">今日留言: </span
       ><span class="ui en">Messages today: </span
@@ -292,6 +362,7 @@ defineExpose({ forceLowerPanelDown, forceLowerPanelUp, pauseScroll })
         :reply-number="replyNumber"
         @close="closeEditor"
         @focus="forceLowerPanelUp"
+        @sent="refreshAfterSend"
       />
       <div
         id="loadingIndicatorBefore"

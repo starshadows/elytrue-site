@@ -78,7 +78,7 @@ function changeEmail(): void {
       title:
         '<span class="ui zh">修改邮箱</span><span class="ui en">Change email</span>',
       subtitle:
-        '<span class="ui zh">邮箱用于登录、密码找回和账号安全通知，不会公开展示。<br>请输入长期可用的新邮箱</span><span class="ui en">Your email is used for login, password recovery and account security, and is never displayed publicly.<br>Enter a long-term email address</span>',
+        '<span class="ui zh">邮箱可作为登录标识，不会公开展示。<br>请输入长期可用的新邮箱</span><span class="ui en">Your email can be used to log in and is never displayed publicly.<br>Enter a long-term email address</span>',
       text: profile.email ?? '',
       action(email: string, context: InputActionContext) {
         context.setDisabled(true)
@@ -120,6 +120,9 @@ export function runProfileAction(action: ProfileAction): void {
       break
     case 'changePassword':
       Popups.show('setPasswordPopup')
+      break
+    case 'recoveryKey':
+      Popups.show('recoveryKeySetupPopup')
       break
     case 'showMe':
       Popups.show('userHome')

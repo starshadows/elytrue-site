@@ -25,7 +25,7 @@ middleware.js：Edge Runtime / Web APIs / ES2023+
 - `src/config/`：站点、SEO、背景、作者、原图和音乐的类型化配置。
 - `src/lib/api-client.ts`、`src/net/`：同源 `/api/*` 客户端、CSRF、超时与错误 envelope。
 - `cloud-functions/api/[[default]].js`：稳定的 EdgeOne Cloud Functions 入口。
-- `server/`：Node 20 兼容的路由、服务、仓储、认证、留言和 Blob 存储逻辑；图片、密码重置、举报和管理员流程由独立 service/repository 承担。
+- `server/`：Node 20 兼容的路由、服务、仓储、认证、留言和 Blob 存储逻辑；图片、账号恢复、举报和管理员流程由独立 service/repository 承担。
 - `shared/`：不依赖 Node 或 DOM 的纯校验模块。
 - `middleware.js`：主域跳转、Edge KV 限流和按响应类型附加安全头。
 - `public/assets/`、`public/res/`：版本化站点素材、音乐、字体与 UI 资源。
@@ -72,7 +72,13 @@ CI 的 `verify` 和 `e2e` 使用 Node 22.17.1；独立 `server-node20` 任务只
 
 页面安全头由 Edge Runtime 按响应类型附加：HTML 保持 `script-src 'self'`，API JSON 与图片二进制不附加页面 CSP；所有 HTTPS 响应带一年期、含子域但不含 preload 的 HSTS。会话 Cookie 的 `Secure` 依次依据边缘转发协议、请求 URL 和 `PUBLIC_SITE_URL`，因此 EdgeOne TLS 终止后的内部 HTTP URL 与本地 HTTP Mock 均保持正确行为。
 
-2026-08-03 的本轮维护只执行 Node、类型、静态和构建验证；Playwright/E2E 按任务要求未执行。
+## 账号恢复密钥
+
+注册成功后会生成并只展示一次账号恢复密钥。它是忘记密码时唯一的自助恢复凭据，不用于普通登录；请立即保存到密码管理器、备忘录或离线文件，不要发送给他人。服务端只保存用途隔离的慢哈希，不保存或再次返回原文。
+
+已有用户无需迁移数据，可在个人主页的“编辑资料”菜单中输入当前密码生成恢复密钥；重新生成后旧密钥立即失效。忘记密码时在登录弹窗填写用户名或邮箱、恢复密钥和新密码，成功后所有旧会话与旧密钥失效，并只显示一次新的恢复密钥。密码和恢复密钥同时丢失时无法自助恢复，只能联系管理员人工处理。
+
+邮件密码重置和外部邮件服务已移除。历史 `password-resets/*` Blob 不再读取，不要求全量用户或历史数据迁移，也不会在部署时自动删除。
 
 ## 生产部署
 

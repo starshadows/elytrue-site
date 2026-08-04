@@ -98,6 +98,20 @@ test('middleware returns the shared API envelope after the edge rate limit', asy
     })
 })
 
+test('middleware limits account recovery by client IP', async () => {
+    const kv = new MemoryKV()
+    for (let index = 0; index < 5; index += 1) {
+        const response = await middleware(createContext('/api/user/recover', kv))
+        assert.equal(response.status, 200)
+    }
+    const limited = await middleware(createContext('/api/user/recover', kv))
+    assert.equal(limited.status, 429)
+    assert.equal(
+        [...kv.values.keys()].some(key => key.includes('example.com') || key.includes('ELY-')),
+        false,
+    )
+})
+
 test('middleware does not create a site-wide registration bucket without a client IP', async () => {
     const kv = new MemoryKV()
     for (let index = 0; index < 25; index += 1) {

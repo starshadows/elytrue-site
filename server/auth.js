@@ -2,7 +2,9 @@ import { randomUUID } from 'node:crypto'
 import {
     decryptEmail,
     encryptEmail,
+    generateRecoveryKey,
     hashPassword,
+    hashRecoveryKey,
     keyedDigest,
     randomToken,
     sha256,
@@ -87,6 +89,79 @@ export async function findUserById(data, userId) {
     return applyAdminMarker(data, await getJSON(data, blobKeys.user(userId)))
 }
 
+async function cleanupUserMutationClaim(data, userId, version, reservationId) {
+    const key = blobKeys.recoveryKeyClaim(userId, version)
+    let lastError
+    for (let attempt = 0; attempt < 3; attempt += 1) {
+        try {
+            const claim = await getJSON(data, key)
+            if (!claim || claim.reservationId !== reservationId) return
+            await data.delete(key)
+            const remaining = await getJSON(data, key)
+            if (!remaining || remaining.reservationId !== reservationId) return
+            lastError = new Error('claim remained after delete')
+        } catch (error) {
+            lastError = error
+        }
+        await new Promise(resolve => setTimeout(resolve, 25 * (attempt + 1)))
+    }
+    console.error(JSON.stringify({
+        event: 'user_mutation_claim_cleanup_failed',
+        userId,
+        version,
+        error: String(lastError?.message || lastError).slice(0, 300),
+    }))
+}
+
+export async function mutateUserRecord(data, user, mutate, options = {}) {
+    const version = Number(user.recoveryKeyVersion || 0)
+    const reservationId = randomToken(16)
+    const claimKey = blobKeys.recoveryKeyClaim(user.id, version)
+    const conflict = () => httpError(
+        options.conflictStatus || 409,
+        options.conflictMessage || '账号资料正在更新，请稍后重试',
+    )
+    try {
+        try {
+            await data.setJSON(claimKey, {
+                reservationId,
+                claimedAt: Date.now(),
+                type: options.claimType || 'user-mutation',
+            }, { onlyIfNew: true })
+        } catch (error) {
+            if (isPreconditionFailure(error)) throw conflict()
+            throw error
+        }
+        const claim = await getJSON(data, claimKey)
+        if (claim?.reservationId !== reservationId) throw conflict()
+
+        const current = await getJSON(data, blobKeys.user(user.id))
+        if (!current || Number(current.recoveryKeyVersion || 0) !== version) {
+            throw conflict()
+        }
+        const result = await mutate(current)
+        current.recoveryKeyVersion = version + 1
+        current.lastUserMutationId = reservationId
+        current.updatedAt = Date.now()
+
+        try {
+            await data.setJSON(blobKeys.user(user.id), current)
+        } catch (error) {
+            const persisted = await getJSON(data, blobKeys.user(user.id)).catch(() => null)
+            if (
+                persisted?.lastUserMutationId === reservationId
+                && Number(persisted.recoveryKeyVersion || 0) === version + 1
+            ) {
+                return { result, user: persisted }
+            }
+            throw error
+        }
+        return { result, user: current }
+    } finally {
+        await cleanupUserMutationClaim(data, user.id, version, reservationId)
+    }
+}
+
 export async function registerUser(data, env, { name, email, password }) {
     const nameError = validateUsername(name)
     const emailError = validateEmail(email)
@@ -118,12 +193,16 @@ export async function registerUser(data, env, { name, email, password }) {
         emailReserved = true
 
         const now = Date.now()
+        const recoveryKey = generateRecoveryKey()
         const user = {
             id: userId,
             name: normalizedName,
             emailHash: keyedDigest(secret, normalizedEmail, 'email-index'),
             emailCipher: encryptEmail(secret, normalizedEmail),
             passwordHash: await hashPassword(password),
+            recoveryKeyHash: await hashRecoveryKey(recoveryKey),
+            recoveryKeyCreatedAt: now,
+            recoveryKeyVersion: 1,
             avatarKey: '',
             role: 'user',
             sessionVersion: 1,
@@ -144,7 +223,10 @@ export async function registerUser(data, env, { name, email, password }) {
                     { onlyIfNew: true },
                 )
                 user.role = 'admin'
-                await data.setJSON(blobKeys.user(userId), user)
+                const mutation = await mutateUserRecord(data, user, current => {
+                    current.role = 'admin'
+                }, { claimType: 'admin-bootstrap' })
+                Object.assign(user, mutation.user)
             } catch (error) {
                 if (!isPreconditionFailure(error)) {
                     console.error(
@@ -158,7 +240,7 @@ export async function registerUser(data, env, { name, email, password }) {
             }
         }
 
-        return user
+        return { user, recoveryKey }
     } catch (error) {
         const conflictMessage = !nameReserved
             ? '用户名已被使用'
@@ -271,10 +353,10 @@ export async function destroySession(data, request, auth, env = {}) {
 }
 
 export async function revokeAllSessions(data, user) {
-    user.sessionVersion = Number(user.sessionVersion || 0) + 1
-    user.updatedAt = Date.now()
-    await data.setJSON(blobKeys.user(user.id), user)
-    return user
+    const mutation = await mutateUserRecord(data, user, current => {
+        current.sessionVersion = Number(current.sessionVersion || 0) + 1
+    }, { claimType: 'session-revocation' })
+    return mutation.user
 }
 
 export async function updateUser(data, uploads, env, user, updates, deps = {}) {
@@ -360,19 +442,20 @@ export async function updateUser(data, uploads, env, user, updates, deps = {}) {
         }
     }
 
-    // ---- 3. 写用户本体 ----
-    if (next.nameChanged) user.name = next.name
-    if (next.emailChanged) {
-        user.emailHash = next.emailHash
-        user.emailCipher = encryptEmail(secret, next.email)
-    }
-    user.passwordHash = next.passwordHash
-    user.sessionVersion = next.sessionVersion
-    if (next.avatarKey !== undefined) user.avatarKey = next.avatarKey
-    user.updatedAt = Date.now()
-
+    // ---- 3. 认领用户版本并写本体 ----
+    let updatedUser
     try {
-        await data.setJSON(blobKeys.user(user.id), user)
+        const mutation = await mutateUserRecord(data, user, current => {
+            if (next.nameChanged) current.name = next.name
+            if (next.emailChanged) {
+                current.emailHash = next.emailHash
+                current.emailCipher = encryptEmail(secret, next.email)
+            }
+            current.passwordHash = next.passwordHash
+            current.sessionVersion = next.sessionVersion
+            if (next.avatarKey !== undefined) current.avatarKey = next.avatarKey
+        }, { claimType: 'profile-update' })
+        updatedUser = mutation.user
     } catch (error) {
         await rollback()
         throw error
@@ -417,11 +500,12 @@ export async function updateUser(data, uploads, env, user, updates, deps = {}) {
             }))
         })
     }
-    return user
+    return updatedUser
 }
 
 export function privateProfile(user, env) {
     const profile = publicUser(user)
     profile.email = decryptEmail(getAppSecret(env), user.emailCipher)
+    profile.hasRecoveryKey = Boolean(user.recoveryKeyHash)
     return profile
 }

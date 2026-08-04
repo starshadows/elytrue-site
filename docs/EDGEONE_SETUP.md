@@ -27,10 +27,7 @@ middleware.js：Edge Runtime / Web APIs / ES2023+
 
 仅在 EdgeOne 项目设置保存：
 
-- `ELYTRUE_APP_SECRET`：至少 32 个随机字符，用于邮箱加密和索引摘要。
-- `RESEND_API_KEY`：Resend API Key。
-- `RESEND_FROM_EMAIL`：重置邮件发件地址，需先在 Resend 验证域名。
-- `RESEND_FROM_NAME`：重置邮件发件人名称，默认 `星花札记`。
+- `ELYTRUE_APP_SECRET`：至少 32 个随机字符，用于邮箱加密、索引摘要和服务端安全派生。
 - `PUBLIC_SITE_URL`：当前 EdgeOne 预览域或 `https://elytrue.com`。
 - `ALLOWED_ORIGINS`：允许的 EdgeOne 预览域与正式域，逗号分隔。
 
@@ -40,7 +37,7 @@ middleware.js：Edge Runtime / Web APIs / ES2023+
 
 绑定两个 Pages Blob Store：
 
-- `elytrue-data`：用户、索引、会话、重置令牌、留言、点赞、举报和元数据。
+- `elytrue-data`：用户、索引、会话、恢复密钥版本认领、留言、点赞、举报和元数据。
 - `elytrue-uploads`：头像和留言图片。
 
 绑定 Edge KV 为 `ELYTRUE_RATE_LIMIT_KV`。`middleware.js` 只从 `context.env` 获取此绑定；缺少绑定时边缘层跳过计数，Cloud Functions 的进程内限流仍工作，但生产验收必须确认 KV 已绑定。
@@ -49,7 +46,7 @@ middleware.js：Edge Runtime / Web APIs / ES2023+
 
 全新、空的 `elytrue-data` Store 中，第一个成功注册的账号自动成为唯一管理员，并立即写入永久关闭标记。后续注册账号均为普通用户，不需要配置 `ADMIN_BOOTSTRAP_SECRET`，也不需要手工调用初始化接口。
 
-管理员以后仍从普通登录弹窗使用用户名或邮箱和密码登录；登录后在个人主页显示“管理举报与留言”。必须妥善保管首个账号密码；未配置 Resend 时无法通过邮件找回密码。
+管理员以后仍从普通登录弹窗使用用户名或邮箱和密码登录；登录后在个人主页显示“管理举报与留言”。必须妥善保存首个账号的密码和注册后只显示一次的恢复密钥。两者同时丢失时无法自助恢复，只能按站点运维流程人工处理。
 
 保留的 `POST /api/admin/bootstrap` 仅用于兼容已有部署的人工恢复流程，不是新站点初始化步骤。
 
@@ -79,22 +76,25 @@ npm audit
 部署预览后检查：
 
 - `GET /api/health` 返回目标 `version`、`buildTime` 和 `commitTime`。
-- 注册、用户名/邮箱登录、刷新恢复、退出与找回密码。
+- 注册、恢复密钥保存、用户名/邮箱登录、刷新恢复、退出、密钥轮换与账号恢复。
 - 留言发布、回复、点赞、举报、编号跳转和用户主页分页。
 - 桌面/移动背景焦点、主题、音乐恢复、语言、PWA。
 - HTML/API/图片分类安全头、`/assets/*` immutable、`/res/*` 重新验证、HSTS 以及 HTML CSP。HSTS 必须为 `max-age=31536000; includeSubDomains` 且不含 preload；HTML `script-src` 必须保持仅 `'self'`。
-- Cloud Functions 日志不包含密码、重置 token、完整邮箱密文或 API Key。
+- Cloud Functions 日志不包含密码、恢复密钥、完整邮箱密文或 API Key。
 
 ## 5. 域名与回滚
 
 - 在 EdgeOne 绑定 `elytrue.com`。
 - `www.elytrue.com` 与 `blog.elytrue.com` 由 `middleware.js` 301 到主域。
-- `mail.elytrue.com` 仅用于 Resend 发信认证。
 - 页面底部备案链接保持不变。
 
 发布失败时在 EdgeOne Makers 回滚到最近一个已验收部署版本；不要运行数据迁移作为应用回滚手段。API 与 Blob key 保持向后兼容，因此正常代码回滚不要求重写历史数据。
 
 ## 6. 手动备份与只读核查
+
+账号恢复不需要全量迁移：没有恢复字段的历史用户继续正常登录，在个人主页输入当前密码后按需生成即可。历史 `password-resets/*` Blob 已不再被代码读取；部署不会自动删除。如需清理，必须另行备份并获得明确的生产数据删除授权。
+
+用户资料、会话版本与恢复密钥写入通过 `recovery-key-claims/*` 短期占位串行化，正常完成或捕获到异常时会重试清理。若 Cloud Function 在写用户本体前被强制终止，先运行 `npm run repair:user-claims` 只读报告；确认 claim 已超过 5 分钟、完成全量备份并暂停账号写入流量后，才可执行 `npm run repair:user-claims -- --fix --confirm-production-repair`。不得在仍有账号写请求时删除当前版本占位。
 
 只对明确授权的项目临时设置 EdgeOne 项目 ID 和 API Token：
 

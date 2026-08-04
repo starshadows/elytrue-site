@@ -25,7 +25,7 @@ middleware.js：Edge Runtime / Web APIs / ES2023+
                   └─ cloud-functions/api/[[default]].js
                        └─ server/app.js + routes/registry.js
                             ├─ middleware/：来源、环境、身份
-                            ├─ services/：图片、密码重置、举报与管理员用例
+                             ├─ services/：图片、账号恢复、举报与管理员用例
                             ├─ repositories/：图片、用户、举报的一致性存储访问
                             ├─ domain/：Blob key 合同
                             └─ storage.js：elytrue-data / elytrue-uploads
@@ -49,12 +49,21 @@ Comments store 以 `jumping` 和 `jumpNumber` 管理公开编号跳转：请求�
 
 - Blob Store：`elytrue-data`、`elytrue-uploads`。
 - Cookie 名称/属性、CSRF 流程、密码散列和邮箱加密格式。
-- API 路径、HTTP 方法、请求字段、响应 envelope 和状态码语义。
+- 除已移除的邮件重置接口外，既有 API 路径、HTTP 方法、请求字段、响应 envelope 和状态码语义。
 - 留言 16 位内部 ID、稳定公开编号、编号墓碑和日期“曾发布”口径。
 - 用户/日期索引、`onlyIfNew` 编号占位、repair marker。
 - 图片 alias 的 pending/active 生命周期和补偿回滚。
 
 历史数据无需迁移即可读取、更新和删除；代码不依赖 JSON 属性顺序或空白。
+
+### 账号恢复
+
+- 新用户记录增加 `recoveryKeyHash`、`recoveryKeyCreatedAt` 和 `recoveryKeyVersion`；恢复密钥原文只在注册成功响应中返回一次，不进入个人资料、日志、URL、Cookie 或浏览器持久存储。
+- 密钥包含 28 个无歧义随机字符，约 139 bit 熵；`server/crypto.js` 通过独立的 `generateRecoveryKey`、`hashRecoveryKey` 和 `verifyRecoveryKey` 语义封装使用 scrypt 与安全比较。
+- `POST /api/user/recover` 接收 `identifier`、`recoveryKey`、`password`，成功后更新密码、增加 `sessionVersion`、废止旧密钥并返回一次新密钥，不创建登录会话。账号不存在、缺少密钥和密钥错误使用同一错误。
+- `POST /api/user/recovery-key` 需要会话、CSRF 和当前密码，用于已有用户首次生成或重新生成密钥。`recovery-key-claims/{userId}/{version}.json` 通过 `onlyIfNew` 认领当前用户记录版本；恢复、密钥轮换、资料更新、全设备注销和管理员初始化共用该写入栅栏，防止旧会话的并发写入覆盖已轮换的密码、密钥或 `sessionVersion`。
+- 边缘层按 IP、Cloud Functions 层按 IP 与账号标识摘要限流；限流 key 不含恢复密钥或完整邮箱。
+- 没有恢复字段的历史用户仍可登录和使用，不会在启动时自动补写。邮件重置代码已删除；历史 `password-resets/*` 数据保持惰性，不自动迁移或删除。
 
 新留言会建立按内部留言 ID 指向公开编号的轻量反向记录；新举报同时保存 `commentNumber`。读取历史举报时依次使用举报字段、仍存在的留言本体和反向记录。仅对无法解析且已删除的旧举报执行每页 100、最多 10 页的兼容扫描，结果（含未命中）缓存 5 分钟，命中后渐进回填举报与反向记录；不要求生产全量迁移。
 

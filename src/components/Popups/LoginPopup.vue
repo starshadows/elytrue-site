@@ -41,7 +41,7 @@
       </button>
     </div>
 
-    <div v-else>
+    <div v-else-if="screen == 'register'">
       <h2>
         <span class="ui zh">注册账号</span
         ><span class="ui en">Create an account</span>
@@ -57,9 +57,10 @@
       </div>
       <input type="email" v-model.trim="regEmail" autocomplete="email" />
       <div class="inputHelperText privacy-note">
-        <span class="ui zh">请填写本人常用邮箱，仅用于登录和找回密码。</span>
+        <span class="ui zh">邮箱可作为登录标识，不会公开展示。</span>
         <span class="ui en"
-          >Use your regular email for login and password recovery.</span
+          >Your email can be used to log in and is never displayed
+          publicly.</span
         >
       </div>
 
@@ -96,6 +97,66 @@
         }}</span>
       </button>
     </div>
+
+    <div v-else>
+      <h2>
+        <span class="ui zh">使用恢复密钥找回账号</span
+        ><span class="ui en">Recover your account</span>
+      </h2>
+
+      <div class="inputHelperText">
+        <span class="ui zh">用户名或邮箱</span
+        ><span class="ui en">Username or email</span>
+      </div>
+      <input
+        v-model.trim="recoverIdentifier"
+        type="text"
+        autocomplete="username"
+      />
+
+      <div class="inputHelperText">
+        <span class="ui zh">恢复密钥</span
+        ><span class="ui en">Recovery key</span>
+      </div>
+      <input
+        v-model.trim="recoverKey"
+        type="text"
+        autocomplete="off"
+        autocapitalize="characters"
+        spellcheck="false"
+      />
+
+      <div class="inputHelperText">
+        <span class="ui zh">新密码（至少 8 个字符）</span
+        ><span class="ui en">New password (8 characters minimum)</span>
+      </div>
+      <input
+        v-model="recoverPassword"
+        type="password"
+        autocomplete="new-password"
+      />
+
+      <div class="inputHelperText">
+        <span class="ui zh">确认新密码</span
+        ><span class="ui en">Confirm new password</span>
+      </div>
+      <input
+        v-model="recoverPasswordConfirm"
+        type="password"
+        autocomplete="new-password"
+        @keypress="(event) => event.key === 'Enter' && recover()"
+      />
+
+      <p class="altLoginOption" @click="screen = 'login'">
+        <span class="ui zh">返回登录</span
+        ><span class="ui en">Back to login</span>
+      </p>
+
+      <button class="okBtn" :disabled="busy" @click="recover()">
+        <span class="ui zh">{{ busy ? '正在恢复…' : '恢复账号 →' }}</span>
+        <span class="ui en">{{ busy ? 'Recovering…' : 'Recover →' }}</span>
+      </button>
+    </div>
   </div>
 </template>
 
@@ -120,6 +181,10 @@ export default {
     regEmail: '',
     regPassword: '',
     regPasswordConfirm: '',
+    recoverIdentifier: '',
+    recoverKey: '',
+    recoverPassword: '',
+    recoverPasswordConfirm: '',
   }),
 
   computed: {
@@ -140,6 +205,24 @@ export default {
         }
         this.$emit('close')
         FloatMsgs.show({ type: 'success', msg: message })
+        return true
+      })
+    },
+
+    finishRegistration(recoveryKey: string) {
+      this.$emit('close')
+      Popups.show('recoveryKeyPopup', {
+        recoveryKey,
+        reason: 'registration',
+      })
+      return refreshAuth().then((loggedIn) => {
+        if (!loggedIn) {
+          FloatMsgs.show({
+            type: 'error',
+            msg: '<span class="ui zh">登录状态未能保存，请重试</span><span class="ui en">The session could not be saved. Please try again.</span>',
+          })
+          return false
+        }
         return true
       })
     },
@@ -177,16 +260,14 @@ export default {
         return
       }
       this.busy = true
-      XHR.post('user/register', {
+      XHR.post<{ recoveryKey: string }>('user/register', {
         name: this.regName,
         email: this.regEmail,
         password: this.regPassword,
       })
         .then((r) => {
           if (r.code == 1) {
-            return this.finish(
-              '<span class="ui zh">注册成功，欢迎来到星花札记</span><span class="ui en">Registration successful</span>',
-            )
+            return this.finishRegistration(r.data.recoveryKey)
           }
         })
         .finally(() => {
@@ -195,35 +276,41 @@ export default {
     },
 
     forgotPassword() {
-      Popups.show('promptInputPopup', {
-        title:
-          '<span class="ui zh">找回密码</span><span class="ui en">Reset password</span>',
-        subtitle: `
-                    <span class="ui zh">输入注册时使用的用户名或邮箱。无论账号是否存在，系统都会返回相同结果。</span>
-                    <span class="ui en">Enter your username or registered email.</span>
-                `,
-        text: this.loginIdentifier,
-        action(
-          identifier: string,
-          context: { close: () => void; setDisabled: (value: boolean) => void },
-        ) {
-          context.setDisabled(true)
-          XHR.post('user/resetpassword', { identifier })
-            .then((r) => {
-              if (r.code == 1) {
-                context.close()
-                FloatMsgs.show({
-                  type: 'success',
-                  persist: true,
-                  msg: '<span class="ui zh">如果账号存在，重置邮件会发送到注册邮箱，请留意收件箱。</span><span class="ui en">If the account exists, a reset email will be sent.</span>',
-                })
-              }
-            })
-            .finally(() => {
-              context.setDisabled(false)
-            })
-        },
+      this.recoverIdentifier = this.loginIdentifier
+      this.screen = 'recover'
+    },
+
+    recover() {
+      if (this.busy) return
+      const validationError =
+        (!this.recoverIdentifier || !this.recoverKey
+          ? '请填写账号信息和恢复密钥'
+          : null) ||
+        validatePassword(this.recoverPassword) ||
+        (this.recoverPassword !== this.recoverPasswordConfirm
+          ? '两次输入的密码不一致'
+          : null)
+      if (validationError) {
+        FloatMsgs.show({ type: 'warn', msg: validationError })
+        return
+      }
+      this.busy = true
+      XHR.post<{ recoveryKey: string }>('user/recover', {
+        identifier: this.recoverIdentifier,
+        recoveryKey: this.recoverKey,
+        password: this.recoverPassword,
       })
+        .then((response) => {
+          if (response.code !== 1) return
+          this.$emit('close')
+          Popups.show('recoveryKeyPopup', {
+            recoveryKey: response.data.recoveryKey,
+            reason: 'recovery',
+          })
+        })
+        .finally(() => {
+          this.busy = false
+        })
     },
   },
 }

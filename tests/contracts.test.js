@@ -10,10 +10,9 @@ describe('historical Blob key contract', () => {
     assert.equal(blobKeys.userNameIndex('abc'), 'indexes/users/name/abc.json')
     assert.equal(blobKeys.userEmailIndex('def'), 'indexes/users/email/def.json')
     assert.equal(blobKeys.session('token'), 'sessions/token.json')
-    assert.equal(blobKeys.passwordReset('reset'), 'password-resets/reset.json')
     assert.equal(
-      blobKeys.passwordResetClaim('reset'),
-      'password-resets/reset.json.claimed',
+      blobKeys.recoveryKeyClaim('u-1', 2),
+      'recovery-key-claims/u-1/2.json',
     )
     assert.equal(blobKeys.comment(123), 'comments/0000000000000123.json')
     assert.equal(blobKeys.commentNumber(7), 'indexes/comments/number/7.json')

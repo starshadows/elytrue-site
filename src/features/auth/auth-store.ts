@@ -8,6 +8,7 @@ export interface UserProfile {
   avatar: string
   email?: string
   hasEmail?: boolean
+  hasRecoveryKey?: boolean
   role?: 'admin' | 'user'
   create_time?: number
 }
@@ -28,6 +29,7 @@ export type ProfileAction =
   | 'changeAvatar'
   | 'changeEmail'
   | 'changePassword'
+  | 'recoveryKey'
   | 'showMe'
   | 'logout'
   | 'resetToken'

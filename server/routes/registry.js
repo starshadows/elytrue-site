@@ -24,12 +24,18 @@ export const API_ROUTES = Object.freeze([
     { methods: ['PUT'], match: exact('user/update'), handler: 'updateProfile', auth: 'session', csrf: true },
     {
         methods: ['POST'],
-        match: exact('user/resetpassword'),
-        handler: 'requestPasswordReset',
+        match: exact('user/recover'),
+        handler: 'recoverUser',
         auth: 'public',
         csrf: false,
     },
-    { methods: ['POST'], match: exact('action'), handler: 'completePasswordReset', auth: 'public', csrf: false },
+    {
+        methods: ['POST'],
+        match: exact('user/recovery-key'),
+        handler: 'updateRecoveryKey',
+        auth: 'session',
+        csrf: true,
+    },
     { methods: ['POST'], match: exact('uploads/image'), handler: 'uploadImage', auth: 'session', csrf: true },
     { methods: ['DELETE'], match: exact('uploads/image'), handler: 'deleteImage', auth: 'session', csrf: true },
     {

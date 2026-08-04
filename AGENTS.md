@@ -12,7 +12,8 @@
 - `npm run dev`:仅 Vite 前端,**不模拟** Blob/KV/Cloud Functions,后端接口不可用;模拟需要已连接 EdgeOne 项目的 `npm run dev:edgeone`
 - `npm run mock:server` + `npm run test:e2e`:本地 Playwright E2E(先 `npm run build`;mock-server 用 MemoryStore 提供后端,见 scripts/mock-server.mjs)
 - `npm run export:data`:需要环境变量 `EDGEONE_PROJECT_ID`、`EDGEONE_API_TOKEN`,输出到被 gitignore 的 `exports/`
-- 数据脚本(同需上述环境变量,先备份再 --fix):`scripts/check-duplicate-users.mjs`(重复用户名报告/修复)、`scripts/rebuild-comment-indexes.mjs`(留言编号/日期/用户索引迁移,**--fix 必须带 --confirm-production-migration**,新旧混合默认中止,回滚需恢复完整备份)、`scripts/rebuild-usage.mjs`(按别名重算图片空间统计)
+- `npm run repair:user-claims`:报告用户 mutation claim;生产修复必须先停写并传 `--fix --confirm-production-repair`,仅删除超过 5 分钟且版本可判定的占位
+- 数据脚本(同需上述环境变量,先备份再 --fix):`scripts/check-duplicate-users.mjs`(重复用户名报告/修复,`--fix` 另需 `ELYTRUE_APP_SECRET`)、`scripts/rebuild-comment-indexes.mjs`(留言编号/日期/用户索引迁移,**--fix 必须带 --confirm-production-migration**,新旧混合默认中止,回滚需恢复完整备份)、`scripts/rebuild-usage.mjs`(按别名重算图片空间统计)
 
 ## 架构
 
@@ -23,13 +24,13 @@
 - createComment 一致性:正文→编号占位→(回写 number+用户索引+日期索引)→图片 pending→active,任一失败回滚本次已写资源(仅删自己 reservationId 的占位;已激活图片还原为 pending)并记结构化日志(`comment_*` 事件),不返回 201;编号占位不得指向不存在的留言
 - 硬删除:先写 tombstone(失败则 500 中止)→删正文→删用户索引(失败写 `repairs/comment-delete/{id}.json` marker 供迁移脚本识别/修复)
 - 图片别名 status 缺失按 active 处理:`DELETE /api/uploads/image?imageId=` 只允许 pending;自动清理(>24h)会先经用户留言索引核对引用,被引用的 pending 不删
-- updateUser 索引事务:先全部预校验+预计算(含 passwordHash)→原子认领新索引→写用户本体→删除旧索引前强一致校验归属(他人索引不删,记 `user_old_index_not_owned`);失败只回滚本次认领
+- updateUser 索引事务:先全部预校验+预计算(含 passwordHash)→原子认领新索引→经用户版本认领写本体→删除旧索引前强一致校验归属(他人索引不删,记 `user_old_index_not_owned`);失败只回滚本次认领
 - 图片别名带 `status`:`pending`(未关联留言,可被 `DELETE /api/uploads/image?imageId=` 删除或 24h 后自动清理)/`active`;缺省视为 active
 - 边缘限流在 `middleware.js`(Edge Function),依赖 KV 绑定 `ELYTRUE_RATE_LIMIT_KV`(策略表 `RATE_LIMIT_POLICIES`);未绑定则退化为 `server/rate-limit.js` 进程内二次限流。新增写端点时两处都要加
-- 环境变量只在 EdgeOne 项目设置里(`ELYTRUE_APP_SECRET`、`RESEND_API_KEY`、`RESEND_FROM_EMAIL`、`RESEND_FROM_NAME`、`PUBLIC_SITE_URL`、`ADMIN_BOOTSTRAP_SECRET`、`ALLOWED_ORIGINS`),`.env.example` 仅占位;本地跑测试时自己构造 env(见 tests/api.test.js)
+- 环境变量只在 EdgeOne 项目设置里(`ELYTRUE_APP_SECRET`、`PUBLIC_SITE_URL`、`ADMIN_BOOTSTRAP_SECRET`、`ALLOWED_ORIGINS`),`.env.example` 仅占位;本地跑测试时自己构造 env(见 tests/api.test.js)
 - SPA fallback、缓存、函数地域(ap-shanghai)都在 `edgeone.json`;生产部署由 EdgeOne Makers 自动拉 `main` 分支,运维清单见 `docs/EDGEONE_SETUP.md`
 - Cloud Function 是 Node 20、30s 上限;改动服务端代码要兼容
-- 密码重置邮件(server/email.js)不抛异常,返回结构化结果 `{ok, emailId?, status?, error?}`,由 `requestPasswordReset` 记结构化日志(事件 `password_reset_email`,不落 token/密码/完整 key)。重置 token 认领用 `password-resets/{hash}.json.claimed` onlyIfNew 原子标记,并发只能一个成功
+- 账号恢复密钥为 `ELY-` 开头的 28 位无歧义随机字符(约 139 bit),仅注册/恢复/轮换成功响应返回一次;用户记录只保存独立 scrypt 哈希、创建时间和版本。`POST user/recover` 同时轮换密码/密钥并增加 `sessionVersion`;`POST user/recovery-key` 需登录、CSRF 和当前密码。所有用户本体写入共用 `recovery-key-claims/{userId}/{version}.json` 原子版本认领,防止同一旧密钥并发使用或旧会话更新覆盖恢复结果
 
 ## 约定
 

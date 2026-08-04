@@ -24,8 +24,8 @@ export const blobKeys = Object.freeze({
     userNameIndex: nameHash => `indexes/users/name/${nameHash}.json`,
     userEmailIndex: emailHash => `indexes/users/email/${emailHash}.json`,
     session: tokenHash => `sessions/${tokenHash}.json`,
-    passwordReset: tokenHash => `password-resets/${tokenHash}.json`,
-    passwordResetClaim: tokenHash => `password-resets/${tokenHash}.json.claimed`,
+    recoveryKeyClaim: (userId, version) =>
+        `recovery-key-claims/${userId}/${Number(version)}.json`,
 
     comment: commentId => `${blobPrefixes.comments}${paddedCommentId(commentId)}.json`,
     commentNumber: number => `${blobPrefixes.commentNumbers}${Number(number)}.json`,

@@ -19,15 +19,19 @@
     :key="item.id"
     :class="{ popupContainer: true, closing: item.closing }"
   >
-    <div class="popupBG" @click="close(item.id)"></div>
+    <div class="popupBG" @click="dismiss(item)"></div>
     <div class="popupItem">
       <component
-        :id="item.name"
+        :id="item.name === 'userHome' ? undefined : item.name"
         :is="components[item.name]"
         v-bind="item.props"
-        @close="close(item.id)"
+        @close="closeComponent(item)"
       ></component>
-      <button class="closeBtn" @click="close(item.id)"></button>
+      <button
+        v-if="item.name !== 'recoveryKeyPopup'"
+        class="closeBtn"
+        @click="close(item.id)"
+      ></button>
     </div>
   </div>
 </template>
@@ -39,6 +43,8 @@ import BackgroundGalleryPopup from './BackgroundGalleryPopup.vue'
 import DisplaySettingsPopup from './DisplaySettingsPopup.vue'
 import InputPopup from './InputPopup.vue'
 import LoginPopup from './LoginPopup.vue'
+import RecoveryKeyPopup from './RecoveryKeyPopup.vue'
+import RecoveryKeySetupPopup from './RecoveryKeySetupPopup.vue'
 import SetAvatarPopup from './SetAvatarPopup.vue'
 import SetPasswordPopup from './SetPasswordPopup.vue'
 import ThemeMusicPopup from './ThemeMusicPopup.vue'
@@ -51,6 +57,8 @@ const components: Record<PopupName, object> = {
   getImgPopup: BackgroundGalleryPopup,
   loginPopup: LoginPopup,
   promptInputPopup: InputPopup,
+  recoveryKeyPopup: RecoveryKeyPopup,
+  recoveryKeySetupPopup: RecoveryKeySetupPopup,
   setAvatarPopup: SetAvatarPopup,
   setPasswordPopup: SetPasswordPopup,
   themeSelectorPopup: ThemeMusicPopup,
@@ -79,6 +87,15 @@ function closeStatic(name: PopupName): void {
 
 function close(id: number): void {
   Popups.close(id)
+}
+
+function dismiss(item: { id: number; name: PopupName }): void {
+  if (item.name !== 'recoveryKeyPopup') close(item.id)
+}
+
+function closeComponent(item: { id: number; name: PopupName }): void {
+  if (item.name === 'recoveryKeyPopup') Popups.complete(item.id)
+  else close(item.id)
 }
 </script>
 

@@ -21,7 +21,6 @@ const globalResponseHeaders = Object.fromEntries(
 const env = {
     ELYTRUE_APP_SECRET: process.env.ELYTRUE_APP_SECRET
         || 'e2e-mock-secret-0123456789abcdef0123456789abcdef',
-    RESEND_API_KEY: process.env.RESEND_API_KEY || '',
     PUBLIC_SITE_URL: process.env.PUBLIC_SITE_URL || SITE_ORIGIN,
     ADMIN_BOOTSTRAP_SECRET: process.env.ADMIN_BOOTSTRAP_SECRET || 'e2e-bootstrap-secret',
     ALLOWED_ORIGINS: process.env.ALLOWED_ORIGINS || SITE_ORIGIN,

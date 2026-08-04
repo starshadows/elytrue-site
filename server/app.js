@@ -25,6 +25,7 @@ import {
     readJSON,
 } from './http.js'
 import { enforceRateLimit } from './rate-limit.js'
+import { sha256 } from './crypto.js'
 import { createStores } from './storage.js'
 import {
     clientIdentity,
@@ -40,9 +41,9 @@ import {
     saveImage,
 } from './services/image-service.js'
 import {
-    completePasswordReset as completePasswordResetFlow,
-    requestPasswordReset as requestPasswordResetFlow,
-} from './services/password-reset-service.js'
+    recoverAccount,
+    rotateRecoveryKey,
+} from './services/account-recovery-service.js'
 import { createReport } from './services/report-service.js'
 import {
     authorizeAdmin,
@@ -86,7 +87,7 @@ async function register(context, stores) {
     await ensureWriteOrigin(context)
     await enforceRateLimit('register', clientIdentity(context))
     const body = await readJSON(context.request, 32 * 1024)
-    const user = await registerUser(stores.data, environmentFor(context), {
+    const { user, recoveryKey } = await registerUser(stores.data, environmentFor(context), {
         name: body.name,
         email: body.email,
         password: body.password,
@@ -97,7 +98,10 @@ async function register(context, stores) {
         context.request,
         environmentFor(context),
     )
-    return apiResponse(authenticatedProfile(user, environmentFor(context), session), {
+    return apiResponse({
+        ...authenticatedProfile(user, environmentFor(context), session),
+        recoveryKey,
+    }, {
         status: 201,
         message: '注册成功',
         cookies,
@@ -179,6 +183,7 @@ async function updateProfile(context, stores) {
     const auth = await requireSession(stores.data, context.request, {
         env: environmentFor(context),
     })
+    await enforceRateLimit('userUpdate', clientIdentity(context, auth.user.id))
     const body = await readJSON(context.request, 2 * 1024 * 1024)
     const updates = {}
     if (body.name !== undefined) updates.name = body.name
@@ -189,6 +194,7 @@ async function updateProfile(context, stores) {
         const saved = await saveImage(stores, auth.user, body.avatar, 'avatar')
         updates.avatarKey = saved.imageId
     }
+    if (Object.keys(updates).length === 0) throw httpError(400, '没有可更新的资料')
     const user = await updateUser(
         stores.data,
         stores.uploads,
@@ -210,27 +216,29 @@ async function updateProfile(context, stores) {
     })
 }
 
-async function requestPasswordReset(context, stores) {
-    await ensureWriteOrigin(context)
-    const url = new URL(context.request.url)
-    const body = context.request.headers.get('content-type')?.includes('application/json')
-        ? await readJSON(context.request, 32 * 1024)
-        : {}
-    const identifier = body.identifier || body.email || url.searchParams.get('email') || ''
-    await enforceRateLimit('reset', clientIdentity(context, String(identifier).toLowerCase()))
-    await requestPasswordResetFlow(stores.data, environmentFor(context), identifier)
-    return apiResponse(null, {
-        message: '如果账号存在，重置邮件会发送到注册邮箱',
-    })
-}
-
-async function completePasswordReset(context, stores) {
+async function recoverUser(context, stores) {
     await ensureWriteOrigin(context)
     const body = await readJSON(context.request, 32 * 1024)
-    const token = String(body.id || body.token || '')
-    const password = body.data ?? body.password
-    await completePasswordResetFlow(stores.data, token, password)
-    return apiResponse(null, { message: '密码已重置，请重新登录' })
+    const identifier = String(body.identifier || '').normalize('NFKC').trim().toLowerCase()
+    await enforceRateLimit('recoverIp', clientIdentity(context))
+    await enforceRateLimit('recoverAccount', `account:${sha256(identifier)}`)
+    const result = await recoverAccount(stores.data, environmentFor(context), {
+        identifier,
+        recoveryKey: body.recoveryKey,
+        password: body.password,
+    })
+    return apiResponse(result, { message: '账号已恢复，请使用新密码重新登录' })
+}
+
+async function updateRecoveryKey(context, stores) {
+    await ensureWriteOrigin(context)
+    const auth = await requireSession(stores.data, context.request, {
+        env: environmentFor(context),
+    })
+    await enforceRateLimit('recoveryKey', `user:${sha256(auth.user.id)}`)
+    const body = await readJSON(context.request, 32 * 1024)
+    const result = await rotateRecoveryKey(stores.data, auth.user, body.currentPassword)
+    return apiResponse(result, { message: '恢复密钥已更新，旧密钥已失效' })
 }
 
 async function uploadCommentImage(context, stores) {
@@ -369,8 +377,8 @@ const routeHandlers = Object.freeze({
     me: getMe,
     findUsers,
     updateProfile,
-    requestPasswordReset,
-    completePasswordReset,
+    recoverUser,
+    updateRecoveryKey,
     uploadImage: uploadCommentImage,
     deleteImage: deleteUploadedImage,
     defaultAvatar: context =>

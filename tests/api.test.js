@@ -1,11 +1,18 @@
 import assert from 'node:assert/strict'
-import { after, before, describe, it } from 'node:test'
+import { describe, it } from 'node:test'
 import { handleApiRequest } from '../server/app.js'
 import { MemoryStore } from '../server/storage.js'
-import { encryptEmail, keyedDigest, sha256 } from '../server/crypto.js'
+import {
+    encryptEmail,
+    keyedDigest,
+    sha256,
+    verifyRecoveryKey,
+} from '../server/crypto.js'
 import { requestOriginAllowed } from '../server/http.js'
 import { normalizeUsername } from '../shared/validation.js'
-import { updateUser } from '../server/auth.js'
+import { findUserById, updateUser } from '../server/auth.js'
+import { resetMemoryRateLimitsForTests } from '../server/rate-limit.js'
+import { bootstrapAdministrator } from '../server/services/admin-service.js'
 
 class FlakyStore extends MemoryStore {
     constructor(failures = {}) {
@@ -31,6 +38,38 @@ class SilentConditionalStore extends MemoryStore {
     }
 }
 
+class PausedProfileClaimStore extends MemoryStore {
+    constructor() {
+        super()
+        this.pauseNextProfileClaim = false
+        this.profileClaimStarted = Promise.resolve()
+        this.releaseProfileClaim = () => {}
+    }
+
+    pauseProfileClaim() {
+        this.pauseNextProfileClaim = true
+        this.profileClaimStarted = new Promise(resolve => {
+            this.markProfileClaimStarted = resolve
+        })
+        this.profileClaimRelease = new Promise(resolve => {
+            this.releaseProfileClaim = resolve
+        })
+    }
+
+    async setJSON(key, value, options = {}) {
+        if (
+            this.pauseNextProfileClaim
+            && key.startsWith('recovery-key-claims/')
+            && value?.type === 'profile-update'
+        ) {
+            this.pauseNextProfileClaim = false
+            this.markProfileClaimStarted()
+            await this.profileClaimRelease
+        }
+        return super.setJSON(key, value, options)
+    }
+}
+
 function nameIndexKey(name) {
     return `indexes/users/name/${sha256(normalizeUsername(name))}.json`
 }
@@ -38,7 +77,6 @@ function nameIndexKey(name) {
 const origin = 'https://preview.elytrue.test'
 const env = {
     ELYTRUE_APP_SECRET: 'test-only-secret-that-is-longer-than-thirty-two-characters',
-    RESEND_API_KEY: 're_test_only',
     PUBLIC_SITE_URL: origin,
     ADMIN_BOOTSTRAP_SECRET: 'test-admin-bootstrap-secret',
     ALLOWED_ORIGINS: origin,
@@ -103,25 +141,16 @@ async function call(state, method, path, body, options = {}) {
     return { response, payload }
 }
 
+async function loginWorksWithSharedStore(stores, identifier, password, ip) {
+    const state = createState(ip)
+    state.stores = stores
+    const result = await call(state, 'POST', 'user/login', { identifier, password })
+    return result.response.status
+}
+
 describe('EdgeOne account and session API', () => {
     const state = createState('10.0.0.1')
-    let resetToken
-    let sentEmail
-    const originalFetch = globalThis.fetch
-
-    before(() => {
-        globalThis.fetch = async (_url, init) => {
-            sentEmail = JSON.parse(init.body)
-            return new Response(JSON.stringify({ id: 'email-test' }), {
-                status: 200,
-                headers: { 'Content-Type': 'application/json' },
-            })
-        }
-    })
-
-    after(() => {
-        globalThis.fetch = originalFetch
-    })
+    let recoveryKey
 
     it('registers immediately with required username, email and password', async () => {
         const { response, payload } = await call(state, 'POST', 'user/register', {
@@ -134,6 +163,11 @@ describe('EdgeOne account and session API', () => {
         assert.equal(payload.data.name, '星花旅人')
         assert.equal(payload.data.email, 'owner@example.com')
         assert.equal(payload.data.role, 'admin')
+        assert.match(
+            payload.data.recoveryKey,
+            /^ELY-(?:[23456789ABCDEFGHJKMNPQRSTUVWXYZ]{4}-){6}[23456789ABCDEFGHJKMNPQRSTUVWXYZ]{4}$/u,
+        )
+        recoveryKey = payload.data.recoveryKey
         assert.ok(state.jar.has('elytrue_session'))
         assert.equal(state.jar.has('elytrue_csrf'), false)
         assert.match(state.csrfToken, /^[a-zA-Z0-9_-]+$/u)
@@ -189,53 +223,61 @@ describe('EdgeOne account and session API', () => {
         assert.equal(me.response.status, 200)
         assert.equal(me.payload.data.email, 'owner@example.com')
         assert.equal(me.payload.data.hasEmail, true)
+        assert.equal(me.payload.data.hasRecoveryKey, true)
+        assert.equal('recoveryKey' in me.payload.data, false)
         assert.match(state.csrfToken, /^[a-zA-Z0-9_-]+$/u)
     })
 
-    it('sends a one-time reset link and revokes old sessions after use', async () => {
+    it('recovers the account once and revokes every old session', async () => {
+        resetMemoryRateLimitsForTests()
         const oldSession = new Map(state.jar)
-        const requested = await call(state, 'POST', 'user/resetpassword', {
-            identifier: '星花旅人',
+        const secondSession = createState('10.0.0.4')
+        secondSession.stores = state.stores
+        const secondLogin = await call(secondSession, 'POST', 'user/login', {
+            identifier: 'owner@example.com',
+            password: 'correct-horse-battery-staple',
         })
-        assert.equal(requested.response.status, 200)
-        assert.equal(sentEmail.to[0], 'owner@example.com')
-        const match = sentEmail.html.match(/#resetpassword=([a-zA-Z0-9_-]+)/u)
-        assert.ok(match)
-        resetToken = match[1]
+        assert.equal(secondLogin.response.status, 200)
 
         const resetState = createState('10.0.0.4')
         resetState.stores = state.stores
-        const reset = await call(resetState, 'POST', 'action', {
-            id: resetToken,
-            data: 'a-new-secure-password',
+        const reset = await call(resetState, 'POST', 'user/recover', {
+            identifier: '星花旅人',
+            recoveryKey,
+            password: 'a-new-secure-password',
         })
         assert.equal(reset.response.status, 200)
+        assert.match(reset.payload.data.recoveryKey, /^ELY-/u)
+        assert.notEqual(reset.payload.data.recoveryKey, recoveryKey)
+        assert.equal(resetState.jar.size, 0, 'recovery must not create a session')
 
-        const reuse = await call(resetState, 'POST', 'action', {
-            id: resetToken,
-            data: 'another-new-password',
+        const reuse = await call(resetState, 'POST', 'user/recover', {
+            identifier: '星花旅人',
+            recoveryKey,
+            password: 'another-new-password',
         })
         assert.equal(reuse.response.status, 400)
+        assert.equal(reuse.payload.message, '账号信息或恢复密钥不正确')
+        assert.equal(reuse.payload.data, null)
 
         state.jar = oldSession
         const oldMe = await call(state, 'GET', 'user/me')
         assert.equal(oldMe.response.status, 401)
+        const otherOldMe = await call(secondSession, 'GET', 'user/me')
+        assert.equal(otherOldMe.response.status, 401)
+
+        const oldPassword = await call(state, 'POST', 'user/login', {
+            identifier: 'owner@example.com',
+            password: 'correct-horse-battery-staple',
+        })
+        assert.equal(oldPassword.response.status, 401)
 
         const newLogin = await call(state, 'POST', 'user/login', {
             identifier: 'owner@example.com',
             password: 'a-new-secure-password',
         })
         assert.equal(newLogin.response.status, 200)
-    })
-
-    it('returns the same reset response for an unknown account', async () => {
-        const unknown = createState('10.0.0.5')
-        unknown.stores = state.stores
-        const result = await call(unknown, 'POST', 'user/resetpassword', {
-            identifier: 'does-not-exist@example.com',
-        })
-        assert.equal(result.response.status, 200)
-        assert.match(result.payload.message, /如果账号存在/u)
+        recoveryKey = reset.payload.data.recoveryKey
     })
 })
 
@@ -644,23 +686,47 @@ describe('registration uniqueness and normalization', () => {
     })
 })
 
-describe('password reset observability and health', () => {
+describe('administrator bootstrap concurrency', () => {
+    it('allows only the marker winner to become administrator', async () => {
+        const data = new MemoryStore()
+        const users = [
+            {
+                id: '11111111-1111-4111-8111-111111111111',
+                name: '初始化甲',
+                role: 'user',
+                recoveryKeyVersion: 1,
+                sessionVersion: 1,
+            },
+            {
+                id: '22222222-2222-4222-8222-222222222222',
+                name: '初始化乙',
+                role: 'user',
+                recoveryKeyVersion: 1,
+                sessionVersion: 1,
+            },
+        ]
+        await Promise.all(users.map(user => data.setJSON(`users/${user.id}.json`, user)))
+
+        const results = await Promise.allSettled(users.map(user =>
+            bootstrapAdministrator(data, user, 'bootstrap-secret', 'bootstrap-secret'),
+        ))
+        assert.equal(results.filter(result => result.status === 'fulfilled').length, 1)
+        assert.equal(results.filter(result => result.status === 'rejected').length, 1)
+
+        const marker = await data.get('system/admin-bootstrap-closed.json', { type: 'json' })
+        const records = await Promise.all(users.map(user =>
+            data.get(`users/${user.id}.json`, { type: 'json' }),
+        ))
+        assert.equal(records.filter(user => user.role === 'admin').length, 1)
+        assert.equal(records.find(user => user.role === 'admin').id, marker.userId)
+        assert.equal((await findUserById(data, marker.userId)).role, 'admin')
+    })
+})
+
+describe('account recovery security and health', () => {
     const stores = { data: new MemoryStore(), uploads: new MemoryStore() }
     const state = createState('10.0.4.1')
     state.stores = stores
-    let capturedLogs
-
-    function captureLogs() {
-        capturedLogs = []
-        const capture = (...args) => capturedLogs.push(args.join(' '))
-        const original = { log: console.log, error: console.error }
-        console.log = capture
-        console.error = capture
-        return () => {
-            console.log = original.log
-            console.error = original.error
-        }
-    }
 
     it('reports health with version and build time', async () => {
         const result = await call(state, 'GET', 'health')
@@ -670,202 +736,206 @@ describe('password reset observability and health', () => {
         assert.ok('buildTime' in result.payload.data)
     })
 
-    it('logs a structured success entry with email id, without leaking the token', async () => {
-        await call(state, 'POST', 'user/register', {
-            name: '邮件用户',
-            email: 'mail@example.com',
-            password: 'mail-secure-password',
-        })
-        const sent = {}
-        const originalFetch = globalThis.fetch
-        globalThis.fetch = async (_url, init) => {
-            sent.body = JSON.parse(init.body)
-            return new Response(JSON.stringify({ id: 'email-xyz' }), { status: 200 })
-        }
-        const restore = captureLogs()
+    it('stores only a slow hash and never logs the registration recovery key', async () => {
+        const logs = []
+        const original = { log: console.log, error: console.error }
+        console.log = (...values) => logs.push(values.join(' '))
+        console.error = (...values) => logs.push(values.join(' '))
+        let registered
         try {
-            const requested = await call(state, 'POST', 'user/resetpassword', {
-                identifier: 'mail@example.com',
-            })
-            assert.equal(requested.response.status, 200)
-            assert.match(requested.payload.message, /如果账号存在/u)
-            assert.ok(sent.body.from)
-            assert.equal(sent.body.from.includes('noreply@mail.elytrue.com'), true)
-        } finally {
-            restore()
-            globalThis.fetch = originalFetch
-        }
-
-        const entry = capturedLogs.map(text => JSON.parse(text))
-            .find(log => log?.event === 'password_reset_email')
-        assert.ok(entry, 'expected structured log entry')
-        assert.equal(entry.success, true)
-        assert.equal(entry.provider, 'resend')
-        assert.equal(entry.emailId, 'email-xyz')
-        assert.ok(entry.userId)
-
-        const token = sent.body.html.match(/#resetpassword=([a-zA-Z0-9_-]+)/u)?.[1]
-        assert.ok(token)
-        assert.ok(sent.body.html.includes(`${origin}/#resetpassword=`), 'reset link uses PUBLIC_SITE_URL')
-        assert.equal(capturedLogs.some(text => text.includes(token)), false)
-        assert.equal(capturedLogs.some(text => text.includes('mail-secure-password')), false)
-    })
-
-    it('logs a structured failure when RESEND_API_KEY is missing', async () => {
-        const noKeyState = createState('10.0.4.2')
-        noKeyState.stores = stores
-        const restore = captureLogs()
-        let result
-        try {
-            result = await call(noKeyState, 'POST', 'user/resetpassword', {
-                identifier: 'mail@example.com',
-            }, {
-                env: { ...env, RESEND_API_KEY: '' },
+            registered = await call(state, 'POST', 'user/register', {
+                name: '恢复密钥用户',
+                email: 'recovery@example.com',
+                password: 'recovery-secure-password',
             })
         } finally {
-            restore()
+            console.log = original.log
+            console.error = original.error
         }
-        assert.equal(result.response.status, 200)
-        assert.match(result.payload.message, /如果账号存在/u)
 
-        const entry = capturedLogs.map(text => JSON.parse(text))
-            .find(log => log?.event === 'password_reset_email')
-        assert.ok(entry, 'expected structured log entry')
-        assert.equal(entry.success, false)
-        assert.match(entry.error, /RESEND_API_KEY/u)
-        assert.ok(entry.userId)
+        const recoveryKey = registered.payload.data.recoveryKey
+        const userId = registered.payload.data.id
+        const stored = await stores.data.get(`users/${userId}.json`, { type: 'json' })
+        assert.equal(Math.log2(31) * 28 >= 128, true)
+        assert.match(stored.recoveryKeyHash, /^recovery-scrypt\$1\$/u)
+        assert.equal(await verifyRecoveryKey(recoveryKey, stored.recoveryKeyHash), true)
+        assert.equal(JSON.stringify(stored).includes(recoveryKey), false)
+        assert.equal(logs.some(entry => entry.includes(recoveryKey)), false)
     })
 
-    it('logs a structured failure with status for non-2xx responses', async () => {
-        const failState = createState('10.0.4.3')
-        failState.stores = stores
-        const originalFetch = globalThis.fetch
-        globalThis.fetch = async () => new Response('domain is not verified', { status: 403 })
-        const restore = captureLogs()
-        let result
-        try {
-            result = await call(failState, 'POST', 'user/resetpassword', {
-                identifier: 'mail@example.com',
-            })
-        } finally {
-            restore()
-            globalThis.fetch = originalFetch
-        }
-        assert.equal(result.response.status, 200)
+    it('keeps legacy accounts usable and lets them create then rotate a key with their password', async () => {
+        resetMemoryRateLimitsForTests()
+        const legacy = createState('10.0.4.2')
+        legacy.stores = stores
+        const registered = await call(legacy, 'POST', 'user/register', {
+            name: '历史恢复用户',
+            email: 'legacy-recovery@example.com',
+            password: 'legacy-secure-password',
+        })
+        const userKey = `users/${registered.payload.data.id}.json`
+        const stored = await stores.data.get(userKey, { type: 'json' })
+        delete stored.recoveryKeyHash
+        delete stored.recoveryKeyCreatedAt
+        delete stored.recoveryKeyVersion
+        await stores.data.setJSON(userKey, stored)
 
-        const entry = capturedLogs.map(text => JSON.parse(text))
-            .find(log => log?.event === 'password_reset_email')
-        assert.equal(entry.success, false)
-        assert.equal(entry.status, 403)
-        assert.match(entry.error, /domain is not verified/u)
+        await call(legacy, 'POST', 'user/logout')
+        const login = await call(legacy, 'POST', 'user/login', {
+            identifier: '历史恢复用户',
+            password: 'legacy-secure-password',
+        })
+        assert.equal(login.response.status, 200)
+        assert.equal(login.payload.data.hasRecoveryKey, false)
+
+        const wrongPassword = await call(legacy, 'POST', 'user/recovery-key', {
+            currentPassword: 'wrong-password',
+        })
+        assert.equal(wrongPassword.response.status, 401)
+        const created = await call(legacy, 'POST', 'user/recovery-key', {
+            currentPassword: 'legacy-secure-password',
+        })
+        assert.equal(created.response.status, 200)
+        assert.match(created.payload.data.recoveryKey, /^ELY-/u)
+
+        const rotated = await call(legacy, 'POST', 'user/recovery-key', {
+            currentPassword: 'legacy-secure-password',
+        })
+        assert.equal(rotated.response.status, 200)
+        assert.notEqual(rotated.payload.data.recoveryKey, created.payload.data.recoveryKey)
+        const latest = await stores.data.get(userKey, { type: 'json' })
+        assert.equal(await verifyRecoveryKey(created.payload.data.recoveryKey, latest.recoveryKeyHash), false)
+        assert.equal(await verifyRecoveryKey(rotated.payload.data.recoveryKey, latest.recoveryKeyHash), true)
     })
 
-    it('expires reset tokens and allows only one use', async () => {
-        const resetUser = createState('10.0.4.4')
-        resetUser.stores = stores
-        await call(resetUser, 'POST', 'user/register', {
-            name: '过期用户',
-            email: 'expire@example.com',
-            password: 'expire-secure-password',
+    it('uses the same response for unknown accounts and incorrect recovery keys', async () => {
+        resetMemoryRateLimitsForTests()
+        const known = createState('10.0.4.3')
+        known.stores = stores
+        const registered = await call(known, 'POST', 'user/register', {
+            name: '统一错误用户',
+            email: 'uniform-recovery@example.com',
+            password: 'uniform-secure-password',
         })
-        const sent = {}
-        const originalFetch = globalThis.fetch
-        globalThis.fetch = async (_url, init) => {
-            sent.body = JSON.parse(init.body)
-            return new Response(JSON.stringify({ id: 'email-expire' }), { status: 200 })
-        }
-        try {
-            await call(resetUser, 'POST', 'user/resetpassword', { identifier: 'expire@example.com' })
-        } finally {
-            globalThis.fetch = originalFetch
-        }
-        const token = sent.body.html.match(/#resetpassword=([a-zA-Z0-9_-]+)/u)?.[1]
-        assert.ok(token)
-
-        // 找到属于该用户的重置记录并置为过期(store 中可能还有其他用户的记录)
-        const me = await call(resetUser, 'GET', 'user/me')
-        const resetUserId = me.payload.data.id
-        const listing = await stores.data.list({ prefix: 'password-resets/' })
-        const resetEntries = []
-        for (const blob of listing.blobs) {
-            const record = await stores.data.get(blob.key, { type: 'json' })
-            if (record?.userId === resetUserId) resetEntries.push({ key: blob.key, record })
-        }
-        assert.equal(resetEntries.length, 1)
-        resetEntries[0].record.expiresAt = Date.now() - 1000
-        await stores.data.setJSON(resetEntries[0].key, resetEntries[0].record)
-
-        const expired = await call(resetUser, 'POST', 'action', {
-            id: token,
-            data: 'new-password-123',
+        const validKey = registered.payload.data.recoveryKey
+        const wrongKey = validKey.slice(0, -1) + (validKey.endsWith('2') ? '3' : '2')
+        const knownFailure = await call(known, 'POST', 'user/recover', {
+            identifier: 'uniform-recovery@example.com',
+            recoveryKey: wrongKey,
+            password: 'replacement-password',
         })
-        assert.equal(expired.response.status, 400)
-
-        // 重新生成并立即使用,再复用应失败
-        const sent2 = {}
-        globalThis.fetch = async (_url, init) => {
-            sent2.body = JSON.parse(init.body)
-            return new Response(JSON.stringify({ id: 'email-expire-2' }), { status: 200 })
-        }
-        try {
-            await call(resetUser, 'POST', 'user/resetpassword', { identifier: 'expire@example.com' })
-        } finally {
-            globalThis.fetch = originalFetch
-        }
-        const token2 = sent2.body.html.match(/#resetpassword=([a-zA-Z0-9_-]+)/u)?.[1]
-        assert.ok(token2)
-        const used = await call(resetUser, 'POST', 'action', {
-            id: token2,
-            data: 'another-new-password',
+        const unknown = createState('10.0.4.4')
+        unknown.stores = stores
+        const unknownFailure = await call(unknown, 'POST', 'user/recover', {
+            identifier: 'missing-recovery@example.com',
+            recoveryKey: wrongKey,
+            password: 'replacement-password',
         })
-        assert.equal(used.response.status, 200)
-        const reuse = await call(resetUser, 'POST', 'action', {
-            id: token2,
-            data: 'third-new-password',
-        })
-        assert.equal(reuse.response.status, 400)
+        assert.equal(knownFailure.response.status, unknownFailure.response.status)
+        assert.equal(knownFailure.payload.message, unknownFailure.payload.message)
+        assert.equal(knownFailure.payload.message, '账号信息或恢复密钥不正确')
     })
 
-    it('allows only one of two concurrent uses of the same reset token', async () => {
-        const raceUser = createState('10.0.4.5')
-        raceUser.stores = stores
-        await call(raceUser, 'POST', 'user/register', {
-            name: '并发重置用户',
-            email: 'race-reset@example.com',
-            password: 'race-reset-password',
+    it('allows only one concurrent use of a recovery key', async () => {
+        resetMemoryRateLimitsForTests()
+        const race = createState('10.0.4.5')
+        race.stores = stores
+        const registered = await call(race, 'POST', 'user/register', {
+            name: '并发恢复用户',
+            email: 'race-recovery@example.com',
+            password: 'race-recovery-password',
         })
-        const sent = {}
-        const originalFetch = globalThis.fetch
-        globalThis.fetch = async (_url, init) => {
-            sent.body = JSON.parse(init.body)
-            return new Response(JSON.stringify({ id: 'email-race' }), { status: 200 })
-        }
-        try {
-            await call(raceUser, 'POST', 'user/resetpassword', { identifier: 'race-reset@example.com' })
-        } finally {
-            globalThis.fetch = originalFetch
-        }
-        const token = sent.body.html.match(/#resetpassword=([a-zA-Z0-9_-]+)/u)?.[1]
-        assert.ok(token)
-
-        const results = await Promise.all([
-            call(raceUser, 'POST', 'action', { id: token, data: 'first-winner-password' }),
-            call(raceUser, 'POST', 'action', { id: token, data: 'second-loser-password' }),
-        ])
+        const requests = [
+            createState('10.0.4.6'),
+            createState('10.0.4.7'),
+        ]
+        requests.forEach(item => (item.stores = stores))
+        const results = await Promise.all(requests.map((item, index) => call(
+            item,
+            'POST',
+            'user/recover',
+            {
+                identifier: 'race-recovery@example.com',
+                recoveryKey: registered.payload.data.recoveryKey,
+                password: `race-winner-password-${index}`,
+            },
+        )))
         assert.deepEqual(results.map(result => result.response.status).sort(), [200, 400])
-        const loser = results.find(result => result.response.status === 400)
-        assert.match(loser.payload.message, /无效或已使用/u)
-        const winner = results.find(result => result.response.status === 200)
-        assert.ok(winner)
+        assert.equal(results.find(result => result.response.status === 400).payload.message, '账号信息或恢复密钥不正确')
+        assert.equal(
+            await stores.data.get(
+                `recovery-key-claims/${registered.payload.data.id}/1.json`,
+                { type: 'json' },
+            ),
+            null,
+        )
+    })
 
-        // 旧会话全部失效,只能用赢家设置的新密码登录
-        const oldMe = await call(raceUser, 'GET', 'user/me')
-        assert.equal(oldMe.response.status, 401)
-        const newLogin = await call(raceUser, 'POST', 'user/login', {
-            identifier: 'race-reset@example.com',
-            password: 'first-winner-password',
+    it('prevents a stale profile update from overwriting a completed recovery', async () => {
+        resetMemoryRateLimitsForTests()
+        const data = new PausedProfileClaimStore()
+        const stores = { data, uploads: new MemoryStore() }
+        const owner = createState('10.0.4.20')
+        owner.stores = stores
+        const registered = await call(owner, 'POST', 'user/register', {
+            name: '恢复竞态用户',
+            email: 'recovery-update-race@example.com',
+            password: 'recovery-race-old-password',
         })
-        assert.equal(newLogin.response.status, 200)
+
+        data.pauseProfileClaim()
+        const staleUpdate = call(owner, 'PUT', 'user/update', {
+            name: '不应生效的新名字',
+            password: 'stale-profile-password',
+        })
+        await data.profileClaimStarted
+
+        const recovery = createState('10.0.4.21')
+        recovery.stores = stores
+        const recovered = await call(recovery, 'POST', 'user/recover', {
+            identifier: 'recovery-update-race@example.com',
+            recoveryKey: registered.payload.data.recoveryKey,
+            password: 'recovery-race-new-password',
+        })
+        data.releaseProfileClaim()
+        const updateResult = await staleUpdate
+
+        assert.equal(recovered.response.status, 200)
+        assert.equal(updateResult.response.status, 409)
+        assert.equal(await call(owner, 'GET', 'user/me').then(result => result.response.status), 401)
+        assert.equal(
+            await loginWorksWithSharedStore(
+                stores,
+                'recovery-update-race@example.com',
+                'recovery-race-new-password',
+                '10.0.4.22',
+            ),
+            200,
+        )
+        assert.equal(
+            await loginWorksWithSharedStore(
+                stores,
+                '不应生效的新名字',
+                'stale-profile-password',
+                '10.0.4.23',
+            ),
+            401,
+        )
+        assert.equal(await data.get(nameIndexKey('不应生效的新名字'), { type: 'json' }), null)
+    })
+
+    it('limits repeated recovery attempts by account identity', async () => {
+        resetMemoryRateLimitsForTests()
+        const attempts = []
+        for (let index = 0; index < 6; index += 1) {
+            const requester = createState(`10.0.5.${index + 1}`)
+            requester.stores = stores
+            attempts.push(await call(requester, 'POST', 'user/recover', {
+                identifier: 'rate-limited-recovery@example.com',
+                recoveryKey: 'ELY-2222-2222-2222-2222-2222-2222-2222',
+                password: 'rate-limit-password',
+            }))
+        }
+        assert.deepEqual(attempts.map(result => result.response.status), [400, 400, 400, 400, 400, 429])
     })
 
     it('validates real calendar dates for comment counts', async () => {
