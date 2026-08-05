@@ -19,10 +19,6 @@ import Settings from '../settings'
 import { getConfig } from '../settings/config'
 import type { CommentRecord } from '../features/comments/comment-types'
 import { useAuth } from '../features/auth/useAuth'
-import {
-  finishPageEntrance,
-  pageEntrancePlaying,
-} from '../features/entrance/page-entrance'
 import StableAvatar from './StableAvatar.vue'
 import {
   finishPerformanceMark,
@@ -43,8 +39,12 @@ const panelMode = ref<PanelMode>('auto')
 const pinnedHidden = computed(() => Settings.pinnedHidden)
 const initialRequestSettled = ref(false)
 const initialAnimationStarted = ref(false)
+const commentsEntrancePlaying = ref(
+  !window.matchMedia('(prefers-reduced-motion: reduce)').matches &&
+    !document.body.classList.contains('lowend'),
+)
 const enteringCommentIds = ref(new Set<number>())
-let firstCommentAnimationRecorded = false
+let commentsEntranceRecorded = false
 let initialPerformanceFinished = false
 let scrollPaused = false
 let pauseTimer: number | undefined
@@ -356,14 +356,14 @@ function retryInitialLoad(): void {
     .catch(() => undefined)
 }
 
-function handleInitialAnimationStart(event: AnimationEvent): void {
+function handleCommentsEntranceStart(event: AnimationEvent): void {
   if (
     event.target !== event.currentTarget ||
-    event.animationName !== 'cardPopIn'
+    event.animationName !== 'commentsUp'
   )
     return
-  if (firstCommentAnimationRecorded) return
-  firstCommentAnimationRecorded = true
+  if (commentsEntranceRecorded) return
+  commentsEntranceRecorded = true
   markPerformanceEvent('first-comment-animation-start')
   initialAnimationStarted.value = true
 }
@@ -378,7 +378,7 @@ function syncEnteringComments(): void {
 function finishCommentAnimation(id: number, event: AnimationEvent): void {
   if (
     event.target !== event.currentTarget ||
-    event.animationName !== 'cardPopIn'
+    event.animationName !== 'newCommentUp'
   )
     return
   const next = new Set(enteringCommentIds.value)
@@ -386,13 +386,13 @@ function finishCommentAnimation(id: number, event: AnimationEvent): void {
   enteringCommentIds.value = next
 }
 
-function finishPageEntranceAnimation(event: AnimationEvent): void {
+function finishCommentsEntrance(event: AnimationEvent): void {
   if (
     event.target !== event.currentTarget ||
-    event.animationName !== 'cardPopIn'
+    event.animationName !== 'commentsUp'
   )
     return
-  finishPageEntrance()
+  commentsEntrancePlaying.value = false
 }
 
 function hidePinned(): void {
@@ -425,7 +425,11 @@ onMounted(() => {
   document.addEventListener('pointermove', handleDocumentPointerMove)
   setupPaginationObserver()
   syncEnteringComments()
-  bodyObserver = new MutationObserver(() => requestPaginationCheck())
+  bodyObserver = new MutationObserver(() => {
+    if (document.body.classList.contains('fullscreen'))
+      commentsEntrancePlaying.value = false
+    requestPaginationCheck()
+  })
   bodyObserver.observe(document.body, {
     attributes: true,
     attributeFilter: ['class'],
@@ -459,9 +463,13 @@ defineExpose({ forceLowerPanelDown, forceLowerPanelUp, pauseScroll })
     id="lowerPanel"
     ref="panel"
     :class="{
+      animating: commentsEntrancePlaying,
       lowerPanelUp: panelMode === 'forced-up',
       lowerPanelDown: panelMode === 'forced-down',
     }"
+    @animationstart="handleCommentsEntranceStart"
+    @animationend="finishCommentsEntrance"
+    @animationcancel="finishCommentsEntrance"
     @pointerenter="handlePanelPointerEnter"
     @pointerleave="handlePanelPointerLeave"
     @pointerdown="handlePanelPointerDown"
@@ -482,10 +490,8 @@ defineExpose({ forceLowerPanelDown, forceLowerPanelUp, pauseScroll })
         v-if="!pinnedHidden"
         id="topComment"
         class="commentBox"
-        :class="{ pageEntrance: pageEntrancePlaying }"
         :data-initial-request-settled="initialRequestSettled"
         :data-initial-animation-started="initialAnimationStarted"
-        @animationend="finishPageEntranceAnimation"
       >
         <img class="bg" src="/assets/elytrue-20260724/bg/portrait1.webp" />
         <div class="bgcover"></div>
@@ -571,7 +577,6 @@ defineExpose({ forceLowerPanelDown, forceLowerPanelUp, pauseScroll })
         :record="record"
         :eager="index === 0"
         :entering="enteringCommentIds.has(record.id)"
-        @animationstart="index === 0 && handleInitialAnimationStart($event)"
         @animationend="finishCommentAnimation(record.id, $event)"
         @lift="forceLowerPanelUp"
         @reply="openEditor"

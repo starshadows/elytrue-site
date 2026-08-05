@@ -114,6 +114,17 @@ describe('comments store', () => {
     assert.deepEqual(result.changedIds, new Set([1]))
   })
 
+  test('keeps an identical avatar from marking a comment as changed', () => {
+    const current = comment(1, { avatar: 'avatar-1' })
+    const result = reconcileComments(
+      [current],
+      [comment(1, { avatar: 'avatar-1' })],
+    )
+
+    assert.equal(result.items[0], current)
+    assert.deepEqual(result.changedIds, new Set())
+  })
+
   test('hydrates public cache before revalidation and animates only new ids', async () => {
     const storage = new TestStorage()
     Object.defineProperty(globalThis, 'window', {
@@ -155,7 +166,7 @@ describe('comments store', () => {
       cached,
     )
     assert.equal(cached?.comment, 'updated')
-    assert.deepEqual(store.consumeAnimationIds(), new Set([1, 2]))
+    assert.deepEqual(store.consumeAnimationIds(), new Set([2]))
     assert.equal(
       store.state.items.some((item) => item.id === 1),
       true,

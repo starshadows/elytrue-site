@@ -12,7 +12,6 @@ interface ThemeElements {
   captionContainer: HTMLElement
   captions: HTMLCollection
   themeIndicators: HTMLCollection
-  lowerPanel: HTMLElement
 }
 
 interface CaptionBlock {
@@ -94,7 +93,6 @@ class ThemeControllerImpl implements ThemeController {
       captionContainer: this.requireElement('mainCaptions'),
       captions: this.requireElement('mainCaptions').children,
       themeIndicators: this.requireElement('currentTheme').children,
-      lowerPanel: this.requireElement('lowerPanel'),
     }
   }
 
@@ -242,11 +240,6 @@ class ThemeControllerImpl implements ThemeController {
       this.timers.setInterval(() => this.nextImg(), 8_000)
       this.timers.setInterval(() => this.nextCaption(), 8_000)
     }
-    this.elements.lowerPanel.classList.add('animating')
-    this.timers.setTimeout(
-      () => this.elements.lowerPanel.classList.remove('animating'),
-      1_700,
-    )
     this.dependencies.onThemeMusicChanged(this.getThemeMusic())
   }
 

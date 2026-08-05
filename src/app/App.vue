@@ -23,15 +23,9 @@ import Settings from '../settings'
 import { setConfig } from '../settings/config'
 import { logFrontendError } from './app-events'
 import { markPerformanceEvent } from '../lib/performance'
-import {
-  finishPageEntrance,
-  startPageEntrance,
-} from '../features/entrance/page-entrance'
 
 const commentsPanel =
   useTemplateRef<InstanceType<typeof CommentsPanel>>('commentsPanel')
-
-startPageEntrance()
 
 function shuffle<T>(items: T[]): T[] {
   for (let index = items.length - 1; index > 0; index -= 1) {
@@ -116,8 +110,6 @@ async function installPwa(): Promise<void> {
 }
 
 onMounted(() => {
-  if (window.matchMedia('(prefers-reduced-motion: reduce)').matches)
-    finishPageEntrance()
   markPerformanceEvent('app-mounted')
   theme.init()
   timeline.init()

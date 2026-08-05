@@ -2,6 +2,10 @@ import { test, expect } from '@playwright/test'
 
 const BASE = 'http://127.0.0.1:4173'
 const PASSWORD = 'e2e-test-password-123'
+const AVATAR_PNG = Buffer.from(
+  'iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mNk+A8AAQUBAScY42YAAAAASUVORK5CYII=',
+  'base64',
+)
 
 test.afterAll(async ({ request }) => {
   const response = await request.post('/__test/reset')
@@ -76,14 +80,14 @@ async function postViaApi(page, comment, index = 0) {
   expect(posted.ok()).toBeTruthy()
 }
 
-function commentPayload(id = 1) {
+function commentPayload(id = 1, avatar = '') {
   return {
     id,
     number: id,
     displayId: id,
     uid: 'perf-user',
     sender: '性能用户',
-    avatar: '',
+    avatar,
     comment: `性能留言 ${id}`,
     image: '',
     replyid: null,
@@ -151,29 +155,41 @@ async function fulfillMe(
   })
 }
 
-function profilePayload(name = '缓存用户') {
+async function fulfillAvatar(route, { delay = 0, status = 200 } = {}) {
+  if (delay) await new Promise((resolve) => setTimeout(resolve, delay))
+  await route.fulfill({
+    status,
+    contentType: 'image/png',
+    body: status === 200 ? AVATAR_PNG : undefined,
+  })
+}
+
+function profilePayload(name = '缓存用户', avatar = '') {
   return {
     id: 'perf-user',
     name,
-    avatar: '',
+    avatar,
     role: 'user',
     csrfToken: 'test-csrf-token',
   }
 }
 
-function installProfileHint(page, name = '缓存用户') {
-  return page.addInitScript((cachedName) => {
-    localStorage.setItem(
-      'elytrue.profileHint',
-      JSON.stringify({
-        version: 1,
-        userId: 'perf-user',
-        name: cachedName,
-        avatar: '',
-        savedAt: Date.now(),
-      }),
-    )
-  }, name)
+function installProfileHint(page, name = '缓存用户', avatar = '') {
+  return page.addInitScript(
+    ({ cachedName, cachedAvatar }) => {
+      localStorage.setItem(
+        'elytrue.profileHint',
+        JSON.stringify({
+          version: 1,
+          userId: 'perf-user',
+          name: cachedName,
+          avatar: cachedAvatar,
+          savedAt: Date.now(),
+        }),
+      )
+    },
+    { cachedName: name, cachedAvatar: avatar },
+  )
 }
 
 test('首次加载:认证、公共留言和统计各自单飞且不误触分页', async ({ page }) => {
@@ -259,30 +275,62 @@ test('页面首次入场独立于认证和留言请求,且只播放一次', asyn
   )
 
   await page.goto('/', { waitUntil: 'domcontentloaded' })
-  const state = await page.evaluate(() => ({
-    pinned: document
-      .getElementById('topComment')
+  const state = await page.evaluate(() => {
+    const panel = document.getElementById('lowerPanel')
+    const animation = panel
       ?.getAnimations()
-      .map((item) => item.animationName),
-    user: document
-      .getElementById('userInfo')
-      ?.getAnimations()
-      .map((item) => item.animationName),
-    entrance: document.documentElement.dataset.entrance,
-  }))
-  expect(state.pinned).toContain('cardPopIn')
-  expect(state.user).toContain('cardPopIn')
-  expect(state.entrance).toBe('playing')
-  await page.waitForTimeout(700)
-  await expect
-    .poll(() => page.evaluate(() => document.documentElement.dataset.entrance))
-    .toBe('finished')
-  expect(
-    await page.evaluate(() => ({
+      .find((item) => item.animationName === 'commentsUp')
+    const keyframes = animation?.effect?.getKeyframes() ?? []
+    return {
+      panel: animation?.animationName,
+      duration: getComputedStyle(panel).animationDuration,
+      keyframes: keyframes.map(({ transform, opacity }) => ({
+        transform,
+        opacity,
+      })),
       pinned: document.getElementById('topComment')?.getAnimations().length,
-      user: document.getElementById('userInfo')?.getAnimations().length,
-    })),
-  ).toEqual({ pinned: 0, user: 0 })
+      userClass: document.getElementById('userInfo')?.className,
+      userAnimations: document.getElementById('userInfo')?.getAnimations()
+        .length,
+      viewportHeight: window.innerHeight,
+    }
+  })
+  expect(state.panel).toBe('commentsUp')
+  expect(state.duration).toBe('1.7s')
+  expect(state.keyframes).toEqual([
+    { transform: 'translateY(calc(100% + 30px))', opacity: undefined },
+    { transform: 'translateY(calc(100% + 30px))', opacity: undefined },
+    {
+      transform: `translateY(${state.viewportHeight * 0.33}px)`,
+      opacity: undefined,
+    },
+  ])
+  expect(
+    state.keyframes.every(({ transform }) => !transform.includes('scale')),
+  ).toBe(true)
+  expect(state.pinned).toBe(0)
+  expect(state.userClass).not.toContain('pageEntrance')
+  expect(state.userAnimations).toBe(0)
+
+  await page.waitForTimeout(1900)
+  await expect(page.locator('#lowerPanel')).not.toHaveClass(/animating/u)
+  await page.locator('.mainTitleUnder').click()
+  await page.locator('#themeList [data-theme="default"]').click()
+  await page.evaluate(() => {
+    document.body.classList.add('fullscreen')
+    document.body.classList.remove('fullscreen')
+    document.documentElement.lang = 'en'
+  })
+  await page.waitForTimeout(100)
+  expect(
+    await page
+      .locator('#lowerPanel')
+      .evaluate((element) =>
+        element
+          .getAnimations()
+          .some((item) => item.animationName === 'commentsUp'),
+      ),
+  ).toBe(false)
 })
 
 test('公共留言缓存先渲染,后台相同数据保持 DOM 身份', async ({ page }) => {
@@ -297,9 +345,9 @@ test('公共留言缓存先渲染,后台相同数据保持 DOM 身份', async ({
   const card = page.locator('#comments .commentItem').first()
   await expect(card).toBeVisible({ timeout: 100 })
   await expect(page.locator('#comments .commentSkeleton')).toHaveCount(0)
-  expect(
-    await card.evaluate((element) => element.getAnimations().length),
-  ).toBeGreaterThan(0)
+  expect(await card.evaluate((element) => element.getAnimations().length)).toBe(
+    0,
+  )
   const handle = await card.elementHandle()
   await page.waitForTimeout(1700)
   expect(
@@ -337,6 +385,24 @@ test('公共留言后台校准只为新增 ID 入场并移除已删除留言', a
       )
     })
     .toEqual([true, false])
+  const newCommentAnimation = await cards.first().evaluate((element) => {
+    const animation = element
+      .getAnimations()
+      .find((item) => item.animationName === 'newCommentUp')
+    return {
+      name: animation?.animationName,
+      transforms:
+        animation?.effect?.getKeyframes().map((frame) => frame.transform) ?? [],
+    }
+  })
+  expect(newCommentAnimation.name).toBe('newCommentUp')
+  expect(newCommentAnimation.transforms).toEqual([
+    'translateY(24px)',
+    'translateY(0px)',
+  ])
+  expect(
+    newCommentAnimation.transforms.every((value) => !value.includes('scale')),
+  ).toBe(true)
 
   await page.reload({ waitUntil: 'domcontentloaded' })
   await expect(page.locator('#comments .commentItem')).toHaveCount(1, {
@@ -422,36 +488,37 @@ test('滚动到最旧一端只请求一次历史,5 秒空闲后不循环分页',
   expect(beforeRequests).toBe(1)
 })
 
-test('置顶与普通留言使用同一套入场动画', async ({ page }) => {
-  await registerAndStayLoggedIn(page, unique('性能旅人'))
-  await postViaApi(page, `动画配置 ${Date.now()}`)
-  await page.reload({ waitUntil: 'domcontentloaded' })
+test('置顶与已有留言只随父级面板整体上升', async ({ page }) => {
+  const cached = commentPayload(46)
+  await seedHomeComments(page, [cached])
+  await page.route('**/api/user/me', (route) => fulfillMe(route))
+  await page.route('**/api/comments/public*', (route) =>
+    fulfillComments(route, { delay: 1500, items: [cached] }),
+  )
+  await page.goto('/', { waitUntil: 'domcontentloaded' })
   await expect(page.locator('#comments .commentItem').first()).toBeVisible()
   await page.waitForTimeout(50)
 
   const animationState = await page.evaluate(() => {
+    const panel = document.getElementById('lowerPanel')
     const pinned = document.getElementById('topComment')
     const first = document.querySelector('#comments .commentItem')
     const sentinels = [
       ...document.querySelectorAll('#comments .paginationSentinel'),
     ].map((el) => getComputedStyle(el).animationName)
     return {
+      panel: getComputedStyle(panel).animationName,
       pinned: getComputedStyle(pinned).animationName,
       first: first ? getComputedStyle(first).animationName : '',
-      pinnedDuration: getComputedStyle(pinned).animationDuration,
-      firstDuration: first ? getComputedStyle(first).animationDuration : '',
-      pinnedTiming: getComputedStyle(pinned).animationTimingFunction,
-      firstTiming: first ? getComputedStyle(first).animationTimingFunction : '',
       sentinels,
       firstStart: performance
         .getEntriesByName('first-comment-animation-start')
         .at(-1)?.startTime,
     }
   })
-  expect(animationState.pinned).toBe('cardPopIn')
-  expect(animationState.first).toBe('cardPopIn')
-  expect(animationState.pinnedDuration).toBe(animationState.firstDuration)
-  expect(animationState.pinnedTiming).toBe(animationState.firstTiming)
+  expect(animationState.panel).toBe('commentsUp')
+  expect(animationState.pinned).toBe('none')
+  expect(animationState.first).toBe('none')
   expect(animationState.sentinels.every((name) => name === 'none')).toBe(true)
   expect(animationState.firstStart).toBeTruthy()
 })
@@ -596,6 +663,170 @@ test('认证请求失败会清除缓存用户名', async ({ page }) => {
   ).toBeNull()
 })
 
+test('相同 Profile Hint 头像只预加载一次且不替换节点', async ({ page }) => {
+  let avatarRequests = 0
+  await installProfileHint(page, '头像缓存用户', 'profile-avatar')
+  await page.route('**/api/data/images/avatars/profile-avatar', (route) => {
+    avatarRequests += 1
+    return fulfillAvatar(route, { delay: 300 })
+  })
+  await page.route('**/api/user/me', (route) =>
+    fulfillMe(route, {
+      delay: 1500,
+      profile: profilePayload('头像缓存用户', 'profile-avatar'),
+    }),
+  )
+  await page.route('**/api/comments/public*', (route) =>
+    fulfillComments(route, { items: [] }),
+  )
+
+  await page.goto('/', { waitUntil: 'domcontentloaded' })
+  const avatar = page.locator('#userInfoAvatar')
+  await expect(avatar).toHaveAttribute('src', '/res/defaultAvatar.png')
+  const handle = await avatar.elementHandle()
+  await avatar.evaluate((element) => {
+    const changes = []
+    const observer = new MutationObserver(() => {
+      changes.push(element.getAttribute('src'))
+    })
+    observer.observe(element, {
+      attributes: true,
+      attributeFilter: ['src'],
+    })
+    Reflect.set(window, 'avatarSrcChanges', changes)
+    Reflect.set(window, 'avatarObserver', observer)
+  })
+  await expect(avatar).toHaveAttribute(
+    'src',
+    '/api/data/images/avatars/profile-avatar',
+  )
+  await page.waitForTimeout(1500)
+
+  expect(avatarRequests).toBe(1)
+  expect(
+    await avatar.evaluate((element, original) => element === original, handle),
+  ).toBe(true)
+  expect(
+    await page.evaluate(() => Reflect.get(window, 'avatarSrcChanges')),
+  ).toEqual(['/api/data/images/avatars/profile-avatar'])
+})
+
+test('头像目标变化时保留旧图直到新图完成解码', async ({ page }) => {
+  await installProfileHint(page, '头像切换用户', 'avatar-old')
+  await page.route('**/api/data/images/avatars/avatar-old', (route) =>
+    fulfillAvatar(route, { delay: 200 }),
+  )
+  await page.route('**/api/data/images/avatars/avatar-new', (route) =>
+    fulfillAvatar(route, { delay: 1000 }),
+  )
+  await page.route('**/api/user/me', (route) =>
+    fulfillMe(route, {
+      delay: 500,
+      profile: profilePayload('头像切换用户', 'avatar-new'),
+    }),
+  )
+  await page.route('**/api/comments/public*', (route) =>
+    fulfillComments(route, { items: [] }),
+  )
+
+  await page.goto('/', { waitUntil: 'domcontentloaded' })
+  const avatar = page.locator('#userInfoAvatar')
+  const handle = await avatar.elementHandle()
+  await expect(avatar).toHaveAttribute(
+    'src',
+    '/api/data/images/avatars/avatar-old',
+  )
+  await page.waitForTimeout(700)
+  await expect(avatar).toHaveAttribute(
+    'src',
+    '/api/data/images/avatars/avatar-old',
+  )
+  await expect(avatar).toHaveAttribute(
+    'src',
+    '/api/data/images/avatars/avatar-new',
+  )
+  expect(
+    await avatar.evaluate((element, original) => element === original, handle),
+  ).toBe(true)
+})
+
+test('首次动态头像 404 时始终保留默认头像', async ({ page }) => {
+  await page.route('**/api/data/images/avatars/missing-avatar', (route) =>
+    fulfillAvatar(route, { delay: 300, status: 404 }),
+  )
+  await page.route('**/api/user/me', (route) =>
+    fulfillMe(route, {
+      profile: profilePayload('头像失败用户', 'missing-avatar'),
+    }),
+  )
+  await page.route('**/api/comments/public*', (route) =>
+    fulfillComments(route, { items: [] }),
+  )
+
+  await page.goto('/', { waitUntil: 'domcontentloaded' })
+  const avatar = page.locator('#userInfoAvatar')
+  const handle = await avatar.elementHandle()
+  await expect(avatar).toHaveAttribute('src', '/res/defaultAvatar.png')
+  await page.waitForTimeout(500)
+  await expect(avatar).toHaveAttribute('src', '/res/defaultAvatar.png')
+  expect(
+    await avatar.evaluate((element, original) => element === original, handle),
+  ).toBe(true)
+})
+
+test('留言缓存校准和 liked 更新不重载或替换头像', async ({ page }) => {
+  let avatarRequests = 0
+  const cached = commentPayload(61, 'comment-avatar')
+  await seedHomeComments(page, [cached])
+  await page.route('**/api/data/images/avatars/comment-avatar', (route) => {
+    avatarRequests += 1
+    return fulfillAvatar(route, { delay: 300 })
+  })
+  await page.route('**/api/user/me', (route) =>
+    fulfillMe(route, { profile: profilePayload() }),
+  )
+  await page.route('**/api/comments/viewer-likes*', async (route) => {
+    await new Promise((resolve) => setTimeout(resolve, 1000))
+    await route.fulfill({
+      status: 200,
+      contentType: 'application/json',
+      body: JSON.stringify({
+        code: 1,
+        message: 'OK',
+        data: [{ id: 61, liked: true }],
+      }),
+    })
+  })
+  await page.route('**/api/comments/public*', (route) =>
+    fulfillComments(route, { delay: 600, items: [cached] }),
+  )
+
+  await page.goto('/', { waitUntil: 'domcontentloaded' })
+  const card = page.locator('#comments .commentItem').first()
+  const avatar = card.locator('.avatar')
+  const cardHandle = await card.elementHandle()
+  const avatarHandle = await avatar.elementHandle()
+  await expect(avatar).toHaveAttribute(
+    'src',
+    '/api/data/images/avatars/comment-avatar',
+  )
+  await expect(card.locator('.btn.like')).toHaveClass(/liked/u)
+
+  expect(avatarRequests).toBe(1)
+  expect(
+    await card.evaluate(
+      (element, original) => element === original,
+      cardHandle,
+    ),
+  ).toBe(true)
+  expect(
+    await avatar.evaluate(
+      (element, original) => element === original,
+      avatarHandle,
+    ),
+  ).toBe(true)
+})
+
 test('今日统计延迟 3000ms 不阻塞留言卡片', async ({ page }) => {
   await page.route('**/api/user/me', (route) => fulfillMe(route))
   await page.route('**/api/comments/public*', (route) => fulfillComments(route))
@@ -661,6 +892,11 @@ test('reduced-motion 不强制执行留言入场动画', async ({ page }) => {
   await page.goto('/')
   await expect(page.locator('#comments .commentItem')).toHaveCount(1)
   const state = await page.evaluate(() => ({
+    panelAnimating: document
+      .getElementById('lowerPanel')
+      ?.classList.contains('animating'),
+    panelTransform: getComputedStyle(document.getElementById('lowerPanel'))
+      .transform,
     pinnedAnimations: document.getElementById('topComment')?.getAnimations()
       .length,
     firstAnimations: document
@@ -669,6 +905,8 @@ test('reduced-motion 不强制执行留言入场动画', async ({ page }) => {
     forcedMarks: performance.getEntriesByName('first-comment-animation-start')
       .length,
   }))
+  expect(state.panelAnimating).toBe(false)
+  expect(state.panelTransform).not.toBe('none')
   expect(state.pinnedAnimations).toBe(0)
   expect(state.firstAnimations).toBe(0)
   expect(state.forcedMarks).toBe(0)

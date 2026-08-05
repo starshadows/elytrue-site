@@ -10,10 +10,6 @@ import { useAuth, type ProfileAction } from '../features/auth/useAuth'
 import { markPerformanceEvent } from '../lib/performance'
 import { profileHint } from '../features/auth/profile-hint'
 import StableAvatar from './StableAvatar.vue'
-import {
-  finishPageEntrance,
-  pageEntrancePlaying,
-} from '../features/entrance/page-entrance'
 
 const auth = useAuth()
 const displayProfile = computed(
@@ -44,15 +40,6 @@ async function openUser(): Promise<void> {
 
 function action(value: ProfileAction): void {
   runProfileAction(value)
-}
-
-function finishHeaderEntrance(event: AnimationEvent): void {
-  if (
-    event.target !== event.currentTarget ||
-    event.animationName !== 'cardPopIn'
-  )
-    return
-  finishPageEntrance()
 }
 </script>
 
@@ -91,16 +78,12 @@ function finishHeaderEntrance(event: AnimationEvent): void {
     <br />
     <div
       id="userInfo"
-      :class="{
-        nologin: !auth.loggedIn.value,
-        pageEntrance: pageEntrancePlaying,
-      }"
+      :class="{ nologin: !auth.loggedIn.value }"
       role="button"
       tabindex="0"
       @click="openUser"
       @keydown.enter="openUser"
       @keydown.space.prevent="openUser"
-      @animationend="finishHeaderEntrance"
     >
       <StableAvatar id="userInfoAvatar" :src="avatar" alt="" loading="eager" />
       <span id="userInfoName">
