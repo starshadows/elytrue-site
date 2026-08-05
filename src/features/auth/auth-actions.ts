@@ -44,7 +44,7 @@ function configureAuth(): void {
 export function avatarPath(avatar = ''): string {
   return avatar
     ? `/api/data/images/avatars/${encodeURIComponent(avatar)}`
-    : '/res/defaultAvatar.png'
+    : '/assets/elytrue-shell-20260805/default-avatar-320-dd2f4539.png'
 }
 
 export async function initializeAuth(): Promise<UserProfile | null> {

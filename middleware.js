@@ -68,7 +68,9 @@ async function enforceEdgeRateLimit(context, pathname) {
   }
 
   const kv = context.env?.ELYTRUE_RATE_LIMIT_KV
-  if (!kv?.get || !kv?.put) return null
+    // KV read-modify-write is deliberately best-effort; strict global limits
+    // belong to EdgeOne WAF/platform frequency controls.
+    if (!kv?.get || !kv?.put) return null
 
   const { action, limit, windowSeconds } = policy
   const bucket = Math.floor(Date.now() / 1000 / windowSeconds)

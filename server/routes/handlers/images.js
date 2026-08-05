@@ -29,7 +29,16 @@ export async function deleteImage(context, stores, path, auth) {
 }
 
 export function defaultAvatar(context) {
-    return Response.redirect(new URL('/res/favicon-320.png', context.request.url), 302)
+    return new Response(null, {
+        status: 302,
+        headers: {
+            Location: new URL(
+                '/assets/elytrue-shell-20260805/default-avatar-320-dd2f4539.png',
+                context.request.url,
+            ).toString(),
+            'Cache-Control': 'no-store',
+        },
+    })
 }
 
 export function avatarImage(context, stores, path) {

@@ -682,7 +682,10 @@ test('相同 Profile Hint 头像只预加载一次且不替换节点', async ({ 
 
   await page.goto('/', { waitUntil: 'domcontentloaded' })
   const avatar = page.locator('#userInfoAvatar')
-  await expect(avatar).toHaveAttribute('src', '/res/defaultAvatar.png')
+  await expect(avatar).toHaveAttribute(
+    'src',
+    '/assets/elytrue-shell-20260805/default-avatar-320-dd2f4539.png',
+  )
   const handle = await avatar.elementHandle()
   await avatar.evaluate((element) => {
     const changes = []
@@ -766,9 +769,15 @@ test('首次动态头像 404 时始终保留默认头像', async ({ page }) => {
   await page.goto('/', { waitUntil: 'domcontentloaded' })
   const avatar = page.locator('#userInfoAvatar')
   const handle = await avatar.elementHandle()
-  await expect(avatar).toHaveAttribute('src', '/res/defaultAvatar.png')
+  await expect(avatar).toHaveAttribute(
+    'src',
+    '/assets/elytrue-shell-20260805/default-avatar-320-dd2f4539.png',
+  )
   await page.waitForTimeout(500)
-  await expect(avatar).toHaveAttribute('src', '/res/defaultAvatar.png')
+  await expect(avatar).toHaveAttribute(
+    'src',
+    '/assets/elytrue-shell-20260805/default-avatar-320-dd2f4539.png',
+  )
   expect(
     await avatar.evaluate((element, original) => element === original, handle),
   ).toBe(true)

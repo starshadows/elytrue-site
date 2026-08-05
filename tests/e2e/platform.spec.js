@@ -35,6 +35,23 @@ test('PWA manifest and current asset metadata stay complete', async ({
   expect(manifest.name).toBe('星花札记')
   expect(manifest.start_url).toBe('/')
   expect(manifest.icons).toHaveLength(1)
+  expect(manifest.icons[0]).toMatchObject({
+    src: 'assets/elytrue-shell-20260805/favicon-320-c998712d.png',
+    sizes: '320x320',
+    type: 'image/png',
+  })
+  expect(
+    (await page.request.get(`/${manifest.icons[0].src}`)).headers()[
+      'content-type'
+    ],
+  ).toContain('image/png')
+  expect(
+    (
+      await page.request.get(
+        '/assets/elytrue-shell-20260805/default-avatar-320-dd2f4539.png',
+      )
+    ).headers()['content-type'],
+  ).toContain('image/png')
 
   const backgrounds = await page
     .locator('.mainbg[data-background-id]')

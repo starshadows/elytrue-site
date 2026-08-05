@@ -40,9 +40,18 @@ middleware.js：Edge Runtime / Web APIs / ES2023+
 - `elytrue-data`：用户、索引、会话、恢复密钥版本认领、留言、点赞、举报和元数据。
 - `elytrue-uploads`：头像和留言图片。
 
-绑定 Edge KV 为 `ELYTRUE_RATE_LIMIT_KV`。`middleware.js` 只从 `context.env` 获取此绑定；客户端地址只信任 `request.eo.clientIp` 或平台注入的 `context.clientIp`，不会使用可伪造的 `x-forwarded-for`/`cf-connecting-ip`。缺少绑定或可信地址时边缘层跳过该桶，Cloud Functions 的账号维度/单实例内存限流仍工作。
+绑定 Edge KV 为 `ELYTRUE_RATE_LIMIT_KV`。`middleware.js` 只从 `context.env` 获取此绑定；客户端地址只信任 `request.eo.clientIp` 或平台注入的 `context.clientIp`，不会使用可伪造的 `x-forwarded-for`/`cf-connecting-ip`。缺少绑定或可信地址时边缘层跳过该桶，Cloud Functions 的账号维度/单实例内存限流仍工作。`GET /api/health` 在缺少有效 KV binding 时返回 `status: degraded` 和不含配置细节的 `checks.rateLimitKv: degraded`；不得把 KV 名称、环境变量值或秘密写入响应或日志。
 
-Edge KV 不提供原子增量或 CAS，应用内固定窗口在多节点并发下只能 best-effort，不能替代 EdgeOne WAF/频率控制。生产项目应在平台侧额外覆盖注册、登录、恢复、发布、上传、举报和管理员写接口。
+Edge KV 不提供原子增量或 CAS，应用内固定窗口在多节点并发下只能 best-effort，不能替代 EdgeOne WAF/频率控制；代码和文档不得将它描述为严格全局限流。生产项目必须在平台侧配置 WAF/频控，且 WAF/平台频控是生产发布阻断项。建议至少配置：
+
+- 登录：按可信 IP 每 15 分钟 12 次；按账号标识摘要每 15 分钟 12 次；失败响应统一限速。
+- 注册：按可信 IP 每小时 20 次；按邮箱或用户名摘要每小时 5 次；限制自动化批量注册。
+- 恢复：按可信 IP 每小时 5 次；按账号标识摘要每小时 5 次；恢复密钥不得作为明文规则或日志字段。
+- 上传：登录用户按 IP 与用户标识每 10 分钟 12 次，并限制请求体大小和单连接速率。
+- 留言：登录用户按 IP 与用户标识每 10 分钟 10 次；点赞、举报分别设置更宽但独立的窗口。
+- 管理员接口：管理员初始化按 IP 与账号每小时 5 次；其他管理员写接口按 IP 与账号每 10 分钟 30 次。
+
+以上规则应在 WAF/平台侧用接口路径和 HTTP 方法分别配置，账号规则使用平台支持的不可逆摘要或在应用层完成的摘要标识，不使用邮箱、用户名、恢复密钥明文。没有平台原子计数能力时不要在应用代码中模拟复杂的精确分布式计数。
 
 ## 3. 首次管理员
 
@@ -82,7 +91,7 @@ npm audit
 - 注册、恢复密钥保存、用户名/邮箱登录、刷新恢复、退出、密钥轮换与账号恢复。
 - 留言发布、回复、点赞、举报、编号跳转和用户主页分页。
 - 桌面/移动背景焦点、主题、音乐恢复、语言、PWA。
-- HTML/API/图片分类安全头、`/assets/*` immutable、`/res/*` 重新验证、HSTS 以及 HTML CSP。HSTS 必须为 `max-age=31536000; includeSubDomains` 且不含 preload；HTML `script-src` 必须保持仅 `'self'`。
+- HTML/API/图片分类安全头、版本化 `/assets/*` immutable、未 hash `/res/*` 重新验证、动态头像成功响应 immutable 且错误响应 no-store、HSTS 以及 HTML CSP。HSTS 必须为 `max-age=31536000; includeSubDomains` 且不含 preload；HTML `script-src` 必须保持仅 `'self'`。
 - Cloud Functions 日志不包含密码、恢复密钥、完整邮箱密文或 API Key。
 
 ## 5. 域名与回滚

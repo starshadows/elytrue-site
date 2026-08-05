@@ -1,6 +1,11 @@
 import assert from 'node:assert/strict'
 import { afterEach, describe, test } from 'node:test'
-import { ApiClient, ApiError, ApiProtocolError } from '../../src/lib/api-client'
+import {
+  ApiClient,
+  ApiError,
+  ApiProtocolError,
+  ApiUrlError,
+} from '../../src/lib/api-client'
 
 const originalFetch = globalThis.fetch
 
@@ -66,6 +71,57 @@ describe('typed API client', () => {
 
     assert.equal(new Headers(requestInit?.headers).has('X-CSRF-Token'), false)
     assert.equal(requestInit?.body, undefined)
+  })
+
+  test('rejects URL escapes before reading or sending CSRF', async () => {
+    let fetchCalls = 0
+    let csrfReads = 0
+    globalThis.fetch = async () => {
+      fetchCalls += 1
+      return Response.json({ code: 1, message: 'unexpected', data: null })
+    }
+    const client = new ApiClient('/api/', {
+      origin: 'https://elytrue.com',
+      getCsrfToken: () => {
+        csrfReads += 1
+        return 'secret'
+      },
+    })
+
+    for (const path of [
+      'https://external.example/steal',
+      '//external.example/steal',
+      'https://user:password@elytrue.com/api/steal',
+      '/other-path',
+      '../health',
+      '/api2/health',
+      '/api/%2e%2e/health',
+      '/api/health\\..\\steal',
+      '/api/%5c%5csteal',
+    ]) {
+      await assert.rejects(
+        () => client.request(path, { method: 'POST', body: { value: 1 } }),
+        (error: unknown) => error instanceof ApiUrlError,
+      )
+    }
+    assert.equal(fetchCalls, 0)
+    assert.equal(csrfReads, 0)
+  })
+
+  test('keeps same-origin API queries and caller abort signals intact', async () => {
+    let request: { input: URL | RequestInfo; init?: RequestInit } | undefined
+    globalThis.fetch = async (input, init) => {
+      request = { input, init }
+      return Response.json({ code: 1, message: 'ok', data: { value: 1 } })
+    }
+    const client = new ApiClient('/api/', { origin: 'https://elytrue.com' })
+    const signal = new AbortController().signal
+    await client.request('comments?from=1&query=hello%20world', { signal })
+    assert.equal(
+      String(request?.input),
+      'https://elytrue.com/api/comments?from=1&query=hello%20world',
+    )
+    assert.ok(request?.init?.signal instanceof AbortSignal)
   })
 
   test('clears authentication and preserves the API envelope on 401', async () => {

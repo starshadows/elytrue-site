@@ -66,6 +66,29 @@ describe('EdgeOne build output', () => {
       workflow,
       /server-node20:[\s\S]*?npm ci[\s\S]*?npm run check:server[\s\S]*?npm run test:server/u,
     )
+    assert.doesNotMatch(workflow, /runs-on: (?:ubuntu|windows)-latest/u)
+    assert.match(
+      workflow,
+      /verify:\n\s+runs-on: ubuntu-24\.04\n\s+timeout-minutes: 10/u,
+    )
+    assert.match(
+      workflow,
+      /e2e:\n(?:.|\n)*?runs-on: windows-2022\n\s+timeout-minutes: 15/u,
+    )
+    assert.match(
+      workflow,
+      /server-node20:\n\s+runs-on: ubuntu-24\.04\n\s+timeout-minutes: 10/u,
+    )
+    assert.ok(
+      [...workflow.matchAll(/uses:\s+[^\s]+@([^\s#]+)/gu)].every(([, sha]) =>
+        /^[0-9a-f]{40}$/u.test(sha),
+      ),
+    )
+    assert.doesNotMatch(workflow, /continue-on-error:/u)
+    assert.match(workflow, /npm run audit:dev:critical/u)
+    assert.match(workflow, /npm run install:playwright/u)
+    assert.match(workflow, /Print build budget report/u)
+    assert.match(workflow, /actions\/upload-artifact@[0-9a-f]{40}/u)
   })
 
   test('contains a small SPA shell and hashed first-party assets', async () => {
@@ -164,6 +187,16 @@ describe('EdgeOne build output', () => {
     const config = JSON.parse(
       await readFile(new URL('../../edgeone.json', import.meta.url), 'utf8'),
     )
+    const cacheRules = config.headers.filter((rule) =>
+      rule.headers.some((header) => header.key === 'Cache-Control'),
+    )
+    const matchingCacheRules = (pathname) =>
+      cacheRules.filter((rule) => {
+        if (rule.source.endsWith('/*')) {
+          return pathname.startsWith(rule.source.slice(0, -1))
+        }
+        return pathname === rule.source
+      })
     const headersFor = (source) =>
       Object.fromEntries(
         config.headers
@@ -177,7 +210,13 @@ describe('EdgeOne build output', () => {
       'max-age=31536000; includeSubDomains',
     )
     assert.doesNotMatch(global['Strict-Transport-Security'], /\bpreload\b/iu)
-    assert.equal(global['Cache-Control'], 'no-cache')
+    assert.equal(global['Cache-Control'], undefined)
+    assert.equal(headersFor('/')['Cache-Control'], 'no-cache')
+    assert.equal(headersFor('/index.html')['Cache-Control'], 'no-cache')
+    assert.equal(
+      headersFor('/index.manifest.json')['Cache-Control'],
+      'no-cache',
+    )
     assert.equal(
       headersFor('/assets/*')['Cache-Control'],
       'public, max-age=31536000, immutable',
@@ -187,21 +226,61 @@ describe('EdgeOne build output', () => {
       'public, max-age=300, must-revalidate',
     )
     assert.equal(
-      headersFor('/res/defaultAvatar.png')['Cache-Control'],
-      'public, max-age=31536000, immutable',
+      matchingCacheRules(
+        '/assets/elytrue-shell-20260805/favicon-320-c998712d.png',
+      ).length,
+      1,
     )
     assert.equal(
-      headersFor('/res/favicon-320.png')['Cache-Control'],
+      matchingCacheRules(
+        '/assets/elytrue-shell-20260805/favicon-320-c998712d.png',
+      )[0].headers[0].value,
       'public, max-age=31536000, immutable',
+    )
+    assert.equal(matchingCacheRules('/res/reply.svg').length, 1)
+    assert.equal(
+      matchingCacheRules('/res/reply.svg')[0].headers[0].value,
+      'public, max-age=300, must-revalidate',
     )
     assert.equal(
-      headersFor('/api/data/images/avatars/*')['Cache-Control'],
-      'public, max-age=31536000, immutable',
+      matchingCacheRules('/api/data/images/avatars/id.png').length,
+      0,
     )
-    assert.equal(
-      headersFor('/api/data/images/posts/*')['Cache-Control'],
-      'public, max-age=31536000, immutable',
+    assert.equal(matchingCacheRules('/api/data/images/posts/id.png').length, 0)
+    assert.equal(matchingCacheRules('/api/health').length, 0)
+    for (const pathname of [
+      '/',
+      '/index.html',
+      '/index.manifest.json',
+      '/res/reply.svg',
+      '/assets/elytrue-shell-20260805/default-avatar-320-dd2f4539.png',
+    ]) {
+      assert.equal(matchingCacheRules(pathname).length, 1, pathname)
+    }
+  })
+
+  test('does not ship legacy unversioned shell resources', async () => {
+    const files = await collectFiles(dist)
+    const contents = await Promise.all(
+      files
+        .filter((file) => /\.(?:html|js|json|css)$/iu.test(file.path))
+        .map((file) => readFile(file.url, 'utf8')),
     )
-    assert.equal(headersFor('/api/*')['Cache-Control'], 'no-store')
+    const output = contents.join('\n')
+    assert.doesNotMatch(output, /(?:favicon-320|defaultAvatar)\.png/iu)
+    assert.ok(
+      files.some(
+        (file) =>
+          file.path ===
+          'assets/elytrue-shell-20260805/favicon-320-c998712d.png',
+      ),
+    )
+    assert.ok(
+      files.some(
+        (file) =>
+          file.path ===
+          'assets/elytrue-shell-20260805/default-avatar-320-dd2f4539.png',
+      ),
+    )
   })
 })
