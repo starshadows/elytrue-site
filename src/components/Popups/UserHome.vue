@@ -8,9 +8,10 @@
       </div>
     </div>
     <div v-else class="userinfo">
-      <img
+      <StableAvatar
         :src="convertAvatarPath(user.avatar)"
         :alt="`${user.name}的头像`"
+        loading="eager"
         role="button"
         tabindex="0"
         @click="viewUserAvatar"
@@ -166,6 +167,7 @@ import FloatMsgs from '../FloatMsgs'
 import ImgViewer from '../ImgViewer'
 import Popups from './index'
 import { markPerformanceEvent } from '../../lib/performance'
+import StableAvatar from '../StableAvatar.vue'
 
 interface UserComment {
   id: number

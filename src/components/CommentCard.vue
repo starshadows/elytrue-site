@@ -12,6 +12,7 @@ import type {
   ReplyPreview,
 } from '../features/comments/comment-types'
 import { BACKGROUNDS } from '../config/assets'
+import StableAvatar from './StableAvatar.vue'
 
 const props = defineProps<{
   record: CommentRecord
@@ -116,11 +117,11 @@ function report(): void {
       :style="record.hidden ? { display: 'none' } : undefined"
     />
     <div class="bgcover"></div>
-    <img
+    <StableAvatar
       class="avatar"
-      :loading="eager ? 'eager' : 'lazy'"
       :src="avatarPath(record.avatar)"
       :alt="`${record.sender}的头像`"
+      :loading="eager ? 'eager' : 'lazy'"
       role="button"
       tabindex="0"
       @click="openUser"
@@ -149,7 +150,11 @@ function report(): void {
         <img class="reply-icon" src="/res/reply.svg" alt="" />
         <div class="quote-content">
           <div class="quote-head">
-            <img class="quote-avatar" :src="avatarPath(reply.avatar)" alt="" />
+            <StableAvatar
+              class="quote-avatar"
+              :src="avatarPath(reply.avatar)"
+              alt=""
+            />
             <div class="quote-sender">{{ reply.sender || '留言已删除' }}</div>
             <div class="quote-id">#{{ reply.displayId }}</div>
           </div>

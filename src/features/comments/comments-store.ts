@@ -86,6 +86,7 @@ export function createCommentsStore(api: CommentsApi) {
   function queueAnimation(id: number, origin: CommentRenderOrigin): void {
     if (origin === 'cache') {
       animatedCommentIds.add(id)
+      enteringCommentIds.add(id)
       return
     }
     if (animatedCommentIds.has(id)) return

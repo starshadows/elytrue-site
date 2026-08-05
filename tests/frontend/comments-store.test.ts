@@ -155,7 +155,7 @@ describe('comments store', () => {
       cached,
     )
     assert.equal(cached?.comment, 'updated')
-    assert.deepEqual(store.consumeAnimationIds(), new Set([2]))
+    assert.deepEqual(store.consumeAnimationIds(), new Set([1, 2]))
     assert.equal(
       store.state.items.some((item) => item.id === 1),
       true,

@@ -20,6 +20,11 @@ import { getConfig } from '../settings/config'
 import type { CommentRecord } from '../features/comments/comment-types'
 import { useAuth } from '../features/auth/useAuth'
 import {
+  finishPageEntrance,
+  pageEntrancePlaying,
+} from '../features/entrance/page-entrance'
+import StableAvatar from './StableAvatar.vue'
+import {
   finishPerformanceMark,
   markPerformanceEvent,
   startPerformanceMark,
@@ -38,7 +43,6 @@ const panelMode = ref<PanelMode>('auto')
 const pinnedHidden = computed(() => Settings.pinnedHidden)
 const initialRequestSettled = ref(false)
 const initialAnimationStarted = ref(false)
-const pinnedEntering = ref(true)
 const enteringCommentIds = ref(new Set<number>())
 let firstCommentAnimationRecorded = false
 let initialPerformanceFinished = false
@@ -355,7 +359,7 @@ function retryInitialLoad(): void {
 function handleInitialAnimationStart(event: AnimationEvent): void {
   if (
     event.target !== event.currentTarget ||
-    event.animationName !== 'commentBoxAppear'
+    event.animationName !== 'cardPopIn'
   )
     return
   if (firstCommentAnimationRecorded) return
@@ -367,18 +371,28 @@ function handleInitialAnimationStart(event: AnimationEvent): void {
 function syncEnteringComments(): void {
   const ids = commentsStore.consumeAnimationIds()
   if (!ids.size) return
+  if (window.matchMedia('(prefers-reduced-motion: reduce)').matches) return
   enteringCommentIds.value = new Set([...enteringCommentIds.value, ...ids])
 }
 
 function finishCommentAnimation(id: number, event: AnimationEvent): void {
-  if (event.animationName !== 'commentBoxAppear') return
+  if (
+    event.target !== event.currentTarget ||
+    event.animationName !== 'cardPopIn'
+  )
+    return
   const next = new Set(enteringCommentIds.value)
   next.delete(id)
   enteringCommentIds.value = next
 }
 
-function finishPinnedAnimation(event: AnimationEvent): void {
-  if (event.animationName === 'commentBoxAppear') pinnedEntering.value = false
+function finishPageEntranceAnimation(event: AnimationEvent): void {
+  if (
+    event.target !== event.currentTarget ||
+    event.animationName !== 'cardPopIn'
+  )
+    return
+  finishPageEntrance()
 }
 
 function hidePinned(): void {
@@ -468,14 +482,18 @@ defineExpose({ forceLowerPanelDown, forceLowerPanelUp, pauseScroll })
         v-if="!pinnedHidden"
         id="topComment"
         class="commentBox"
-        :class="{ commentEnter: pinnedEntering }"
+        :class="{ pageEntrance: pageEntrancePlaying }"
         :data-initial-request-settled="initialRequestSettled"
         :data-initial-animation-started="initialAnimationStarted"
-        @animationend="finishPinnedAnimation"
+        @animationend="finishPageEntranceAnimation"
       >
         <img class="bg" src="/assets/elytrue-20260724/bg/portrait1.webp" />
         <div class="bgcover"></div>
-        <img class="avatar" src="/res/favicon-320.png" />
+        <StableAvatar
+          class="avatar"
+          src="/res/favicon-320.png"
+          loading="eager"
+        />
         <div class="sender">
           <span class="ui zh">星花札记</span
           ><span class="ui en">Starflower Notes</span>

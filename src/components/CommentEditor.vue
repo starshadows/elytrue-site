@@ -15,6 +15,7 @@ import { finishPerformanceMark, startPerformanceMark } from '../lib/performance'
 import FloatMsgs from './FloatMsgs'
 import ImgViewer from './ImgViewer'
 import Popups from './Popups'
+import StableAvatar from './StableAvatar.vue'
 
 const props = defineProps<{ replyNumber?: number }>()
 const emit = defineEmits<{
@@ -122,7 +123,7 @@ async function send(): Promise<void> {
 <template>
   <div id="newCommentBox" class="commentBox">
     <div class="bgcover"></div>
-    <img
+    <StableAvatar
       id="msgPopupAvatar"
       class="avatar"
       :src="avatar"
@@ -165,7 +166,11 @@ async function send(): Promise<void> {
         <img class="reply-icon" src="/res/reply.svg" alt="" />
         <div class="quote-content">
           <div class="quote-head">
-            <img class="quote-avatar" :src="avatarPath(reply.avatar)" alt="" />
+            <StableAvatar
+              class="quote-avatar"
+              :src="avatarPath(reply.avatar)"
+              alt=""
+            />
             <div class="quote-sender">{{ reply.sender }}</div>
             <div class="quote-id">#{{ reply.displayId }}</div>
           </div>

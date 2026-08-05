@@ -186,6 +186,22 @@ describe('EdgeOne build output', () => {
       headersFor('/res/*')['Cache-Control'],
       'public, max-age=300, must-revalidate',
     )
+    assert.equal(
+      headersFor('/res/defaultAvatar.png')['Cache-Control'],
+      'public, max-age=31536000, immutable',
+    )
+    assert.equal(
+      headersFor('/res/favicon-320.png')['Cache-Control'],
+      'public, max-age=31536000, immutable',
+    )
+    assert.equal(
+      headersFor('/api/data/images/avatars/*')['Cache-Control'],
+      'public, max-age=31536000, immutable',
+    )
+    assert.equal(
+      headersFor('/api/data/images/posts/*')['Cache-Control'],
+      'public, max-age=31536000, immutable',
+    )
     assert.equal(headersFor('/api/*')['Cache-Control'], 'no-store')
   })
 })

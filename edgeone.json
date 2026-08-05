@@ -41,11 +41,47 @@
       ]
     },
     {
+      "source": "/res/favicon-320.png",
+      "headers": [
+        {
+          "key": "Cache-Control",
+          "value": "public, max-age=31536000, immutable"
+        }
+      ]
+    },
+    {
+      "source": "/res/defaultAvatar.png",
+      "headers": [
+        {
+          "key": "Cache-Control",
+          "value": "public, max-age=31536000, immutable"
+        }
+      ]
+    },
+    {
       "source": "/res/*",
       "headers": [
         {
           "key": "Cache-Control",
           "value": "public, max-age=300, must-revalidate"
+        }
+      ]
+    },
+    {
+      "source": "/api/data/images/avatars/*",
+      "headers": [
+        {
+          "key": "Cache-Control",
+          "value": "public, max-age=31536000, immutable"
+        }
+      ]
+    },
+    {
+      "source": "/api/data/images/posts/*",
+      "headers": [
+        {
+          "key": "Cache-Control",
+          "value": "public, max-age=31536000, immutable"
         }
       ]
     },

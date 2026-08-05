@@ -250,6 +250,41 @@ test('首次加载:认证、公共留言和统计各自单飞且不误触分页'
   expect(mainListRequests).toBe(0)
 })
 
+test('页面首次入场独立于认证和留言请求,且只播放一次', async ({ page }) => {
+  await page.route('**/api/user/me', (route) =>
+    fulfillMe(route, { delay: 1500 }),
+  )
+  await page.route('**/api/comments/public*', (route) =>
+    fulfillComments(route, { delay: 1500 }),
+  )
+
+  await page.goto('/', { waitUntil: 'domcontentloaded' })
+  const state = await page.evaluate(() => ({
+    pinned: document
+      .getElementById('topComment')
+      ?.getAnimations()
+      .map((item) => item.animationName),
+    user: document
+      .getElementById('userInfo')
+      ?.getAnimations()
+      .map((item) => item.animationName),
+    entrance: document.documentElement.dataset.entrance,
+  }))
+  expect(state.pinned).toContain('cardPopIn')
+  expect(state.user).toContain('cardPopIn')
+  expect(state.entrance).toBe('playing')
+  await page.waitForTimeout(700)
+  await expect
+    .poll(() => page.evaluate(() => document.documentElement.dataset.entrance))
+    .toBe('finished')
+  expect(
+    await page.evaluate(() => ({
+      pinned: document.getElementById('topComment')?.getAnimations().length,
+      user: document.getElementById('userInfo')?.getAnimations().length,
+    })),
+  ).toEqual({ pinned: 0, user: 0 })
+})
+
 test('公共留言缓存先渲染,后台相同数据保持 DOM 身份', async ({ page }) => {
   const cached = commentPayload(41)
   await seedHomeComments(page, [cached])
@@ -262,6 +297,9 @@ test('公共留言缓存先渲染,后台相同数据保持 DOM 身份', async ({
   const card = page.locator('#comments .commentItem').first()
   await expect(card).toBeVisible({ timeout: 100 })
   await expect(page.locator('#comments .commentSkeleton')).toHaveCount(0)
+  expect(
+    await card.evaluate((element) => element.getAnimations().length),
+  ).toBeGreaterThan(0)
   const handle = await card.elementHandle()
   await page.waitForTimeout(1700)
   expect(
@@ -410,8 +448,8 @@ test('置顶与普通留言使用同一套入场动画', async ({ page }) => {
         .at(-1)?.startTime,
     }
   })
-  expect(animationState.pinned).toBe('commentBoxAppear')
-  expect(animationState.first).toBe('commentBoxAppear')
+  expect(animationState.pinned).toBe('cardPopIn')
+  expect(animationState.first).toBe('cardPopIn')
   expect(animationState.pinnedDuration).toBe(animationState.firstDuration)
   expect(animationState.pinnedTiming).toBe(animationState.firstTiming)
   expect(animationState.sentinels.every((name) => name === 'none')).toBe(true)
