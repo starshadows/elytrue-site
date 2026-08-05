@@ -46,6 +46,19 @@ function createContext(pathname, kv, clientIp = '203.0.113.10', options = {}) {
     }
 }
 
+class BurstKV extends MemoryKV {
+    pendingReads = []
+
+    async get(key) {
+        return new Promise(resolve => {
+            this.pendingReads.push(() => resolve(this.values.get(key) ?? null))
+            if (this.pendingReads.length < 25) return
+            const reads = this.pendingReads.splice(0)
+            for (const release of reads) release()
+        })
+    }
+}
+
 test('rate-limit policy actions produce valid EdgeOne KV keys', () => {
     for (const policy of Object.values(RATE_LIMIT_POLICIES)) {
         assert.match(policy.action, /^[A-Za-z0-9_]+$/u)
@@ -94,7 +107,10 @@ test('middleware applies document-only CSP while keeping API and binary response
         'max-age=31536000; includeSubDomains',
     )
 
-    const binaryContext = createContext('/res/defaultAvatar.png', new MemoryKV())
+    const binaryContext = createContext(
+        '/assets/elytrue-shell-20260805/default-avatar-320-dd2f4539.png',
+        new MemoryKV(),
+    )
     binaryContext.next = () => new Response(new Uint8Array([1]), {
         headers: { 'content-type': 'image/png' },
     })
@@ -125,6 +141,15 @@ test('middleware returns the shared API envelope after the edge rate limit', asy
         message: '操作过于频繁，请稍后再试',
         data: null,
     })
+})
+
+test('documents best-effort behavior for a concurrent KV read-modify-write burst', async () => {
+    const kv = new BurstKV()
+    const results = await Promise.all(Array.from({ length: 25 }, () =>
+        middleware(createContext('/api/user/register', kv)),
+    ))
+    assert.equal(results.every(response => response.status === 200), true)
+    assert.equal(kv.values.size, 1)
 })
 
 test('middleware limits account recovery by client IP', async () => {

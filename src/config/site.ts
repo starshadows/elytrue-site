@@ -26,7 +26,7 @@ export const SITE = {
   themeColor: '#ffaacc',
   backgroundColor: '#f6d7ea',
   shareImage: '/social-share.jpg',
-  icon: '/res/favicon-320.png',
+  icon: '/assets/elytrue-shell-20260805/favicon-320-c998712d.png',
   icp: {
     label: '赣ICP备2026015414号-1',
     url: 'https://beian.miit.gov.cn/',

@@ -78,6 +78,7 @@ const origin = 'https://preview.elytrue.test'
 const env = {
     ELYTRUE_APP_SECRET: 'test-only-secret-that-is-longer-than-thirty-two-characters',
     PUBLIC_SITE_URL: origin,
+    ELYTRUE_RATE_LIMIT_KV: { get: async () => null, put: async () => {} },
     ADMIN_BOOTSTRAP_SECRET: 'test-admin-bootstrap-secret',
     ALLOWED_ORIGINS: origin,
 }

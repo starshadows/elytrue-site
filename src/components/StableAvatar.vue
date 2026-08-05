@@ -1,7 +1,8 @@
 <script setup lang="ts">
 import { computed, onBeforeUnmount, ref, watch } from 'vue'
 
-const DEFAULT_AVATAR = '/res/defaultAvatar.png'
+const DEFAULT_AVATAR =
+  '/assets/elytrue-shell-20260805/default-avatar-320-dd2f4539.png'
 
 const props = withDefaults(
   defineProps<{

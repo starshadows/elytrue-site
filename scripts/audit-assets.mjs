@@ -100,7 +100,7 @@ function reportMetadata(path, category) {
   const firstScreen =
     category === 'background-preview' ||
     category === 'font' ||
-    path === 'res/favicon-320.png'
+    path === 'assets/elytrue-shell-20260805/favicon-320-c998712d.png'
   const deferrable =
     category === 'background-original' || category === 'audio'
       ? 'yes'

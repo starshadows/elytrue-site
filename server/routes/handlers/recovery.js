@@ -8,7 +8,7 @@ export async function recoverUser(context, stores) {
     const body = await readJSON(context.request, 32 * 1024)
     const identifier = String(body.identifier || '').normalize('NFKC').trim().toLowerCase()
     await enforceRateLimit('recoverIp', clientIdentity(context))
-    await enforceRateLimit('recoverAccount', `account:${sha256(identifier)}`)
+    if (identifier) await enforceRateLimit('recoverAccount', `account:${sha256(identifier)}`)
     const { recoverAccount } = await loadAccountRecoveryService()
     const result = await recoverAccount(stores.data, environmentFor(context), {
         identifier,

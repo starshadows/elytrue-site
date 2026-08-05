@@ -497,7 +497,7 @@ defineExpose({ forceLowerPanelDown, forceLowerPanelUp, pauseScroll })
         <div class="bgcover"></div>
         <StableAvatar
           class="avatar"
-          src="/res/favicon-320.png"
+          src="/assets/elytrue-shell-20260805/favicon-320-c998712d.png"
           loading="eager"
         />
         <div class="sender">

@@ -1,10 +1,12 @@
 import { apiResponse, readJSON } from '../../http.js'
+import { sha256 } from '../../crypto.js'
 import { enforceRateLimit } from '../../rate-limit.js'
 import { clientIdentity, environmentFor } from '../../middleware/request-context.js'
 import { loadAdminService } from '../lazy-services.js'
 
 export async function bootstrapAdmin(context, stores, path, auth) {
-    await enforceRateLimit('bootstrap', clientIdentity(context, auth.user.id))
+    await enforceRateLimit('bootstrap', clientIdentity(context))
+    await enforceRateLimit('bootstrapAccount', `account:${sha256(auth.user.id)}`)
     const { bootstrapAdministrator } = await loadAdminService()
     await bootstrapAdministrator(
         stores.data,

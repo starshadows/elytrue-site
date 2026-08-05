@@ -8,15 +8,18 @@ export function resetMemoryRateLimitsForTests() {
 }
 
 /**
- * @typedef {'register' | 'login' | 'recoverIp' | 'recoverAccount' | 'recoveryKey' |
+ * @typedef {'register' | 'registerAccount' | 'login' | 'loginAccount' | 'recoverIp' | 'recoverAccount' | 'recoveryKey' |
  * 'comment' | 'upload' | 'like' | 'report' | 'admin' | 'userUpdate' | 'logout' |
+ * 'bootstrapAccount' |
  * 'logoutAll' | 'bootstrap' | 'userFind'} RateLimitAction
  */
 
 /** @type {Record<RateLimitAction, readonly [number, number]>} */
 const POLICIES = {
     register: [20, 60 * 60],
+    registerAccount: [5, 60 * 60],
     login: [12, 15 * 60],
+    loginAccount: [12, 15 * 60],
     recoverIp: [5, 60 * 60],
     recoverAccount: [5, 60 * 60],
     recoveryKey: [5, 60 * 60],
@@ -29,6 +32,7 @@ const POLICIES = {
     logout: [30, 10 * 60],
     logoutAll: [10, 60 * 60],
     bootstrap: [5, 60 * 60],
+    bootstrapAccount: [5, 60 * 60],
     userFind: [120, 10 * 60],
 }
 

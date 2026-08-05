@@ -6,16 +6,20 @@ import {
     revokeAllSessions,
 } from '../../auth.js'
 import { apiResponse, httpError, parseCookies, readJSON } from '../../http.js'
+import { sha256 } from '../../crypto.js'
 import { enforceRateLimit } from '../../rate-limit.js'
 import {
     clientIdentity,
     environmentFor,
 } from '../../middleware/request-context.js'
 import { authenticatedProfile, timedApiResponse } from '../handler-response.js'
+import { normalizeEmail, normalizeUsername } from '../../../shared/validation.js'
 
 export async function register(context, stores) {
-    await enforceRateLimit('register', clientIdentity(context))
     const body = await readJSON(context.request, 32 * 1024)
+    const identifier = body.email ? normalizeEmail(body.email) : normalizeUsername(body.name)
+    await enforceRateLimit('register', clientIdentity(context))
+    if (identifier) await enforceRateLimit('registerAccount', `account:${sha256(identifier)}`)
     const { user, recoveryKey } = await registerUser(stores.data, environmentFor(context), {
         name: body.name,
         email: body.email,
@@ -40,7 +44,13 @@ export async function register(context, stores) {
 export async function login(context, stores) {
     const body = await readJSON(context.request, 32 * 1024)
     const identifier = body.identifier || body.email || body.name || ''
-    await enforceRateLimit('login', clientIdentity(context, String(identifier).toLowerCase()))
+    const normalizedIdentifier = String(identifier).includes('@')
+        ? normalizeEmail(identifier)
+        : normalizeUsername(identifier)
+    await enforceRateLimit('login', clientIdentity(context))
+    if (normalizedIdentifier) {
+        await enforceRateLimit('loginAccount', `account:${sha256(normalizedIdentifier)}`)
+    }
     const user = await authenticateUser(
         stores.data,
         environmentFor(context),
