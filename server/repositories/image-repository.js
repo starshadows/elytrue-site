@@ -13,12 +13,18 @@ export function createImageRepository(data, uploads) {
         deleteAlias: (kind, imageId) => data.delete(blobKeys.imageAlias(kind, imageId)),
         listCommentAliases: (limit = 1000) =>
             listAll(data, blobPrefixes.commentAliases, limit),
+        listAvatarAliases: (limit = 1000) =>
+            listAll(data, blobPrefixes.avatarAliases, limit),
         listUserCommentIndexes: (userId, limit = 1000) =>
             listAll(data, blobKeys.commentsByUserPrefix(userId), limit),
         getComment: commentId => getJSON(data, blobKeys.comment(commentId)),
         getOperation: key => getJSON(data, key),
         createOperation: (key, value) => data.setJSON(key, value, { onlyIfNew: true }),
         setOperation: (key, value) => data.setJSON(key, value),
+        deleteOperation: key => data.delete(key),
+        getRepair: key => getJSON(data, key),
+        setRepair: (key, value) => data.setJSON(key, value),
+        deleteRepair: key => data.delete(key),
         putBlob: (key, value) => uploads.set(key, value),
         getBlob: key => uploads.get(key, {
             type: 'arrayBuffer',

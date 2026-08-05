@@ -13,6 +13,13 @@ import { normalizeUsername } from '../shared/validation.js'
 import { findUserById, updateUser } from '../server/auth.js'
 import { resetMemoryRateLimitsForTests } from '../server/rate-limit.js'
 import { bootstrapAdministrator } from '../server/services/admin-service.js'
+import { auditUploadStorage } from '../scripts/audit-upload-storage.mjs'
+import {
+    compensateAvatarUpdate,
+    deleteAvatar,
+    prepareAvatarUpdate,
+    validateImageUpload,
+} from '../server/services/image-service.js'
 
 class FlakyStore extends MemoryStore {
     constructor(failures = {}) {
@@ -35,6 +42,86 @@ class SilentConditionalStore extends MemoryStore {
     async setJSON(key, value, options = {}) {
         if (options.onlyIfNew && this.values.has(key)) return
         return super.setJSON(key, value, options)
+    }
+}
+
+class AvatarActivationStore extends MemoryStore {
+    constructor() {
+        super()
+        this.failActivation = false
+    }
+
+    async setJSON(key, value, options = {}) {
+        if (
+            this.failActivation
+            && key.startsWith('uploads/aliases/avatars/')
+            && value?.status === 'active'
+        ) {
+            throw new Error('injected avatar activation failure')
+        }
+        return super.setJSON(key, value, options)
+    }
+}
+
+class AvatarBlobDeleteStore extends MemoryStore {
+    constructor() {
+        super()
+        this.failNextAvatarDelete = false
+    }
+
+    async delete(key) {
+        if (this.failNextAvatarDelete && key.startsWith('avatars/')) {
+            this.failNextAvatarDelete = false
+            throw new Error('injected avatar blob delete failure')
+        }
+        return super.delete(key)
+    }
+}
+
+class AmbiguousUserWriteStore extends MemoryStore {
+    constructor() {
+        super()
+        this.failNextUserWrite = false
+        this.failUserReconciliationRead = false
+    }
+
+    async setJSON(key, value, options = {}) {
+        if (this.failNextUserWrite && key.startsWith('users/')) {
+            this.failNextUserWrite = false
+            await super.setJSON(key, value, options)
+            this.failUserReconciliationRead = true
+            throw new Error('injected ambiguous user write')
+        }
+        return super.setJSON(key, value, options)
+    }
+
+    async get(key, options = {}) {
+        if (this.failUserReconciliationRead && key.startsWith('users/')) {
+            this.failUserReconciliationRead = false
+            throw new Error('injected reconciliation read failure')
+        }
+        return super.get(key, options)
+    }
+}
+
+class AmbiguousIndexClaimStore extends MemoryStore {
+    constructor() {
+        super()
+        this.failVerificationFor = ''
+        this.failNextVerificationRead = false
+    }
+
+    async setJSON(key, value, options = {}) {
+        await super.setJSON(key, value, options)
+        if (key === this.failVerificationFor) this.failNextVerificationRead = true
+    }
+
+    async get(key, options = {}) {
+        if (key === this.failVerificationFor && this.failNextVerificationRead) {
+            this.failNextVerificationRead = false
+            throw new Error('injected index verification failure')
+        }
+        return super.get(key, options)
     }
 }
 
@@ -1098,6 +1185,7 @@ describe('account recovery security and health', () => {
         assert.ok('buildTime' in result.payload.data)
         assert.ok('commitTime' in result.payload.data)
     })
+
 })
 
 describe('updateUser index transaction', () => {
@@ -1293,5 +1381,345 @@ describe('updateUser pre-validation and index ownership', () => {
         const newIndex = await state.stores.data.get(nameIndexKey('全新名字'), { type: 'json' })
         assert.equal(newIndex.userId, myId)
         void otherId
+    })
+})
+
+describe('transactional avatar updates', () => {
+    const png = 'iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mP8/x8AAusB9Wl2nfsAAAAASUVORK5CYII='
+
+    async function registerAvatarUser(ip, stores, name, email) {
+        resetMemoryRateLimitsForTests()
+        const state = createState(ip)
+        state.stores = stores || { data: new MemoryStore(), uploads: new MemoryStore() }
+        const result = await call(state, 'POST', 'user/register', {
+            name,
+            email,
+            password: 'avatar-transaction-password',
+        })
+        assert.equal(result.response.status, 201)
+        return { state, userId: result.payload.data.id }
+    }
+
+    function keysWithPrefix(store, prefix) {
+        return [...store.values.keys()].filter(key => key.startsWith(prefix))
+    }
+
+    async function usageBytes(data) {
+        return Number((await data.get('usage/uploads.json', { type: 'json' }))?.uploadedBytes || 0)
+    }
+
+    it('does not write an avatar Blob when the new username conflicts', async () => {
+        const stores = { data: new MemoryStore(), uploads: new MemoryStore() }
+        await registerAvatarUser('10.0.30.1', stores, '头像占用用户', 'avatar-taken-name@example.com')
+        const { state } = await registerAvatarUser('10.0.30.2', stores, '头像更新用户甲', 'avatar-owner-a@example.com')
+        const silentStore = new SilentConditionalStore()
+        silentStore.values = stores.data.values
+        stores.data = silentStore
+
+        const result = await call(state, 'PUT', 'user/update', {
+            name: '头像占用用户',
+            avatar: png,
+        })
+
+        assert.equal(result.response.status, 409)
+        assert.equal(stores.uploads.values.size, 0)
+        assert.equal(keysWithPrefix(stores.data, 'operations/avatar-updates/').length, 0)
+    })
+
+    it('does not write an avatar Blob when the new email conflicts', async () => {
+        const stores = { data: new MemoryStore(), uploads: new MemoryStore() }
+        await registerAvatarUser('10.0.31.1', stores, '头像邮箱占用者', 'avatar-taken@example.com')
+        const { state } = await registerAvatarUser('10.0.31.2', stores, '头像更新用户乙', 'avatar-owner-b@example.com')
+
+        const result = await call(state, 'PUT', 'user/update', {
+            email: 'avatar-taken@example.com',
+            avatar: png,
+        })
+
+        assert.equal(result.response.status, 409)
+        assert.equal(stores.uploads.values.size, 0)
+        assert.equal(keysWithPrefix(stores.data, 'operations/avatar-updates/').length, 0)
+    })
+
+    it('rolls back an index whose claim cannot be verified before upload', async () => {
+        const stores = { data: new AmbiguousIndexClaimStore(), uploads: new MemoryStore() }
+        const { state } = await registerAvatarUser(
+            '10.0.31.3',
+            stores,
+            '头像索引回滚用户',
+            'avatar-index-rollback@example.com',
+        )
+        const claimedKey = nameIndexKey('头像索引待确认')
+        stores.data.failVerificationFor = claimedKey
+
+        const result = await call(state, 'PUT', 'user/update', {
+            name: '头像索引待确认',
+            avatar: png,
+        })
+
+        assert.equal(result.response.status, 500)
+        assert.equal(await stores.data.get(claimedKey, { type: 'json' }), null)
+        assert.equal(stores.uploads.values.size, 0)
+        assert.equal(keysWithPrefix(stores.data, 'operations/avatar-updates/').length, 0)
+    })
+
+    it('fully compensates a prepared avatar when the user write fails', async () => {
+        const { state } = await registerAvatarUser(
+            '10.0.32.1',
+            undefined,
+            '头像回滚用户',
+            'avatar-rollback@example.com',
+        )
+        const originalValues = state.stores.data.values
+        state.stores.data = new FlakyStore({ setJSON: key => key.startsWith('users/') })
+        state.stores.data.values = originalValues
+
+        const result = await call(state, 'PUT', 'user/update', {
+            name: '头像回滚新名',
+            avatar: png,
+        })
+
+        assert.equal(result.response.status, 500)
+        assert.equal(state.stores.uploads.values.size, 0)
+        assert.equal(await usageBytes(state.stores.data), 0)
+        assert.equal(await state.stores.data.get(nameIndexKey('头像回滚新名'), { type: 'json' }), null)
+        const operationKey = keysWithPrefix(state.stores.data, 'operations/avatar-updates/')[0]
+        const operation = await state.stores.data.get(operationKey, { type: 'json' })
+        assert.equal(operation.phase, 'rolled-back')
+        assert.equal(keysWithPrefix(state.stores.data, 'uploads/aliases/avatars/').length, 0)
+        assert.equal(keysWithPrefix(state.stores.data, 'repairs/avatar-update/').length, 0)
+    })
+
+    it('preserves and repairs an avatar when the user write result is ambiguous', async () => {
+        const stores = { data: new AmbiguousUserWriteStore(), uploads: new MemoryStore() }
+        const { state, userId } = await registerAvatarUser(
+            '10.0.32.2',
+            stores,
+            '头像不确定用户',
+            'avatar-ambiguous@example.com',
+        )
+        stores.data.failNextUserWrite = true
+
+        const result = await call(state, 'PUT', 'user/update', {
+            name: '头像不确定新名',
+            avatar: png,
+        })
+
+        assert.equal(result.response.status, 500)
+        const user = await stores.data.get(`users/${userId}.json`, { type: 'json' })
+        assert.equal(user.name, '头像不确定新名')
+        assert.ok(user.avatarKey)
+        assert.equal(keysWithPrefix(stores.uploads, 'avatars/').length, 1)
+        assert.equal(
+            (await stores.data.get(
+                `uploads/aliases/avatars/${user.avatarKey}.json`,
+                { type: 'json' },
+            )).status,
+            'pending',
+        )
+        assert.ok(await stores.data.get(nameIndexKey('头像不确定新名'), { type: 'json' }))
+        assert.equal(keysWithPrefix(stores.data, 'repairs/avatar-update/').length, 1)
+
+        const repaired = await auditUploadStorage(stores.data, stores.uploads, { fix: true })
+        assert.deepEqual(repaired.openOperations, [])
+        assert.deepEqual(repaired.repairMarkers, [])
+        assert.equal(
+            (await stores.data.get(
+                `uploads/aliases/avatars/${user.avatarKey}.json`,
+                { type: 'json' },
+            )).status,
+            'active',
+        )
+    })
+
+    it('keeps a repairable operation when alias activation fails after the user write', async () => {
+        const stores = { data: new AvatarActivationStore(), uploads: new MemoryStore() }
+        const { state, userId } = await registerAvatarUser(
+            '10.0.33.1',
+            stores,
+            '头像激活用户',
+            'avatar-activation@example.com',
+        )
+        stores.data.failActivation = true
+
+        const result = await call(state, 'PUT', 'user/update', { avatar: png })
+
+        assert.equal(result.response.status, 500)
+        const user = await stores.data.get(`users/${userId}.json`, { type: 'json' })
+        assert.ok(user.avatarKey)
+        const alias = await stores.data.get(
+            `uploads/aliases/avatars/${user.avatarKey}.json`,
+            { type: 'json' },
+        )
+        assert.equal(alias.status, 'pending')
+        const operation = await stores.data.get(
+            `operations/avatar-updates/${alias.operationId}.json`,
+            { type: 'json' },
+        )
+        assert.equal(operation.phase, 'repair-needed')
+        assert.ok(await stores.data.get(
+            `repairs/avatar-update/${alias.operationId}.json`,
+            { type: 'json' },
+        ))
+    })
+
+    it('keeps only the current avatar after three consecutive replacements', async () => {
+        const { state } = await registerAvatarUser(
+            '10.0.34.1',
+            undefined,
+            '头像三连用户',
+            'avatar-three@example.com',
+        )
+        const avatarIds = []
+        for (let index = 0; index < 3; index += 1) {
+            const result = await call(state, 'PUT', 'user/update', { avatar: png })
+            assert.equal(result.response.status, 200)
+            avatarIds.push(result.payload.data.avatar)
+        }
+
+        assert.equal(new Set(avatarIds).size, 3)
+        assert.deepEqual(
+            keysWithPrefix(state.stores.data, 'uploads/aliases/avatars/'),
+            [`uploads/aliases/avatars/${avatarIds[2]}.json`],
+        )
+        assert.equal(keysWithPrefix(state.stores.uploads, 'avatars/').length, 1)
+        assert.equal(await usageBytes(state.stores.data), Buffer.from(png, 'base64').length)
+        assert.equal(keysWithPrefix(state.stores.data, 'operations/avatar-deletes/').length, 2)
+        const image = await call(state, 'GET', `data/images/avatars/${avatarIds[2]}`)
+        assert.equal(image.response.status, 200)
+        assert.equal(
+            image.response.headers.get('cache-control'),
+            'public, max-age=300, must-revalidate',
+        )
+        assert.equal(typeof image.response.headers.get('content-type'), 'string')
+        assert.equal((await call(state, 'GET', 'user/me')).payload.data.avatar, avatarIds[2])
+    })
+
+    it('does not apply usage twice when a prepared operation is retried', async () => {
+        const { state, userId } = await registerAvatarUser(
+            '10.0.35.1',
+            undefined,
+            '头像幂等用户',
+            'avatar-idempotent@example.com',
+        )
+        const user = await state.stores.data.get(`users/${userId}.json`, { type: 'json' })
+        const preparedImage = validateImageUpload(png, 'avatar')
+        const operationId = '00000000-0000-4000-8000-000000000099'
+
+        const first = await prepareAvatarUpdate(
+            state.stores,
+            user,
+            preparedImage,
+            '',
+            { operationId },
+        )
+        await prepareAvatarUpdate(state.stores, user, preparedImage, '', { operationId })
+        assert.equal(await usageBytes(state.stores.data), Buffer.from(png, 'base64').length)
+
+        const second = await prepareAvatarUpdate(
+            state.stores,
+            user,
+            preparedImage,
+            '',
+            { operationId: '00000000-0000-4000-8000-000000000100' },
+        )
+        await deleteAvatar(state.stores, user.id, first.newAvatarId)
+        await compensateAvatarUpdate(state.stores, first)
+        await compensateAvatarUpdate(state.stores, first)
+        assert.equal(await usageBytes(state.stores.data), Buffer.from(png, 'base64').length)
+        await compensateAvatarUpdate(state.stores, second)
+        assert.equal(await usageBytes(state.stores.data), 0)
+    })
+
+    it('retries cleanup after an old avatar Blob deletion failure', async () => {
+        const stores = { data: new MemoryStore(), uploads: new AvatarBlobDeleteStore() }
+        const { state } = await registerAvatarUser(
+            '10.0.36.1',
+            stores,
+            '头像清理用户',
+            'avatar-cleanup@example.com',
+        )
+        const first = await call(state, 'PUT', 'user/update', { avatar: png })
+        stores.uploads.failNextAvatarDelete = true
+        const second = await call(state, 'PUT', 'user/update', { avatar: png })
+
+        assert.equal(second.response.status, 200)
+        const oldAvatarId = first.payload.data.avatar
+        const updateOperation = await stores.data.get(
+            `operations/avatar-updates/${second.payload.data.avatar}.json`,
+            { type: 'json' },
+        )
+        assert.equal(updateOperation.phase, 'cleanup-needed')
+        assert.ok(keysWithPrefix(stores.uploads, 'avatars/').length > 1)
+
+        await deleteAvatar(stores, second.payload.data.id, oldAvatarId)
+        assert.equal(keysWithPrefix(stores.uploads, 'avatars/').length, 1)
+        assert.equal(await usageBytes(stores.data), Buffer.from(png, 'base64').length)
+    })
+
+    it('cleans the current avatar when the user restores the default', async () => {
+        const { state } = await registerAvatarUser(
+            '10.0.36.2',
+            undefined,
+            '默认头像用户',
+            'avatar-default@example.com',
+        )
+        const uploaded = await call(state, 'PUT', 'user/update', { avatar: png })
+        assert.equal(uploaded.response.status, 200)
+
+        const cleared = await call(state, 'PUT', 'user/update', { avatar: '' })
+
+        assert.equal(cleared.response.status, 200)
+        assert.equal(cleared.payload.data.avatar, '')
+        assert.equal(keysWithPrefix(state.stores.data, 'uploads/aliases/avatars/').length, 0)
+        assert.equal(keysWithPrefix(state.stores.uploads, 'avatars/').length, 0)
+        assert.equal(await usageBytes(state.stores.data), 0)
+    })
+
+    it('does not serve a pending avatar from the public endpoint', async () => {
+        const { state, userId } = await registerAvatarUser(
+            '10.0.37.1',
+            undefined,
+            '头像待定用户',
+            'avatar-pending@example.com',
+        )
+        const user = await state.stores.data.get(`users/${userId}.json`, { type: 'json' })
+        const operation = await prepareAvatarUpdate(
+            state.stores,
+            user,
+            validateImageUpload(png, 'avatar'),
+            '',
+        )
+
+        const result = await call(
+            state,
+            'GET',
+            `data/images/avatars/${operation.newAvatarId}`,
+        )
+        assert.equal(result.response.status, 404)
+        await compensateAvatarUpdate(state.stores, operation)
+    })
+
+    it('allows only one concurrent profile update to commit', async () => {
+        const { state } = await registerAvatarUser(
+            '10.0.38.1',
+            undefined,
+            '头像并发用户',
+            'avatar-concurrent@example.com',
+        )
+        const peer = createState('10.0.38.2')
+        peer.stores = state.stores
+        peer.jar = new Map(state.jar)
+        peer.csrfToken = state.csrfToken
+
+        const results = await Promise.all([
+            call(state, 'PUT', 'user/update', { avatar: png }),
+            call(peer, 'PUT', 'user/update', { avatar: png }),
+        ])
+
+        assert.deepEqual(results.map(result => result.response.status).sort(), [200, 409])
+        assert.equal(keysWithPrefix(state.stores.data, 'uploads/aliases/avatars/').length, 1)
+        assert.equal(keysWithPrefix(state.stores.uploads, 'avatars/').length, 1)
+        assert.equal(await usageBytes(state.stores.data), Buffer.from(png, 'base64').length)
     })
 })

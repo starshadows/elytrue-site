@@ -196,7 +196,7 @@ describe('EdgeOne build output', () => {
     )
     assert.equal(
       headersFor('/api/data/images/avatars/*')['Cache-Control'],
-      'public, max-age=31536000, immutable',
+      'public, max-age=300, must-revalidate',
     )
     assert.equal(
       headersFor('/api/data/images/posts/*')['Cache-Control'],

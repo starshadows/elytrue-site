@@ -126,7 +126,7 @@ async function cleanupUserMutationClaim(data, userId, version, reservationId) {
     }))
 }
 
-export async function mutateUserRecord(data, user, mutate, options = {}) {
+export async function beginUserMutation(data, user, options = {}) {
     const version = Number(user.recoveryKeyVersion || 0)
     const reservationId = randomToken(16)
     const claimKey = blobKeys.recoveryKeyClaim(user.id, version)
@@ -134,8 +134,16 @@ export async function mutateUserRecord(data, user, mutate, options = {}) {
         options.conflictStatus || 409,
         options.conflictMessage || '账号资料正在更新，请稍后重试',
     )
+    let claimed = false
+    let released = false
+    const release = async () => {
+        if (released || !claimed) return
+        released = true
+        await cleanupUserMutationClaim(data, user.id, version, reservationId)
+    }
     try {
         try {
+            claimed = true
             await data.setJSON(claimKey, {
                 reservationId,
                 claimedAt: Date.now(),
@@ -152,26 +160,225 @@ export async function mutateUserRecord(data, user, mutate, options = {}) {
         if (!current || Number(current.recoveryKeyVersion || 0) !== version) {
             throw conflict()
         }
-        const result = await mutate(current)
-        current.recoveryKeyVersion = version + 1
-        current.lastUserMutationId = reservationId
-        current.updatedAt = Date.now()
+        let committed = false
+        return {
+            current,
+            reservationId,
+            async commit(mutate) {
+                if (committed) throw new Error('user mutation already committed')
+                const result = await mutate(current)
+                current.recoveryKeyVersion = version + 1
+                current.lastUserMutationId = reservationId
+                current.updatedAt = Date.now()
 
-        try {
-            await data.setJSON(blobKeys.user(user.id), current)
-        } catch (error) {
-            const persisted = await getJSON(data, blobKeys.user(user.id)).catch(() => null)
-            if (
-                persisted?.lastUserMutationId === reservationId
-                && Number(persisted.recoveryKeyVersion || 0) === version + 1
-            ) {
-                return { result, user: persisted }
-            }
-            throw error
+                try {
+                    await data.setJSON(blobKeys.user(user.id), current)
+                } catch (error) {
+                    let persisted
+                    try {
+                        persisted = await getJSON(data, blobKeys.user(user.id))
+                    } catch (reconciliationError) {
+                        error.userWriteAmbiguous = true
+                        error.reconciliationError = reconciliationError
+                        throw error
+                    }
+                    if (
+                        persisted?.lastUserMutationId === reservationId
+                        && Number(persisted.recoveryKeyVersion || 0) === version + 1
+                    ) {
+                        committed = true
+                        return { result, user: persisted }
+                    }
+                    throw error
+                }
+                committed = true
+                return { result, user: current }
+            },
+            release,
         }
-        return { result, user: current }
+    } catch (error) {
+        await release()
+        throw error
+    }
+}
+
+export async function mutateUserRecord(data, user, mutate, options = {}) {
+    const mutation = await beginUserMutation(data, user, options)
+    try {
+        return await mutation.commit(mutate)
     } finally {
-        await cleanupUserMutationClaim(data, user.id, version, reservationId)
+        await mutation.release()
+    }
+}
+
+async function cleanupOldUserIndexes(data, userId, oldIndexes) {
+    for (const old of oldIndexes) {
+        let current
+        try {
+            current = await getJSON(data, old.key)
+        } catch (error) {
+            console.error(JSON.stringify({
+                event: 'user_old_index_read_failed',
+                userId,
+                indexType: old.type,
+                key: old.key,
+                error: String(error?.message || error).slice(0, 300),
+            }))
+            continue
+        }
+        if (!current) continue
+        if (String(current.userId) !== String(userId)) {
+            console.error(JSON.stringify({
+                event: 'user_old_index_not_owned',
+                userId,
+                indexType: old.type,
+                key: old.key,
+                indexUserId: current.userId,
+            }))
+            continue
+        }
+        await data.delete(old.key).catch(error => {
+            console.error(JSON.stringify({
+                event: 'user_old_index_delete_failed',
+                userId,
+                indexType: old.type,
+                key: old.key,
+                error: String(error?.message || error).slice(0, 300),
+            }))
+        })
+    }
+}
+
+export async function prepareUserUpdate(data, env, user, updates, deps = {}) {
+    const secret = getAppSecret(env)
+    const hashPasswordImpl = deps.hashPassword || hashPassword
+    const next = { passwordHash: user.passwordHash, sessionVersion: user.sessionVersion }
+    const oldIndexes = []
+
+    // Complete all CPU-only validation before claiming indexes or writing an image.
+    if (updates.name !== undefined) {
+        const nameError = validateUsername(updates.name)
+        if (nameError) throw httpError(400, nameError)
+        next.name = String(updates.name).normalize('NFKC').trim()
+        if (normalizeUsername(next.name) !== normalizeUsername(user.name)) {
+            next.nameChanged = true
+            next.nameIndexKey = usernameIndexKey(next.name)
+            oldIndexes.push({ type: 'name', key: usernameIndexKey(user.name) })
+        }
+    }
+
+    if (updates.email !== undefined) {
+        const emailError = validateEmail(updates.email)
+        if (emailError) throw httpError(400, emailError)
+        next.email = normalizeEmail(updates.email)
+        next.emailHash = keyedDigest(secret, next.email, 'email-index')
+        if (next.emailHash !== user.emailHash) {
+            next.emailChanged = true
+            next.emailIndexKey = emailIndexKey(secret, next.email)
+            oldIndexes.push({ type: 'email', key: blobKeys.userEmailIndex(user.emailHash) })
+        }
+    }
+
+    if (updates.password !== undefined) {
+        const passwordError = validatePassword(updates.password)
+        if (passwordError) throw httpError(400, passwordError)
+        next.passwordHash = await hashPasswordImpl(updates.password)
+        next.sessionVersion = Number(user.sessionVersion || 0) + 1
+    }
+
+    if (updates.avatarKey !== undefined) next.avatarKey = updates.avatarKey
+
+    const mutation = await beginUserMutation(data, user, { claimType: 'profile-update' })
+    const claimedKeys = []
+    let committed = false
+    let closed = false
+    const rollbackIndexes = async () => {
+        for (const key of claimedKeys) {
+            const index = await getJSON(data, key).catch(() => null)
+            if (index?.userId !== user.id) continue
+            await data.delete(key).catch(error => {
+                console.error(JSON.stringify({
+                    event: 'user_index_claim_rollback_failed',
+                    userId: user.id,
+                    key,
+                    error: String(error?.message || error).slice(0, 300),
+                }))
+            })
+        }
+    }
+    const rollback = async () => {
+        if (closed) return
+        closed = true
+        if (!committed) await rollbackIndexes()
+        await mutation.release()
+    }
+    const claimIndex = async (key, conflictMessage) => {
+        claimedKeys.push(key)
+        let writeError
+        try {
+            await data.setJSON(key, { userId: user.id }, { onlyIfNew: true })
+        } catch (error) {
+            if (isPreconditionFailure(error)) throw httpError(409, conflictMessage)
+            writeError = error
+        }
+        let index
+        try {
+            index = await getJSON(data, key)
+        } catch {
+            throw writeError || new Error('unable to verify user index claim')
+        }
+        if (index?.userId !== user.id) {
+            if (index) throw httpError(409, conflictMessage)
+            throw writeError || new Error('user index claim was not persisted')
+        }
+    }
+
+    try {
+        if (next.nameChanged) {
+            await claimIndex(next.nameIndexKey, '用户名已被使用')
+        }
+        if (next.emailChanged) {
+            await claimIndex(next.emailIndexKey, '邮箱已被注册')
+        }
+    } catch (error) {
+        await rollback()
+        throw error
+    }
+
+    return {
+        async commit(extraUpdates = {}) {
+            if (closed) throw new Error('user update transaction is closed')
+            try {
+                const mutationResult = await mutation.commit(current => {
+                    if (next.nameChanged) current.name = next.name
+                    if (next.emailChanged) {
+                        current.emailHash = next.emailHash
+                        current.emailCipher = encryptEmail(secret, next.email)
+                    }
+                    current.passwordHash = next.passwordHash
+                    current.sessionVersion = next.sessionVersion
+                    const avatarKey = extraUpdates.avatarKey !== undefined
+                        ? extraUpdates.avatarKey
+                        : next.avatarKey
+                    if (avatarKey !== undefined) current.avatarKey = avatarKey
+                    if (extraUpdates.avatarOperationId !== undefined) {
+                        current.lastAvatarOperationId = extraUpdates.avatarOperationId
+                    }
+                })
+                committed = true
+                await cleanupOldUserIndexes(data, user.id, oldIndexes)
+                return mutationResult.user
+            } catch (error) {
+                if (!error?.userWriteAmbiguous) await rollbackIndexes()
+                throw error
+            } finally {
+                closed = true
+                await mutation.release()
+            }
+        },
+        claimedIndexKeys: [...claimedKeys],
+        oldIndexKeys: oldIndexes.map(index => index.key),
+        rollback,
     }
 }
 
@@ -391,147 +598,9 @@ export async function revokeAllSessions(data, user) {
 }
 
 export async function updateUser(data, uploads, env, user, updates, deps = {}) {
-    const secret = getAppSecret(env)
-    const hashPasswordImpl = deps.hashPassword || hashPassword
-
-    // 索引事务:
-    //   1. 在任何存储写入前完成全部验证与预计算(用户名/邮箱/密码);
-    //   2. 原子认领全部新索引(首个认领后任意异常 → 统一 rollback 本次认领);
-    //   3. 写用户本体(失败 → rollback);
-    //   4. 删除旧索引前强一致读取并校验归属,防止误删历史重名账号的索引。
-    const claimedKeys = []
-    const oldIndexes = []
-    const rollback = async () => {
-        for (const key of claimedKeys) {
-            await data.delete(key).catch(error => {
-                console.error(JSON.stringify({
-                    event: 'user_index_claim_rollback_failed',
-                    userId: user.id,
-                    key,
-                    error: String(error?.message || error).slice(0, 300),
-                }))
-            })
-        }
-    }
-    const fail = async error => {
-        await rollback()
-        throw error
-    }
-
-    // ---- 1. 预校验与预计算(零写入) ----
-    const next = { passwordHash: user.passwordHash, sessionVersion: user.sessionVersion }
-
-    if (updates.name !== undefined) {
-        const nameError = validateUsername(updates.name)
-        if (nameError) throw httpError(400, nameError)
-        next.name = String(updates.name).normalize('NFKC').trim()
-        if (normalizeUsername(next.name) !== normalizeUsername(user.name)) {
-            next.nameChanged = true
-            next.nameIndexKey = usernameIndexKey(next.name)
-            oldIndexes.push({ type: 'name', key: usernameIndexKey(user.name) })
-        }
-    }
-
-    if (updates.email !== undefined) {
-        const emailError = validateEmail(updates.email)
-        if (emailError) throw httpError(400, emailError)
-        next.email = normalizeEmail(updates.email)
-        next.emailHash = keyedDigest(secret, next.email, 'email-index')
-        if (next.emailHash !== user.emailHash) {
-            next.emailChanged = true
-            next.emailIndexKey = emailIndexKey(secret, next.email)
-            oldIndexes.push({ type: 'email', key: blobKeys.userEmailIndex(user.emailHash) })
-        }
-    }
-
-    if (updates.password !== undefined) {
-        const passwordError = validatePassword(updates.password)
-        if (passwordError) throw httpError(400, passwordError)
-        next.passwordHash = await hashPasswordImpl(updates.password)
-        next.sessionVersion = Number(user.sessionVersion || 0) + 1
-    }
-
-    if (updates.avatarKey !== undefined) next.avatarKey = updates.avatarKey
-
-    // ---- 2. 原子认领全部新索引 ----
-    if (next.nameChanged) {
-        try {
-            await data.setJSON(next.nameIndexKey, { userId: user.id }, { onlyIfNew: true })
-            claimedKeys.push(next.nameIndexKey)
-        } catch (error) {
-            if (isPreconditionFailure(error)) return fail(httpError(409, '用户名已被使用'))
-            return fail(error)
-        }
-    }
-    if (next.emailChanged) {
-        try {
-            await data.setJSON(next.emailIndexKey, { userId: user.id }, { onlyIfNew: true })
-            claimedKeys.push(next.emailIndexKey)
-        } catch (error) {
-            if (isPreconditionFailure(error)) return fail(httpError(409, '邮箱已被注册'))
-            return fail(error)
-        }
-    }
-
-    // ---- 3. 认领用户版本并写本体 ----
-    let updatedUser
-    try {
-        const mutation = await mutateUserRecord(data, user, current => {
-            if (next.nameChanged) current.name = next.name
-            if (next.emailChanged) {
-                current.emailHash = next.emailHash
-                current.emailCipher = encryptEmail(secret, next.email)
-            }
-            current.passwordHash = next.passwordHash
-            current.sessionVersion = next.sessionVersion
-            if (next.avatarKey !== undefined) current.avatarKey = next.avatarKey
-        }, { claimType: 'profile-update' })
-        updatedUser = mutation.user
-    } catch (error) {
-        await rollback()
-        throw error
-    }
-
-    // ---- 4. 删除旧索引:先强一致校验归属,防止误删历史重名账号的索引 ----
-    for (const old of oldIndexes) {
-        let current
-        try {
-            current = await getJSON(data, old.key)
-        } catch (error) {
-            console.error(JSON.stringify({
-                event: 'user_old_index_read_failed',
-                userId: user.id,
-                indexType: old.type,
-                key: old.key,
-                error: String(error?.message || error).slice(0, 300),
-            }))
-            continue
-        }
-        if (!current) {
-            // 旧索引已不存在,无需删除
-            continue
-        }
-        if (String(current.userId) !== String(user.id)) {
-            console.error(JSON.stringify({
-                event: 'user_old_index_not_owned',
-                userId: user.id,
-                indexType: old.type,
-                key: old.key,
-                indexUserId: current.userId,
-            }))
-            continue
-        }
-        await data.delete(old.key).catch(error => {
-            console.error(JSON.stringify({
-                event: 'user_old_index_delete_failed',
-                userId: user.id,
-                indexType: old.type,
-                key: old.key,
-                error: String(error?.message || error).slice(0, 300),
-            }))
-        })
-    }
-    return updatedUser
+    void uploads
+    const prepared = await prepareUserUpdate(data, env, user, updates, deps)
+    return prepared.commit()
 }
 
 export function privateProfile(user, env) {

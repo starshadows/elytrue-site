@@ -74,6 +74,13 @@ export function createAuthStore(initialAdapter?: AuthAdapter) {
     return clearState()
   }
 
+  function apply(profile: UserProfile): UserProfile {
+    requestGeneration += 1
+    const applied = applyProfile(profile)
+    initialization = Promise.resolve(applied)
+    return applied
+  }
+
   async function requestProfile(
     generation: number,
   ): Promise<UserProfile | null> {
@@ -121,6 +128,7 @@ export function createAuthStore(initialAdapter?: AuthAdapter) {
         mutableState.loginState === 'authenticated' &&
         mutableState.userId !== null,
     ),
+    apply,
     clear,
     configure,
     ensureAuthenticated,

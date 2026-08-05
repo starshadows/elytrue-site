@@ -3,11 +3,11 @@ import { enforceRateLimit } from '../../rate-limit.js'
 import { clientIdentity } from '../../middleware/request-context.js'
 import { loadImageService } from '../lazy-services.js'
 
-async function serveImage(stores, kind, imageId) {
+async function serveImage(stores, kind, imageId, cache) {
     const { loadImage } = await loadImageService()
     const image = await loadImage(stores, kind, imageId)
     return binaryResponse(image.buffer, image.contentType, {
-        cache: 'public, max-age=31536000, immutable',
+        cache,
     })
 }
 
@@ -33,7 +33,12 @@ export function defaultAvatar(context) {
 }
 
 export function avatarImage(context, stores, path) {
-    return serveImage(stores, 'avatars', path.slice('data/images/avatars/'.length))
+    return serveImage(
+        stores,
+        'avatars',
+        path.slice('data/images/avatars/'.length),
+        'public, max-age=300, must-revalidate',
+    )
 }
 
 export function commentImage(context, stores, path) {
@@ -41,5 +46,6 @@ export function commentImage(context, stores, path) {
         stores,
         'comments',
         path.slice('data/images/posts/'.length).replace(/\.[a-z0-9]+$/iu, ''),
+        'public, max-age=31536000, immutable',
     )
 }
