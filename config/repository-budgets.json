@@ -1,0 +1,76 @@
+{
+  "assetBudgets": {
+    "ordinaryImage": {
+      "warningBytes": 524288,
+      "maximumBytes": 1048576
+    },
+    "backgroundPreview": {
+      "warningBytes": 524288,
+      "maximumBytes": 786432
+    },
+    "backgroundOriginal": {
+      "warningBytes": 11534336,
+      "maximumBytes": 12582912
+    },
+    "audio": {
+      "warningBytes": 3670016,
+      "maximumBytes": 4194304
+    },
+    "font": {
+      "warningBytes": 131072,
+      "maximumBytes": 262144
+    },
+    "publicAssetsTotal": {
+      "warningBytes": 94371840,
+      "maximumBytes": 100663296
+    },
+    "publicResTotal": {
+      "warningBytes": 524288,
+      "maximumBytes": 1048576
+    },
+    "publicTotal": {
+      "warningBytes": 99614720,
+      "maximumBytes": 106954752
+    },
+    "edgeOneFileMaximumBytes": 26214400,
+    "unversionedLargeWarningBytes": 524288
+  },
+  "buildBudgets": {
+    "javascriptFile": {
+      "warningBytes": 225280,
+      "maximumBytes": 256000
+    },
+    "javascriptTotal": {
+      "warningBytes": 245760,
+      "maximumBytes": 307200
+    },
+    "cssFile": {
+      "warningBytes": 57344,
+      "maximumBytes": 69632
+    },
+    "cssTotal": {
+      "warningBytes": 57344,
+      "maximumBytes": 69632
+    },
+    "criticalTransfer": {
+      "warningBytes": 471040,
+      "maximumBytes": 532480
+    },
+    "imageFile": {
+      "warningBytes": 11534336,
+      "maximumBytes": 12582912
+    },
+    "audioFile": {
+      "warningBytes": 3670016,
+      "maximumBytes": 4194304
+    },
+    "fontFile": {
+      "warningBytes": 131072,
+      "maximumBytes": 262144
+    },
+    "distTotal": {
+      "warningBytes": 94371840,
+      "maximumBytes": 104857600
+    }
+  }
+}

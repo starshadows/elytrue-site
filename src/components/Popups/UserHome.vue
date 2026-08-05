@@ -167,6 +167,7 @@ import FloatMsgs from '../FloatMsgs'
 import ImgViewer from '../ImgViewer'
 import Popups from './index'
 import { markPerformanceEvent } from '../../lib/performance'
+import { createViewLifecycle } from '../../features/comments/user-home-lifecycle'
 import StableAvatar from '../StableAvatar.vue'
 
 interface UserComment {
@@ -211,7 +212,7 @@ const toEnd = ref(false)
 const nextCursor = ref<number | string | null>(null)
 let loaderTimer: number | undefined
 let authLoaderTimer: number | undefined
-let disposed = false
+const lifecycle = createViewLifecycle()
 let profileReadyMarked = false
 const pendingCursorRequests = new Set<string>()
 const completedCursorRequests = new Set<string>()
@@ -223,7 +224,7 @@ function userCommentCacheKey(): string {
 watch(
   () => props.popupClosing,
   (closing) => {
-    if (closing) disposed = true
+    if (closing) lifecycle.dispose()
   },
 )
 
@@ -324,7 +325,7 @@ async function getComments(refresh = false): Promise<void> {
   try {
     while (true) {
       const page = await commentsApi.listUser(user.value.id, cursor)
-      if (disposed) return
+      if (!lifecycle.isActive()) return
       applyCommentPage(page, refresh && pageIndex === 0)
       pageToCache = page
       completedCursorRequests.add(requestKey)
@@ -383,7 +384,7 @@ async function markProfileReady(): Promise<void> {
 async function getUser(): Promise<void> {
   if (props.loadingAuth) {
     const profile = await authStore.ready()
-    if (disposed) return
+    if (!lifecycle.isActive()) return
     if (authLoaderTimer !== undefined) {
       window.clearTimeout(authLoaderTimer)
       authLoaderTimer = undefined
@@ -408,7 +409,7 @@ async function getUser(): Promise<void> {
     return
   }
   const response = await XHR.get<UserProfile[]>('user/find', { id: props.id })
-  if (disposed) return
+  if (!lifecycle.isActive()) return
   const profile = Array.isArray(response) ? response[0] : response
   if (!profile) {
     FloatMsgs.show({
@@ -447,7 +448,7 @@ onMounted(() => {
 })
 
 onBeforeUnmount(() => {
-  disposed = true
+  lifecycle.dispose()
   if (loaderTimer !== undefined) window.clearTimeout(loaderTimer)
   if (authLoaderTimer !== undefined) window.clearTimeout(authLoaderTimer)
 })

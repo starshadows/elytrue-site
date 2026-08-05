@@ -95,7 +95,10 @@ export function readHomeCommentsCache(
       )
     )
       throw new Error('缓存包含未允许字段')
-    const parsed = items.map(parseCommentRecord)
+    const parsed = items.map((item) => ({
+      ...parseCommentRecord(item),
+      liked: false,
+    }))
     if (parsed.some((item) => item.hidden)) throw new Error('缓存包含隐藏留言')
     return {
       version: 1,

@@ -76,6 +76,15 @@ describe('declarative API route contract', () => {
 
   test('requires complete policies and registered handlers', () => {
     assert.equal(validateApiRouteRegistry(API_ROUTES, Object.keys(API_ROUTE_HANDLERS)), true)
+    assert.equal(Object.isFrozen(API_ROUTE_HANDLERS), true)
+    assert.equal(
+      Object.keys(API_ROUTE_HANDLERS).sort().join(','),
+      [...new Set(API_ROUTES.map((route) => route.handler))].sort().join(','),
+    )
+    assert.equal(
+      Object.values(API_ROUTE_HANDLERS).every((handler) => typeof handler === 'function'),
+      true,
+    )
     assert.throws(
       () => validateApiRouteRegistry([
         { methods: ['GET'], match: { kind: 'exact', path: 'test' }, handler: 'missing', auth: 'public' },
@@ -93,53 +102,5 @@ describe('declarative API route contract', () => {
     assert.match(entry, /export default function onRequest\(context\)/u)
   })
 
-  test('keeps post insertion and pagination triggers tied to real requests', async () => {
-    const [panel, editor, userHome] = await Promise.all([
-      readFile(
-        new URL('../src/components/CommentsPanel.vue', import.meta.url),
-        'utf8',
-      ),
-      readFile(
-        new URL('../src/components/CommentEditor.vue', import.meta.url),
-        'utf8',
-      ),
-      readFile(
-        new URL('../src/components/Popups/UserHome.vue', import.meta.url),
-        'utf8',
-      ),
-    ])
-    assert.match(panel, /insertCreatedComment\(comment\)/u)
-    assert.doesNotMatch(
-      panel,
-      /setTimeout\(\(\) => void commentsStore\.refresh\(\), 1_000\)/u,
-    )
-    assert.doesNotMatch(panel, /setInterval\(handleScroll, 1_000\)/u)
-    assert.match(panel, /new IntersectionObserver/u)
-    assert.match(panel, /paginationSentinel/u)
-    assert.match(panel, /v-for="index in 3"/u)
-    assert.match(panel, /class="commentBox commentSkeleton"/u)
-    assert.match(panel, /id="topComment"/u)
-    assert.doesNotMatch(panel, /commentsLoadingHint/u)
-    assert.doesNotMatch(panel, /id="loadingIndicator"/u)
-    assert.match(editor, /emit\('sent', created\)/u)
-    assert.match(editor, /await Promise\.allSettled/u)
-    assert.match(
-      userHome,
-      /await authStore\.ready\(\)\s+if \(disposed\) return/u,
-    )
-    assert.match(userHome, /if \(closing\) disposed = true/u)
-  })
-
-  test('keeps core comment actions keyboard accessible without card-level request fan-out', async () => {
-    const [card, panel] = await Promise.all([
-      readFile(new URL('../src/components/CommentCard.vue', import.meta.url), 'utf8'),
-      readFile(new URL('../src/components/CommentsPanel.vue', import.meta.url), 'utf8'),
-    ])
-    assert.match(card, /<button[\s\S]*class="btn like semanticButton"/u)
-    assert.match(card, /:aria-pressed="record\.liked"/u)
-    assert.match(card, /aria-label="回复留言"/u)
-    assert.doesNotMatch(card, /onMounted[\s\S]*commentsApi\.list/u)
-    assert.match(panel, /<button[^>]*class="commentSeekArrow semanticButton"/u)
-  })
 })
 

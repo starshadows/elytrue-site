@@ -44,4 +44,4 @@
 - 复制上述 10 首官方音乐；
 - 保持预览与原图路径的一一对应关系。
 
-部署前 `npm run check:assets` 会阻止单个静态文件超过 EdgeOne Makers 的 25 MiB 限制。
+部署前 `npm run check:assets` 会按 `config/repository-budgets.json` 检查分类单文件、目录总量、未知二进制、未版本化大型文件和 EdgeOne Makers 25 MiB 硬限制；`npm run report:assets` 输出逐文件治理报告。

@@ -24,6 +24,10 @@ data
 backups
 exports
 coverage
+.cache
+tmp
+temp
+*.tsbuildinfo
 
 # Editor directories and files
 .vscode
@@ -38,6 +42,8 @@ coverage
 # Playwright
 test-results
 playwright-report
+blob-report
+.playwright
 
 # generated at build time (scripts/gen-build-info.mjs)
 server/build-info.js

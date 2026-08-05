@@ -8,6 +8,10 @@ on:
 permissions:
   contents: read
 
+concurrency:
+  group: ${{ github.workflow }}-${{ github.event.pull_request.number || github.ref }}
+  cancel-in-progress: ${{ github.event_name == 'pull_request' }}
+
 jobs:
   verify:
     runs-on: ubuntu-latest
@@ -27,7 +31,8 @@ jobs:
       - run: npm run format:check
       - run: npm run check
       - run: npm test
-      - run: npm run build:edgeone
+      - name: Build and enforce asset budgets
+        run: npm run build:edgeone
 
   e2e:
     # PNG 基线在 Windows Chromium 生成；固定同一 OS，避免字体栅格化差异被误报为视觉回归。

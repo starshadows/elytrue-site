@@ -54,6 +54,8 @@ Edge KV 不提供原子增量或 CAS，应用内固定窗口在多节点并发�
 
 ## 4. 发布前验收
 
+日常发布使用 [发布清单](RELEASE.md)；本节保留平台级要求。
+
 本地和 CI 必须通过：
 
 ```powershell
@@ -65,6 +67,7 @@ npm run check:server
 npm test
 npm run test:server
 npm run build:edgeone
+npm run check:build-budget
 npm run test:e2e
 npm run check:assets
 npm audit --omit=dev
@@ -83,6 +86,8 @@ npm audit
 - Cloud Functions 日志不包含密码、恢复密钥、完整邮箱密文或 API Key。
 
 ## 5. 域名与回滚
+
+完整应用回滚和数据边界见 [回滚清单](ROLLBACK.md)。
 
 - 在 EdgeOne 绑定 `elytrue.com`。
 - `www.elytrue.com` 与 `blog.elytrue.com` 由 `middleware.js` 301 到主域。

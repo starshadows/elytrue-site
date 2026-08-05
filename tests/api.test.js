@@ -334,6 +334,113 @@ describe('EdgeOne public origin validation', () => {
     })
 })
 
+describe('public user lookup', () => {
+    async function registeredUser(ip = '10.0.0.30') {
+        const state = createState(ip)
+        const registered = await call(state, 'POST', 'user/register', {
+            name: '公开查询用户',
+            email: 'public-find@example.com',
+            password: 'public-find-password',
+        })
+        return { state, profile: registered.payload.data }
+    }
+
+    it('finds a normalized username and returns only public fields', async () => {
+        resetMemoryRateLimitsForTests()
+        const { state, profile } = await registeredUser('10.0.0.30')
+        const result = await call(
+            state,
+            'GET',
+            `user/find?name=${encodeURIComponent('  公开查询用户  ')}`,
+        )
+        assert.equal(result.response.status, 200)
+        assert.deepEqual(result.payload.data, [{
+            id: profile.id,
+            name: '公开查询用户',
+            avatar: '',
+            create_time: profile.create_time,
+            role: 'admin',
+        }])
+        for (const field of [
+            'email',
+            'emailCipher',
+            'emailHash',
+            'passwordHash',
+            'hasEmail',
+            'hasPassword',
+            'hasRecoveryKey',
+            'sessionVersion',
+        ]) {
+            assert.equal(field in result.payload.data[0], false, field)
+        }
+    })
+
+    it('finds a user by ID without exposing private fields', async () => {
+        resetMemoryRateLimitsForTests()
+        const { state, profile } = await registeredUser('10.0.0.31')
+        const result = await call(state, 'GET', `user/find?id=${profile.id}`)
+        assert.equal(result.response.status, 200)
+        assert.equal(result.payload.data[0].id, profile.id)
+        assert.deepEqual(Object.keys(result.payload.data[0]).sort(), [
+            'avatar',
+            'create_time',
+            'id',
+            'name',
+            'role',
+        ])
+    })
+
+    it('does not use email-shaped input to find a public user', async () => {
+        resetMemoryRateLimitsForTests()
+        const { state } = await registeredUser('10.0.0.32')
+        const result = await call(state, 'GET', 'user/find?name=public-find%40example.com')
+        assert.equal(result.response.status, 200)
+        assert.deepEqual(result.payload.data, [])
+    })
+
+    it('returns an empty list for an unknown valid username', async () => {
+        resetMemoryRateLimitsForTests()
+        const state = createState('10.0.0.33')
+        const result = await call(state, 'GET', 'user/find?name=不存在用户')
+        assert.equal(result.response.status, 200)
+        assert.deepEqual(result.payload.data, [])
+    })
+
+    it('rejects overlong, illegal, and malformed ID input', async () => {
+        resetMemoryRateLimitsForTests()
+        const state = createState('10.0.0.34')
+        for (const path of [
+            `user/find?name=${'a'.repeat(25)}`,
+            'user/find?name=%3Cbad%3E',
+            'user/find?id=not-a-user-id',
+        ]) {
+            const result = await call(state, 'GET', path)
+            assert.equal(result.response.status, 400)
+        }
+    })
+
+    it('enforces the Cloud Functions user lookup limit', async () => {
+        resetMemoryRateLimitsForTests()
+        const state = createState('10.0.0.35')
+        for (let index = 0; index < 120; index += 1) {
+            const result = await call(state, 'GET', 'user/find?name=不存在用户')
+            assert.equal(result.response.status, 200)
+        }
+        const limited = await call(state, 'GET', 'user/find?name=不存在用户')
+        assert.equal(limited.response.status, 429)
+    })
+
+    it('does not turn a malformed session cookie into a server error', async () => {
+        resetMemoryRateLimitsForTests()
+        const state = createState('10.0.0.36')
+        const result = await call(state, 'GET', 'user/me', undefined, {
+            headers: { Cookie: 'elytrue_session=%E0%A4%A; theme=valid%20theme' },
+        })
+        assert.equal(result.response.status, 401)
+        assert.notEqual(result.response.status, 500)
+    })
+})
+
 describe('declarative route security policy', () => {
     it('enforces public, optional, session, admin, and CSRF policies', async () => {
         const guest = createState('10.0.0.20')

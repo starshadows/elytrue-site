@@ -141,6 +141,20 @@ test('middleware limits account recovery by client IP', async () => {
     )
 })
 
+test('middleware limits public user lookup by trusted client IP', async () => {
+    const kv = new MemoryKV()
+    for (let index = 0; index < 120; index += 1) {
+        const response = await middleware(createContext('/api/user/find?id=test', kv, '203.0.113.40', {
+            method: 'GET',
+        }))
+        assert.equal(response.status, 200)
+    }
+    const limited = await middleware(createContext('/api/user/find?id=test', kv, '203.0.113.40', {
+        method: 'GET',
+    }))
+    assert.equal(limited.status, 429)
+})
+
 test('middleware does not create a site-wide registration bucket without a client IP', async () => {
     const kv = new MemoryKV()
     for (let index = 0; index < 25; index += 1) {

@@ -30,7 +30,7 @@ middleware.js：Edge Runtime / Web APIs / ES2023+
 - `middleware.js`：主域跳转、Edge KV 限流和按响应类型附加安全头。
 - `public/assets/`、`public/res/`：版本化站点素材、音乐、字体与 UI 资源。
 
-完整分层与数据流见 [架构文档](docs/ARCHITECTURE.md)，素材来源与保留依据见 [素材清单](docs/ASSET_INVENTORY.md)。
+完整分层与数据流见 [架构文档](docs/ARCHITECTURE.md)，素材来源与保留依据见 [素材清单](docs/ASSET_INVENTORY.md)。发布前使用 [发布清单](docs/RELEASE.md)，异常部署按 [回滚清单](docs/ROLLBACK.md) 处理；Issue、Pull Request、运行时边界和素材贡献规则见 [贡献说明](CONTRIBUTING.md)。
 
 ## 本地开发与验证
 
@@ -54,6 +54,8 @@ npm run mock:server
 npm run dev:edgeone
 ```
 
+Vite 开发服务器只显式接受 `localhost` 和 `127.0.0.1`；`npm run dev:host` 仍可通过本机 IP 访问。若 EdgeOne CLI 或其他受信任代理使用动态开发域名，请在启动命令的环境中设置 Vite 支持的 `__VITE_ADDITIONAL_SERVER_ALLOWED_HOSTS`（值仅填写 Host，不含协议和路径），不要把临时域名或通配配置提交到仓库。
+
 常用验收：
 
 ```powershell
@@ -64,7 +66,9 @@ npm run check:server
 npm test
 npm run test:server
 npm run check:assets
+npm run report:assets # 输出逐文件类别、大小、首屏与迁移候选报告
 npm run build:edgeone
+npm run check:build-budget
 npm run test:e2e
 npm run audit:uploads # 需要 EdgeOne 凭据，只读审计图片与用量
 npm run audit:comment-likes # 需要 EdgeOne 凭据，只读审计留言点赞缓存
@@ -88,7 +92,7 @@ Edge KV 固定窗口限流是多节点 best-effort 保护，可信客户端地�
 
 ## 生产部署
 
-唯一生产部署目标是 EdgeOne Makers。项目连接、环境变量、Blob/KV、管理员初始化、备份、修复和回滚步骤见 [EdgeOne 运维清单](docs/EDGEONE_SETUP.md)。本仓库不包含 Vercel、GitHub Pages、ECS 或独立 Node 服务器部署流程。
+唯一生产部署目标是 EdgeOne Makers。项目连接、环境变量和 Blob/KV 见 [EdgeOne 运维清单](docs/EDGEONE_SETUP.md)，日常发布与回滚分别使用 [发布清单](docs/RELEASE.md) 和 [回滚清单](docs/ROLLBACK.md)。本仓库不包含 Vercel、GitHub Pages、ECS 或独立 Node 服务器部署流程。
 
 所有历史 Blob key、字段语义、内部 ID、公开编号、索引、墓碑、repair marker 和图片别名状态保持存储结构兼容；现有数据无需整体迁移或重新序列化。
 

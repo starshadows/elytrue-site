@@ -1,13 +1,14 @@
 #!/usr/bin/env node
 import { getStore } from '@edgeone/pages-blob'
+import { resolve } from 'node:path'
+import { fileURLToPath } from 'node:url'
 import { blobKeys } from '../server/domain/blob-keys.js'
-import { mapWithConcurrency } from '../server/lib/concurrency.js'
 import { getJSON } from '../server/storage.js'
 
 const DATA_STORE = 'elytrue-data'
 const PAGE_SIZE = 500
 
-async function listEvery(store, prefix) {
+export async function listEvery(store, prefix) {
   const blobs = []
   let cursor
   do {
@@ -28,8 +29,95 @@ async function listEvery(store, prefix) {
   return blobs
 }
 
-async function countLikes(store, commentId) {
+export async function countLikes(store, commentId) {
   return (await listEvery(store, `likes/${commentId}/`)).length
+}
+
+export async function auditCommentLikes(data, { fix = false } = {}) {
+  const commentBlobs = await listEvery(data, 'comments/')
+  const commentIds = new Set()
+  const differences = []
+  const corruption = []
+  for (const blob of commentBlobs) {
+    const keyMatch = /^comments\/(\d{16})\.json$/u.exec(String(blob.key))
+    const comment = await getJSON(data, blob.key)
+    const keyId = keyMatch ? Number(keyMatch[1]) : null
+    if (!keyId || comment?.id !== keyId) {
+      corruption.push({ key: blob.key, commentId: comment?.id ?? null })
+      continue
+    }
+    commentIds.add(keyId)
+    const actual = await countLikes(data, keyId)
+    const cache = await getJSON(data, blobKeys.commentLikeCountCache(keyId))
+    const cached = Number.isSafeInteger(cache?.count)
+      ? cache.count
+      : comment.likeCountVersion === 1
+        ? Math.max(0, Number(comment.likeCount) || 0)
+        : null
+    if (actual !== cached)
+      differences.push({ key: blob.key, comment, cached, actual })
+  }
+
+  const likeBlobs = await listEvery(data, 'likes/')
+  const orphanFacts = likeBlobs
+    .map((blob) => /^likes\/(\d+)\/[^/]+\.json$/u.exec(String(blob.key))?.[1])
+    .filter((id) => id && !commentIds.has(Number(id)))
+    .map((id) => Number(id))
+  const markerBlobs = await listEvery(data, 'repairs/comment-like-count/')
+  const markers = []
+  for (const blob of markerBlobs) {
+    const marker = await getJSON(data, blob.key)
+    const id = Number(marker?.commentId)
+    if (!Number.isSafeInteger(id) || id <= 0 || !commentIds.has(id)) {
+      markers.push({
+        key: blob.key,
+        commentId: marker?.commentId ?? null,
+        orphan: true,
+      })
+    } else {
+      markers.push({ key: blob.key, commentId: id, orphan: false })
+    }
+  }
+
+  const report = {
+    comments: commentBlobs.length,
+    differences,
+    corruption,
+    orphanFacts: [...new Set(orphanFacts)],
+    markers,
+    repaired: 0,
+  }
+  if (fix) {
+    for (const difference of differences) {
+      const latest = await getJSON(data, difference.key)
+      if (!latest || latest.id !== difference.comment.id) continue
+      const actual = await countLikes(data, latest.id)
+      await data.setJSON(blobKeys.commentLikeCountCache(latest.id), {
+        commentId: latest.id,
+        count: actual,
+        updatedAt: Date.now(),
+      })
+      await data.delete(blobKeys.commentLikeCountRepair(latest.id))
+      report.repaired += 1
+    }
+    for (const marker of markers.filter((item) => !item.orphan)) {
+      const difference = report.differences.find(
+        (item) => item.comment.id === marker.commentId,
+      )
+      if (!difference) {
+        const cache = await getJSON(
+          data,
+          blobKeys.commentLikeCountCache(marker.commentId),
+        )
+        const actual = await countLikes(data, marker.commentId)
+        if (Number.isSafeInteger(cache?.count) && cache.count === actual) {
+          await data.delete(marker.key)
+          report.repaired += 1
+        }
+      }
+    }
+  }
+  return report
 }
 
 async function main() {
@@ -54,47 +142,22 @@ async function main() {
     token,
     consistency: 'strong',
   })
-  const commentBlobs = await listEvery(data, 'comments/')
-  const differences = (
-    await mapWithConcurrency(
-      commentBlobs,
-      async (blob) => {
-        const comment = await getJSON(data, blob.key)
-        if (!comment?.id) return null
-        const actual = await countLikes(data, comment.id)
-        const cache = await getJSON(
-          data,
-          blobKeys.commentLikeCountCache(comment.id),
-        )
-        const cached = Number.isSafeInteger(cache?.count)
-          ? cache.count
-          : comment.likeCountVersion === 1
-            ? Math.max(0, Number(comment.likeCount) || 0)
-            : null
-        return actual === cached
-          ? null
-          : {
-              key: blob.key,
-              comment,
-              cached,
-              actual,
-            }
-      },
-      6,
-    )
-  ).filter(Boolean)
+  const report = await auditCommentLikes(data, { fix })
 
   console.log(
     JSON.stringify(
       {
-        comments: commentBlobs.length,
-        differences: differences.map(({ comment, cached, actual }) => ({
+        comments: report.comments,
+        differences: report.differences.map(({ comment, cached, actual }) => ({
           commentId: comment.id,
           number: comment.number ?? null,
           cached,
           actual,
           delta: actual - (cached ?? 0),
         })),
+        corruption: report.corruption,
+        orphanFacts: report.orphanFacts,
+        markers: report.markers,
       },
       null,
       2,
@@ -102,24 +165,23 @@ async function main() {
   )
 
   if (!fix) {
-    if (differences.length > 0) process.exitCode = 1
+    if (
+      report.differences.length > 0 ||
+      report.corruption.length > 0 ||
+      report.orphanFacts.length > 0 ||
+      report.markers.some((marker) => marker.orphan)
+    )
+      process.exitCode = 1
     return
   }
-  for (const difference of differences) {
-    const latest = await getJSON(data, difference.key)
-    if (!latest) continue
-    const actual = await countLikes(data, latest.id)
-    await data.setJSON(blobKeys.commentLikeCountCache(latest.id), {
-      commentId: latest.id,
-      count: actual,
-      updatedAt: Date.now(),
-    })
-    await data.delete(`repairs/comment-like-count/${latest.id}.json`)
-  }
-  console.log(`已修复 ${differences.length} 条留言的 likeCount 缓存。`)
+  console.log(`已修复 ${report.repaired} 条留言的 likeCount 缓存。`)
 }
 
-main().catch((error) => {
-  console.error(`检查失败:${error?.message || error}`)
-  process.exitCode = 1
-})
+const isMain =
+  process.argv[1] && fileURLToPath(import.meta.url) === resolve(process.argv[1])
+if (isMain) {
+  main().catch((error) => {
+    console.error(`检查失败:${error?.message || error}`)
+    process.exitCode = 1
+  })
+}

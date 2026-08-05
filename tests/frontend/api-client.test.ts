@@ -1,6 +1,6 @@
 import assert from 'node:assert/strict'
 import { afterEach, describe, test } from 'node:test'
-import { ApiClient, ApiError } from '../../src/lib/api-client'
+import { ApiClient, ApiError, ApiProtocolError } from '../../src/lib/api-client'
 
 const originalFetch = globalThis.fetch
 
@@ -94,6 +94,91 @@ describe('typed API client', () => {
     )
     assert.equal(unauthorized, 1)
   })
+
+  test('preserves a valid non-401 error envelope', async () => {
+    globalThis.fetch = async () =>
+      Response.json(
+        { code: 409, message: '请求冲突', data: { reason: 'duplicate' } },
+        { status: 409 },
+      )
+    const client = new ApiClient('/api/', {
+      origin: 'https://elytrue.com',
+    })
+
+    await assert.rejects(
+      () => client.request('user/register'),
+      (error: unknown) => {
+        assert.ok(error instanceof ApiError)
+        assert.equal(error.status, 409)
+        assert.equal(error.code, 409)
+        assert.deepEqual(error.data, { reason: 'duplicate' })
+        return true
+      },
+    )
+  })
+
+  for (const scenario of [
+    {
+      name: 'HTML',
+      response: () =>
+        new Response('<html><body>gateway token=secret</body></html>', {
+          headers: { 'content-type': 'text/html; charset=utf-8' },
+        }),
+    },
+    {
+      name: 'plain JSON',
+      response: () => Response.json({ ok: true }),
+    },
+    {
+      name: 'empty body',
+      response: () => new Response(null, { status: 204 }),
+    },
+  ]) {
+    test(`rejects a successful ${scenario.name} response as a protocol error`, async () => {
+      globalThis.fetch = async () => scenario.response()
+      const client = new ApiClient('/api/', {
+        origin: 'https://elytrue.com',
+      })
+
+      await assert.rejects(
+        () => client.request('health'),
+        (error: unknown) => {
+          assert.ok(error instanceof ApiProtocolError)
+          assert.equal(error.status, scenario.name === 'empty body' ? 204 : 200)
+          assert.equal(error.pathname, '/api/health')
+          assert.doesNotMatch(error.message, /gateway|token|secret|<html>/iu)
+          return true
+        },
+      )
+    })
+  }
+
+  for (const [name, body] of [
+    ['code', { message: 'ok', data: null }],
+    ['message', { code: 1, data: null }],
+    ['data', { code: 1, message: 'ok' }],
+  ] as const) {
+    test(`rejects an envelope missing ${name}`, async () => {
+      globalThis.fetch = async () => Response.json(body)
+      const client = new ApiClient('/api/', {
+        origin: 'https://elytrue.com',
+      })
+      await assert.rejects(() => client.request('health'), ApiProtocolError)
+    })
+  }
+
+  for (const body of [
+    { code: '1', message: 'ok', data: null },
+    { code: 1, message: 200, data: null },
+  ]) {
+    test('rejects invalid envelope field types', async () => {
+      globalThis.fetch = async () => Response.json(body)
+      const client = new ApiClient('/api/', {
+        origin: 'https://elytrue.com',
+      })
+      await assert.rejects(() => client.request('health'), ApiProtocolError)
+    })
+  }
 
   test('aborts at the configured timeout with a TimeoutError', async () => {
     globalThis.fetch = async (_input, init) =>

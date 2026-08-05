@@ -35,6 +35,28 @@ export class ApiError<T = unknown> extends Error {
   }
 }
 
+export class ApiProtocolError extends Error {
+  readonly status: number
+  readonly pathname: string
+  readonly contentType: string
+
+  constructor({
+    status,
+    pathname,
+    contentType,
+  }: {
+    status: number
+    pathname: string
+    contentType: string
+  }) {
+    super('API 响应协议错误')
+    this.name = 'ApiProtocolError'
+    this.status = status
+    this.pathname = pathname
+    this.contentType = contentType
+  }
+}
+
 export interface ApiClientHooks {
   readonly getCsrfToken?: () => string
   readonly setCsrfToken?: (token: string) => void
@@ -53,7 +75,10 @@ function isEnvelope(value: unknown): value is ApiEnvelope<unknown> {
     typeof value === 'object' &&
     value !== null &&
     'code' in value &&
+    typeof value.code === 'number' &&
+    Number.isFinite(value.code) &&
     'message' in value &&
+    typeof value.message === 'string' &&
     'data' in value
   )
 }
@@ -144,7 +169,7 @@ export class ApiClient {
           parsed = JSON.parse(text)
         } catch {
           if (!response.ok) {
-            throw new ApiError(text || response.statusText, {
+            throw new ApiError(response.statusText || '请求失败', {
               status: response.status,
             })
           }
@@ -161,7 +186,11 @@ export class ApiClient {
         })
       }
       if (!isEnvelope(parsed)) {
-        return { code: 1, message: 'OK', data: parsed as T }
+        throw new ApiProtocolError({
+          status: response.status,
+          pathname: requestUrl.pathname,
+          contentType: response.headers.get('content-type') || '',
+        })
       }
       const csrf =
         parsed.data &&

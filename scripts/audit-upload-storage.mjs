@@ -1,10 +1,12 @@
 #!/usr/bin/env node
 import { getStore } from '@edgeone/pages-blob'
+import { resolve } from 'node:path'
+import { fileURLToPath } from 'node:url'
 import { getJSON } from '../server/storage.js'
 
 const PAGE_SIZE = 500
 
-async function listEvery(store, prefix) {
+export async function listEvery(store, prefix) {
   const blobs = []
   let cursor
   do {
@@ -21,27 +23,7 @@ async function listEvery(store, prefix) {
   return blobs
 }
 
-async function main() {
-  const projectId = process.env.EDGEONE_PROJECT_ID
-  const token = process.env.EDGEONE_API_TOKEN
-  if (!projectId || !token) {
-    throw new Error(
-      '缺少环境变量:必须设置 EDGEONE_PROJECT_ID 与 EDGEONE_API_TOKEN',
-    )
-  }
-
-  const data = getStore({
-    name: 'elytrue-data',
-    projectId,
-    token,
-    consistency: 'strong',
-  })
-  const uploads = getStore({
-    name: 'elytrue-uploads',
-    projectId,
-    token,
-    consistency: 'strong',
-  })
+export async function auditUploadStorage(data, uploads) {
   const [aliasBlobs, physicalBlobs, operationBlobs, usage] = await Promise.all([
     Promise.all([
       listEvery(data, 'uploads/aliases/avatars/'),
@@ -89,8 +71,7 @@ async function main() {
     (operation) =>
       operation && !['committed', 'rolled-back'].includes(operation.phase),
   )
-
-  const report = {
+  return {
     aliases: aliases.length,
     physicalBlobs: physicalBlobs.length,
     aliasBytes,
@@ -109,6 +90,30 @@ async function main() {
       phase: operation.phase,
     })),
   }
+}
+
+async function main() {
+  const projectId = process.env.EDGEONE_PROJECT_ID
+  const token = process.env.EDGEONE_API_TOKEN
+  if (!projectId || !token) {
+    throw new Error(
+      '缺少环境变量:必须设置 EDGEONE_PROJECT_ID 与 EDGEONE_API_TOKEN',
+    )
+  }
+
+  const data = getStore({
+    name: 'elytrue-data',
+    projectId,
+    token,
+    consistency: 'strong',
+  })
+  const uploads = getStore({
+    name: 'elytrue-uploads',
+    projectId,
+    token,
+    consistency: 'strong',
+  })
+  const report = await auditUploadStorage(data, uploads)
   console.log(JSON.stringify(report, null, 2))
   if (
     report.usageDelta !== 0 ||
@@ -121,7 +126,11 @@ async function main() {
   }
 }
 
-main().catch((error) => {
-  console.error(`审计失败:${error?.message || error}`)
-  process.exitCode = 1
-})
+const isMain =
+  process.argv[1] && fileURLToPath(import.meta.url) === resolve(process.argv[1])
+if (isMain) {
+  main().catch((error) => {
+    console.error(`审计失败:${error?.message || error}`)
+    process.exitCode = 1
+  })
+}

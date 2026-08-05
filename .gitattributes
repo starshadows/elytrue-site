@@ -1,0 +1,27 @@
+* text=auto
+
+*.css text eol=lf
+*.html text eol=lf
+*.js text eol=lf
+*.json text eol=lf
+*.md text eol=lf
+*.mjs text eol=lf
+*.scss text eol=lf
+*.ts text eol=lf
+*.vue text eol=lf
+*.yml text eol=lf
+
+*.avif -text
+*.gif -text
+*.ico -text
+*.jpeg -text
+*.jpg -text
+*.mp3 -text
+*.ogg -text
+*.otf -text
+*.png -text
+*.ttf -text
+*.wav -text
+*.webp -text
+*.woff -text
+*.woff2 -text

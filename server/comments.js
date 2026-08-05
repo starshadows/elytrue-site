@@ -14,6 +14,7 @@ import { mapWithConcurrency } from './lib/concurrency.js'
 import { sanitizePlainText, validateComment } from '../shared/validation.js'
 const INTERNAL_ID_THRESHOLD = 1e12
 const READ_CONCURRENCY = 8
+const likeMutationQueues = new Map()
 const DETAIL_CONCURRENCY = Math.max(1, Math.floor(READ_CONCURRENCY / 2))
 const NUMBER_BATCH_SIZE = 48
 
@@ -362,8 +363,8 @@ export async function countLikeRecords(data, commentId) {
  * 读取点赞计数展示值。普通读取路径禁止扫描点赞事实记录:
  *  1. 独立点赞缓存存在 → 用缓存;
  *  2. 留言本体有可信计数(likeCountVersion === 1)→ 直接用;
- *  3. 都没有 → 显示 0 并写 repair marker,由维护脚本精确重建,
- *     第一个访问该留言的用户不承担历史数据迁移成本。
+ *  3. 都没有 → 精确扫描历史事实并尝试建立缓存;缓存写失败只留下 marker,
+ *     不让列表请求失败。
  */
 async function getCachedLikeCount(data, comment, timing, publicRead = false) {
     const cacheKey = blobKeys.commentLikeCountCache(comment.id)
@@ -373,13 +374,34 @@ async function getCachedLikeCount(data, comment, timing, publicRead = false) {
     if (comment.likeCountVersion === 1) {
         return Math.max(0, Number(comment.likeCount) || 0)
     }
-    await data.setJSON(blobKeys.commentLikeCountRepair(comment.id), {
-        commentId: comment.id,
-        status: 'open',
-        createdAt: Date.now(),
-        error: 'legacy comment without a trusted like count read on the list path',
-    }, { onlyIfNew: true }).catch(() => {})
-    return 0
+    try {
+        const actual = await measure(timing, 'likes', () => countLikeRecords(data, comment.id))
+        try {
+            await data.setJSON(cacheKey, {
+                commentId: comment.id,
+                count: actual,
+                updatedAt: Date.now(),
+            })
+            await data.delete(blobKeys.commentLikeCountRepair(comment.id))
+        } catch (error) {
+            await data.setJSON(blobKeys.commentLikeCountRepair(comment.id), {
+                commentId: comment.id,
+                authoritativeLikes: actual,
+                status: 'open',
+                createdAt: Date.now(),
+                error: String(error?.message || error).slice(0, 300),
+            }).catch(() => {})
+        }
+        return actual
+    } catch (error) {
+        await data.setJSON(blobKeys.commentLikeCountRepair(comment.id), {
+            commentId: comment.id,
+            status: 'open',
+            createdAt: Date.now(),
+            error: String(error?.message || error).slice(0, 300),
+        }, { onlyIfNew: true }).catch(() => {})
+        return 0
+    }
 }
 
 /**
@@ -994,42 +1016,74 @@ export async function setLike(data, commentId, user, liked, options = {}) {
     const comment = await measure(timing, 'commentBodies', () =>
         getJSON(data, blobKeys.comment(commentId)))
     if (!comment || comment.hidden) throw httpError(404, '留言不存在')
-    const key = blobKeys.commentLike(commentId, user.id)
-    await measure(timing, 'likes', async () => {
-        if (liked) {
-            await data.setJSON(key, { userId: user.id, createdAt: Date.now() }, { onlyIfNew: true }).catch(error => {
-                if (!isPreconditionFailure(error)) throw error
-            })
-        } else {
-            await data.delete(key)
+    const previous = likeMutationQueues.get(commentId) || Promise.resolve()
+    const mutation = previous.then(async () => {
+        const key = blobKeys.commentLike(commentId, user.id)
+        await measure(timing, 'likes', async () => {
+            if (liked) {
+                await data.setJSON(key, { userId: user.id, createdAt: Date.now() }, { onlyIfNew: true }).catch(error => {
+                    if (!isPreconditionFailure(error)) throw error
+                })
+            } else {
+                await data.delete(key)
+            }
+        })
+        const repairKey = blobKeys.commentLikeCountRepair(commentId)
+        let likes
+        try {
+            likes = await measure(timing, 'likes', () => countLikeRecords(data, commentId))
+        } catch (error) {
+            await data.setJSON(repairKey, {
+                commentId,
+                status: 'open',
+                createdAt: Date.now(),
+                error: String(error?.message || error).slice(0, 300),
+            }).catch(() => {})
+            throw error
         }
+        try {
+            // 同一留言在当前实例内串行完成事实、精确计数和缓存写入,避免旧计数覆盖新计数。
+            await measure(timing, 'likes', () => data.setJSON(
+                blobKeys.commentLikeCountCache(commentId),
+                { commentId, count: likes, updatedAt: Date.now() },
+            ))
+            try {
+                await data.delete(repairKey)
+            } catch (error) {
+                await data.setJSON(repairKey, {
+                    commentId,
+                    authoritativeLikes: likes,
+                    status: 'open',
+                    createdAt: Date.now(),
+                    error: String(error?.message || error).slice(0, 300),
+                }).catch(() => {})
+            }
+        } catch (error) {
+            await data.setJSON(repairKey, {
+                commentId,
+                authoritativeLikes: likes,
+                status: 'open',
+                createdAt: Date.now(),
+                error: String(error?.message || error).slice(0, 300),
+            }).catch(() => {})
+            console.error(JSON.stringify({
+                event: 'comment_like_count_cache_update_failed',
+                commentId,
+                likes,
+                error: String(error?.message || error).slice(0, 300),
+            }))
+        }
+        return { liked: Boolean(liked), likes }
+    }, async () => {
+        throw new Error('点赞操作队列失败')
     })
-    let likes = await measure(timing, 'likes', () => countLikeRecords(data, commentId))
-    const repairKey = blobKeys.commentLikeCountRepair(commentId)
+    const queued = mutation.then(() => {}, () => {})
+    likeMutationQueues.set(commentId, queued)
     try {
-        // 点赞响应只做一次精确计数:写缓存后不再反复扫描验证,
-        // 缓存持久化失败时留 repair marker 交给维护脚本精确修复。
-        await measure(timing, 'likes', () => data.setJSON(
-            blobKeys.commentLikeCountCache(commentId),
-            { commentId, count: likes, updatedAt: Date.now() },
-        ))
-        await data.delete(repairKey).catch(() => {})
-    } catch (error) {
-        await data.setJSON(repairKey, {
-            commentId,
-            authoritativeLikes: likes,
-            status: 'open',
-            createdAt: Date.now(),
-            error: String(error?.message || error).slice(0, 300),
-        }).catch(() => {})
-        console.error(JSON.stringify({
-            event: 'comment_like_count_cache_update_failed',
-            commentId,
-            likes,
-            error: String(error?.message || error).slice(0, 300),
-        }))
+        return await mutation
+    } finally {
+        if (likeMutationQueues.get(commentId) === queued) likeMutationQueues.delete(commentId)
     }
-    return { liked: Boolean(liked), likes }
 }
 
 export async function moderateComment(data, commentId, action) {

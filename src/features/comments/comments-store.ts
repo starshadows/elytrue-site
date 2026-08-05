@@ -123,6 +123,8 @@ export function createCommentsStore(api: CommentsApi) {
     if (existing) return existing
     const requestGeneration = generation
     const requestInsertionVersion = insertionVersion
+    const requestLikeVersions = new Map(likeMutationVersions)
+    const pendingLikeAtStart = new Set(state.likePendingIds)
     setLoading(kind, true)
     const request = api
       .list(query)
@@ -141,6 +143,16 @@ export function createCommentsStore(api: CommentsApi) {
             )
           : []
         const visiblePageItems = page.items.filter((item) => !item.hidden)
+        const protectedLikes = new Map(
+          state.items
+            .filter(
+              (item) =>
+                pendingLikeAtStart.has(item.id) ||
+                (likeMutationVersions.get(item.id) ?? 0) !==
+                  (requestLikeVersions.get(item.id) ?? 0),
+            )
+            .map((item) => [item.id, { liked: item.liked, likes: item.likes }]),
+        )
         const origin: CommentRenderOrigin =
           kind === 'initial'
             ? state.items.length > 0
@@ -157,6 +169,10 @@ export function createCommentsStore(api: CommentsApi) {
           for (const id of result.newIds) queueAnimation(id, origin)
         } else merge(visiblePageItems, origin)
         merge(insertedDuringRequest, 'created')
+        for (const [id, like] of protectedLikes) {
+          const current = state.items.find((item) => item.id === id)
+          if (current) Object.assign(current, like)
+        }
         if (kind === 'initial') {
           markPerformanceEvent('comments-state-committed', {
             count: state.items.length,
@@ -196,7 +212,11 @@ export function createCommentsStore(api: CommentsApi) {
           typeof error === 'object' && error !== null
             ? Reflect.get(error, 'todayCount')
             : undefined
-        if (kind === 'initial' && typeof todayCount === 'number') {
+        if (
+          requestGeneration === generation &&
+          kind === 'initial' &&
+          typeof todayCount === 'number'
+        ) {
           state.todayCount = todayCount
           todayCountFresh = true
         }
@@ -266,6 +286,7 @@ export function createCommentsStore(api: CommentsApi) {
       id: item.id,
       item,
       mutationVersion: likeMutationVersions.get(item.id) ?? 0,
+      pending: state.likePendingIds.has(item.id),
     }))
     const batches = []
     for (let index = 0; index < snapshots.length; index += 20) {
@@ -286,6 +307,7 @@ export function createCommentsStore(api: CommentsApi) {
       const item = state.items.find((current) => current.id === snapshot.id)
       if (
         item !== snapshot.item ||
+        snapshot.pending ||
         (likeMutationVersions.get(item.id) ?? 0) !== snapshot.mutationVersion
       )
         continue

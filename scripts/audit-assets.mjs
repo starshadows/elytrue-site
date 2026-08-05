@@ -5,7 +5,11 @@ import { fileURLToPath } from 'node:url'
 
 const root = fileURLToPath(new URL('../', import.meta.url))
 const publicRoot = join(root, 'public')
-const maximumBytes = 25 * 1024 * 1024
+const budgetConfig = JSON.parse(
+  await readFile(join(root, 'config', 'repository-budgets.json'), 'utf8'),
+)
+const budgets = budgetConfig.assetBudgets
+const reportRequested = process.argv.includes('--report')
 const textExtensions = new Set([
   '.css',
   '.html',
@@ -36,6 +40,89 @@ const forbiddenLegacyMarkers = [
 ]
 const failures = []
 const notices = []
+const warnings = []
+const imageExtensions = new Set([
+  '.avif',
+  '.gif',
+  '.ico',
+  '.jpeg',
+  '.jpg',
+  '.png',
+  '.webp',
+])
+const audioExtensions = new Set(['.flac', '.m4a', '.mp3', '.ogg', '.wav'])
+const fontExtensions = new Set(['.otf', '.ttf', '.woff', '.woff2'])
+const iconExtensions = new Set(['.svg'])
+const knownTextExtensions = new Set([
+  '.css',
+  '.html',
+  '.js',
+  '.json',
+  '.txt',
+  '.webmanifest',
+  '.xml',
+])
+
+function formatBytes(bytes) {
+  if (bytes >= 1024 * 1024) return `${(bytes / 1024 / 1024).toFixed(2)} MiB`
+  return `${(bytes / 1024).toFixed(1)} KiB`
+}
+
+function assetCategory(path) {
+  const extension = extname(path).toLowerCase()
+  if (/^assets\/[^/]+\/bg\//u.test(path)) return 'background-preview'
+  if (/^assets\/[^/]+\/originals\//u.test(path)) return 'background-original'
+  if (audioExtensions.has(extension)) return 'audio'
+  if (fontExtensions.has(extension)) return 'font'
+  if (iconExtensions.has(extension)) return 'icon'
+  if (imageExtensions.has(extension)) return 'image'
+  if (knownTextExtensions.has(extension)) return 'text'
+  return 'other-binary'
+}
+
+function categoryBudget(category) {
+  if (category === 'background-preview') return budgets.backgroundPreview
+  if (category === 'background-original') return budgets.backgroundOriginal
+  if (category === 'audio') return budgets.audio
+  if (category === 'font') return budgets.font
+  if (category === 'image' || category === 'icon') return budgets.ordinaryImage
+  return null
+}
+
+function isVersioned(path) {
+  return (
+    /^assets\/[^/]*\d{8}[^/]*\//u.test(path) ||
+    /-[A-Za-z0-9_-]{8,}\.[^.]+$/u.test(path)
+  )
+}
+
+function reportMetadata(path, category) {
+  const firstScreen =
+    category === 'background-preview' ||
+    category === 'font' ||
+    path === 'res/favicon-320.png'
+  const deferrable =
+    category === 'background-original' || category === 'audio'
+      ? 'yes'
+      : category === 'background-preview'
+        ? 'conditional'
+        : 'no'
+  const externalCandidate =
+    category === 'background-original' || category === 'audio'
+  return { firstScreen, deferrable, externalCandidate }
+}
+
+function evaluateBudget(label, actual, budget) {
+  if (actual > budget.maximumBytes) {
+    failures.push(
+      `${label} exceeds budget: ${formatBytes(actual)} > ${formatBytes(budget.maximumBytes)}`,
+    )
+  } else if (actual >= budget.warningBytes) {
+    warnings.push(
+      `${label} is near budget: ${formatBytes(actual)} / ${formatBytes(budget.maximumBytes)}`,
+    )
+  }
+}
 
 async function walk(directory) {
   const files = []
@@ -186,11 +273,24 @@ for (const dynamic of dynamicReferences) {
 
 const hashes = new Map()
 const musicHashes = new Map()
+const assetRecords = []
 for (const [path, file] of publicByPath) {
   const info = await stat(file)
-  if (info.size > maximumBytes) {
+  const category = assetCategory(path)
+  assetRecords.push({ path, size: info.size, category })
+  if (info.size > budgets.edgeOneFileMaximumBytes) {
     failures.push(
       `asset exceeds EdgeOne 25 MiB limit: ${path} (${(info.size / 1024 / 1024).toFixed(2)} MiB)`,
+    )
+  }
+  const budget = categoryBudget(category)
+  if (budget) evaluateBudget(path, info.size, budget)
+  if (category === 'other-binary') {
+    warnings.push(`unknown binary asset: ${path} (${formatBytes(info.size)})`)
+  }
+  if (info.size >= budgets.unversionedLargeWarningBytes && !isVersioned(path)) {
+    warnings.push(
+      `large unversioned asset: ${path} (${formatBytes(info.size)})`,
     )
   }
   const hash = createHash('sha256')
@@ -207,6 +307,24 @@ for (const [path, file] of publicByPath) {
   }
 }
 
+const publicAssetsBytes = assetRecords
+  .filter((record) => record.path.startsWith('assets/'))
+  .reduce((total, record) => total + record.size, 0)
+const publicResBytes = assetRecords
+  .filter((record) => record.path.startsWith('res/'))
+  .reduce((total, record) => total + record.size, 0)
+evaluateBudget(
+  'public/assets total',
+  publicAssetsBytes,
+  budgets.publicAssetsTotal,
+)
+evaluateBudget('public/res total', publicResBytes, budgets.publicResTotal)
+evaluateBudget(
+  'public total',
+  assetRecords.reduce((total, record) => total + record.size, 0),
+  budgets.publicTotal,
+)
+
 for (const paths of hashes.values()) {
   if (paths.length > 1)
     notices.push(`duplicate file content: ${paths.join(', ')}`)
@@ -215,6 +333,35 @@ for (const paths of hashes.values()) {
 if (notices.length > 0) {
   console.log('Asset audit notes:')
   for (const notice of notices) console.log(`- ${notice}`)
+}
+
+if (warnings.length > 0) {
+  console.warn('Asset audit warnings:')
+  for (const warning of warnings) console.warn(`- ${warning}`)
+}
+
+if (reportRequested) {
+  console.log('Asset governance report:')
+  console.log(
+    'Path | Type | Size | Category | Versioned/hash | First screen | Deferrable | External candidate',
+  )
+  for (const record of assetRecords
+    .filter(({ path }) => path.startsWith('assets/') || path.startsWith('res/'))
+    .sort((left, right) => left.path.localeCompare(right.path))) {
+    const metadata = reportMetadata(record.path, record.category)
+    console.log(
+      [
+        `public/${record.path}`,
+        extname(record.path).slice(1).toLowerCase() || 'none',
+        formatBytes(record.size),
+        record.category,
+        isVersioned(record.path) ? 'yes' : 'no',
+        metadata.firstScreen ? 'yes' : 'no',
+        metadata.deferrable,
+        metadata.externalCandidate ? 'yes' : 'no',
+      ].join(' | '),
+    )
+  }
 }
 
 if (failures.length > 0) {
@@ -226,6 +373,6 @@ if (failures.length > 0) {
     await Promise.all(publicFiles.map((file) => stat(file)))
   ).reduce((total, info) => total + info.size, 0)
   console.log(
-    `Asset audit passed: ${publicFiles.length} files, ${(assetBytes / 1024 / 1024).toFixed(2)} MiB, ${references.size} static references.`,
+    `Asset audit passed: ${publicFiles.length} files, ${(assetBytes / 1024 / 1024).toFixed(2)} MiB, ${references.size} static references, ${warnings.length} warning(s).`,
   )
 }

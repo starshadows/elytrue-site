@@ -1,5 +1,6 @@
 import assert from 'node:assert/strict'
 import { describe, test } from 'node:test'
+import { readFile } from 'node:fs/promises'
 import {
     createSession,
     destroySession,
@@ -10,7 +11,13 @@ import {
     binaryResponse,
     DOCUMENT_SECURITY_HEADERS,
     isSecureRequest,
+    parseCookies,
 } from '../server/http.js'
+import {
+    API_SECURITY_HEADERS,
+    BINARY_SECURITY_HEADERS,
+    TRANSPORT_SECURITY_HEADERS,
+} from '../shared/security-headers.js'
 import { blobKeys } from '../server/domain/blob-keys.js'
 import { MemoryStore } from '../server/storage.js'
 
@@ -42,6 +49,36 @@ describe('secure request detection', () => {
 
     test('keeps local HTTP cookies usable', () => {
         assert.equal(isSecureRequest(request('http://127.0.0.1:8788/api')), false)
+    })
+})
+
+describe('cookie parsing', () => {
+    test('decodes normal encoded cookie values', () => {
+        assert.deepEqual(parseCookies(request('https://elytrue.example/api', {
+            Cookie: 'theme=%E6%98%9F%E8%8A%B1',
+        })), { theme: '星花' })
+    })
+
+    test('preserves equals signs in cookie values', () => {
+        assert.deepEqual(parseCookies(request('https://elytrue.example/api', {
+            Cookie: 'token=header.payload=signature',
+        })), { token: 'header.payload=signature' })
+    })
+
+    test('keeps a malformed percent-encoded cookie value deterministically', () => {
+        assert.deepEqual(parseCookies(request('https://elytrue.example/api', {
+            Cookie: 'broken=%E0%A4%A',
+        })), { broken: '%E0%A4%A' })
+    })
+
+    test('does not let a malformed cookie affect valid cookies', () => {
+        assert.deepEqual(parseCookies(request('https://elytrue.example/api', {
+            Cookie: 'first=valid%20value; broken=%ZZ; last=a%3Db',
+        })), {
+            first: 'valid value',
+            broken: '%ZZ',
+            last: 'a=b',
+        })
     })
 })
 
@@ -99,7 +136,22 @@ describe('session cookie security', () => {
     })
 })
 
-test('security headers distinguish documents, API JSON, and binary data', () => {
+test('security headers distinguish documents, API JSON, and binary data', async () => {
+    const edgeone = JSON.parse(await readFile(new URL('../edgeone.json', import.meta.url), 'utf8'))
+    const edgeGlobalHeaders = Object.fromEntries(
+        edgeone.headers.find(rule => rule.source === '/*').headers
+            .map(({ key, value }) => [key, value]),
+    )
+    for (const [key, value] of Object.entries(TRANSPORT_SECURITY_HEADERS)) {
+        assert.equal(edgeGlobalHeaders[key], value, `${key} must match EdgeOne`)
+        assert.equal(DOCUMENT_SECURITY_HEADERS[key], value, `${key} must match documents`)
+        assert.equal(API_SECURITY_HEADERS[key], value, `${key} must match API JSON`)
+        assert.equal(BINARY_SECURITY_HEADERS[key], value, `${key} must match binary responses`)
+    }
+    assert.equal(
+        edgeGlobalHeaders['Referrer-Policy'],
+        DOCUMENT_SECURITY_HEADERS['Referrer-Policy'],
+    )
     assert.equal(
         DOCUMENT_SECURITY_HEADERS['Strict-Transport-Security'],
         'max-age=31536000; includeSubDomains',
@@ -109,12 +161,36 @@ test('security headers distinguish documents, API JSON, and binary data', () => 
         DOCUMENT_SECURITY_HEADERS['Content-Security-Policy'],
         /script-src[^;]*unsafe-inline/u,
     )
+    for (const directive of [
+        "default-src 'self'",
+        "script-src 'self'",
+        "object-src 'none'",
+        "frame-ancestors 'none'",
+        "form-action 'self'",
+    ]) {
+        assert.ok(
+            DOCUMENT_SECURITY_HEADERS['Content-Security-Policy'].split('; ').includes(directive),
+            directive,
+        )
+    }
+    assert.equal(DOCUMENT_SECURITY_HEADERS['Referrer-Policy'], 'strict-origin-when-cross-origin')
+    assert.equal(DOCUMENT_SECURITY_HEADERS['X-Frame-Options'], 'DENY')
+    assert.equal(
+        DOCUMENT_SECURITY_HEADERS['Permissions-Policy'],
+        'camera=(), microphone=(), geolocation=()',
+    )
 
     const api = apiResponse({ ok: true })
     assert.equal(api.headers.get('content-security-policy'), null)
     assert.equal(api.headers.get('strict-transport-security'), 'max-age=31536000; includeSubDomains')
+    assert.equal(api.headers.get('referrer-policy'), API_SECURITY_HEADERS['Referrer-Policy'])
+    assert.equal(api.headers.get('x-frame-options'), API_SECURITY_HEADERS['X-Frame-Options'])
+    assert.equal(api.headers.get('permissions-policy'), API_SECURITY_HEADERS['Permissions-Policy'])
 
     const binary = binaryResponse(new Uint8Array([1]), 'image/png')
     assert.equal(binary.headers.get('content-security-policy'), null)
     assert.equal(binary.headers.get('x-content-type-options'), 'nosniff')
+    assert.equal(binary.headers.get('referrer-policy'), BINARY_SECURITY_HEADERS['Referrer-Policy'])
+    assert.equal(binary.headers.get('x-frame-options'), null)
+    assert.equal(binary.headers.get('permissions-policy'), null)
 })

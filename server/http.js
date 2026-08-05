@@ -1,39 +1,12 @@
-const TRANSPORT_SECURITY_HEADERS = Object.freeze({
-    'Strict-Transport-Security': 'max-age=31536000; includeSubDomains',
-    'X-Content-Type-Options': 'nosniff',
-})
-
-export const DOCUMENT_SECURITY_HEADERS = Object.freeze({
-    ...TRANSPORT_SECURITY_HEADERS,
-    'Content-Security-Policy': [
-        "default-src 'self'",
-        "img-src 'self' data: blob:",
-        "media-src 'self'",
-        "font-src 'self' data:",
-        "style-src 'self' 'unsafe-inline'",
-        "script-src 'self'",
-        "connect-src 'self'",
-        "object-src 'none'",
-        "base-uri 'self'",
-        "frame-ancestors 'none'",
-        "form-action 'self'",
-    ].join('; '),
-    'Referrer-Policy': 'strict-origin-when-cross-origin',
-    'X-Frame-Options': 'DENY',
-    'Permissions-Policy': 'camera=(), microphone=(), geolocation=()',
-})
-
-export const API_SECURITY_HEADERS = Object.freeze({
-    ...TRANSPORT_SECURITY_HEADERS,
-    'Referrer-Policy': 'no-referrer',
-    'X-Frame-Options': 'DENY',
-    'Permissions-Policy': 'camera=(), microphone=(), geolocation=()',
-})
-
-export const BINARY_SECURITY_HEADERS = Object.freeze({
-    ...TRANSPORT_SECURITY_HEADERS,
-    'Referrer-Policy': 'no-referrer',
-})
+export {
+    API_SECURITY_HEADERS,
+    BINARY_SECURITY_HEADERS,
+    DOCUMENT_SECURITY_HEADERS,
+} from '../shared/security-headers.js'
+import {
+    API_SECURITY_HEADERS,
+    BINARY_SECURITY_HEADERS,
+} from '../shared/security-headers.js'
 
 /**
  * @param {unknown} [data]
@@ -105,7 +78,12 @@ export function parseCookies(request) {
         if (separator < 0) continue
         const key = item.slice(0, separator).trim()
         const value = item.slice(separator + 1).trim()
-        if (key) result[key] = decodeURIComponent(value)
+        if (!key) continue
+        try {
+            result[key] = decodeURIComponent(value)
+        } catch {
+            result[key] = value
+        }
     }
     return result
 }

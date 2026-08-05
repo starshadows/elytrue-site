@@ -96,6 +96,18 @@ Comments store 以 `jumping` 和 `jumpNumber` 管理公开编号跳转：请求�
 
 `check:runtime` 同时运行无 Node 类型的 WebWorker/ES2023 middleware 类型检查和导入静态扫描，并阻断 Node 21+ 的 SQLite、`process.getBuiltinModule`、新版 `import.meta` 与文件系统 glob API。`check:server` 使用独立 `tsconfig.server.json` 和 Node 20 类型对生产服务端做 `checkJs`，已启用 `strictNullChecks`、`noUncheckedIndexedAccess`、`alwaysStrict` 等增量严格选项；`test:server` 不加载 Vite、Vue SFC 或 Playwright。`check:build` 扫描最终部署资源，证明服务端、测试、维护脚本、环境文件、source map、EdgeOne CLI 和 Node 专属模块不进入前端 bundle。
 
+### 素材与构建预算
+
+`config/repository-budgets.json` 是仓库静态素材和正式构建产物的唯一预算来源。`npm run check:assets` 在引用、重复内容和 EdgeOne 单文件限制之外，按背景预览、背景原图、普通图片、音频、字体、`public/assets` 总量和 `public/res` 总量执行警戒/失败阈值；未知二进制和超过 512 KiB 的未版本化文件产生可定位警告。`npm run report:assets` 额外输出每个 `public/assets`、`public/res` 文件的类型、大小、类别、版本状态、首屏属性、延迟能力和外部迁移候选状态。
+
+`npm run check:build-budget` 在正式 Vite 构建后检查单个/总 JS、单个/总 CSS、首屏传输上界、最大图片/音频/字体和 `dist` 总量，并同时阻断 source map、服务端、测试、维护脚本、密钥文件进入产物。JS/CSS 同时报告原始和 gzip 大小。首屏传输上界按 HTML 原始大小、入口 JS/CSS gzip、站点字体和“随机首张背景中最大预览”计算；原图下载和音乐不计入首屏。
+
+GitHub Actions 的 `verify` 通过 `build:edgeone` 使用同一套素材/构建预算，`e2e` 仍在 Windows Chromium 视觉基线环境构建同一产物，`server-node20` 继续独立验证 Cloud Functions。PR 运行可取消同一 PR 的旧任务，`main` 推送任务不会被自动取消。
+
+大型原图和音乐是未来外部静态存储候选，但当前没有可验证的非敏感素材域名或 EdgeOne 外部存储凭据，GitHub checkout/EdgeOne Makers 也未确认会拉取 LFS 对象，因此没有迁移、删除或转换现有文件。仓库不执行历史重写；未来迁移必须先验证开发、CI、EdgeOne 构建和生产 CSP 的完整链路。
+
+发布流程见 [发布清单](RELEASE.md)，应用或部署异常见 [回滚清单](ROLLBACK.md)。
+
 ## 平台限制
 
 - Blob 单 key 强一致读取与 `onlyIfNew` 可用，但跨 key 业务事务依赖补偿回滚。

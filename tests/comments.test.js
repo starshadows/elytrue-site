@@ -759,7 +759,7 @@ describe('bounded main comment reads', () => {
         assert.equal(page[0].likes, 501)
     })
 
-    it('never scans like facts on the list path and flags legacy comments for repair', async () => {
+    it('lazily counts legacy like facts and warms the isolated cache', async () => {
         const data = new TrackingStore()
         const id = 1752000000000999
         await data.setJSON(`comments/${id}.json`, {
@@ -772,24 +772,18 @@ describe('bounded main comment reads', () => {
         })
         await data.setJSON(`likes/${id}/legacy-user.json`, { userId: 'legacy-user' })
 
-        // 历史留言缺缓存且无 likeCountVersion=1:列表路径不得扫描点赞事实,
-        // 显示 0 并写 repair marker,由维护脚本精确重建。
         const first = await listComments(data, new URLSearchParams({ from: String(id), count: '1' }), user)
-        assert.equal(first.items[0].likes, 0)
-        assert.equal(data.listPrefixes.some(prefix => prefix.startsWith('likes/')), false)
-        const marker = await data.get(`repairs/comment-like-count/${id}.json`, { type: 'json' })
-        assert.equal(marker.status, 'open')
-        assert.equal(marker.commentId, id)
+        assert.equal(first.items[0].likes, 1)
+        assert.equal(data.listPrefixes.some(prefix => prefix.startsWith('likes/')), true)
+        assert.equal(await data.get(`cache/comment-like-count/${id}.json`, { type: 'json' }).then(value => value.count), 1)
 
         data.listPrefixes = []
         const second = await listComments(data, new URLSearchParams({ from: String(id), count: '1' }), user)
-        assert.equal(second.items[0].likes, 0)
+        assert.equal(second.items[0].likes, 1)
         assert.equal(data.listPrefixes.some(prefix => prefix.startsWith('likes/')), false)
-        const markers = await data.list({ prefix: 'repairs/comment-like-count/' })
-        assert.equal(markers.blobs.length, 1, 'marker 只写一次')
     })
 
-    it('keeps the like cache driven by like operations, not list reads', async () => {
+    it('keeps a warmed legacy cache independent from like operations', async () => {
         const data = new DelayedCacheWarmStore()
         const id = 1752000000000888
         await data.setJSON(`comments/${id}.json`, {
@@ -807,10 +801,10 @@ describe('bounded main comment reads', () => {
             user,
         )
         await listing
-        // 列表路径不再写点赞缓存(只可能写 repair marker)
+        // 列表路径先按事实建立缓存,后续点赞仍以事实记录为准。
         assert.equal(
-            await data.get(`cache/comment-like-count/${id}.json`, { type: 'json' }),
-            null,
+            (await data.get(`cache/comment-like-count/${id}.json`, { type: 'json' })).count,
+            0,
         )
         await setLike(data, id, user, true)
         assert.equal(

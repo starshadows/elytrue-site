@@ -1,4 +1,9 @@
 import { resolveTrustedClientAddress } from './shared/client-identity.js'
+import {
+  API_SECURITY_HEADERS,
+  DOCUMENT_SECURITY_HEADERS,
+  TRANSPORT_SECURITY_HEADERS,
+} from './shared/security-headers.js'
 
 export const RATE_LIMIT_POLICIES = {
   '/api/user/register': { methods: ['POST'], action: 'register', limit: 20, windowSeconds: 60 * 60 },
@@ -8,42 +13,12 @@ export const RATE_LIMIT_POLICIES = {
   '/api/user/recover': { methods: ['POST'], action: 'recover', limit: 5, windowSeconds: 60 * 60 },
   '/api/user/recovery-key': { methods: ['POST'], action: 'recovery_key', limit: 5, windowSeconds: 60 * 60 },
   '/api/user/update': { methods: ['PUT'], action: 'user_update', limit: 30, windowSeconds: 10 * 60 },
+  '/api/user/find': { methods: ['GET'], action: 'user_find', limit: 120, windowSeconds: 10 * 60 },
   '/api/comments/post': { methods: ['POST'], action: 'comment', limit: 10, windowSeconds: 10 * 60 },
   '/api/comments/like': { methods: ['POST', 'DELETE'], action: 'like', limit: 60, windowSeconds: 10 * 60 },
   '/api/comments/report': { methods: ['POST'], action: 'report', limit: 10, windowSeconds: 60 * 60 },
   '/api/uploads/image': { methods: ['POST', 'DELETE'], action: 'upload', limit: 12, windowSeconds: 10 * 60 },
   '/api/admin/bootstrap': { methods: ['POST'], action: 'admin_bootstrap', limit: 5, windowSeconds: 60 * 60 },
-}
-
-const TRANSPORT_SECURITY_HEADERS = {
-  'Strict-Transport-Security': 'max-age=31536000; includeSubDomains',
-  'X-Content-Type-Options': 'nosniff',
-}
-
-const DOCUMENT_SECURITY_HEADERS = {
-  ...TRANSPORT_SECURITY_HEADERS,
-  'Content-Security-Policy': [
-    "default-src 'self'",
-    "img-src 'self' data: blob:",
-    "media-src 'self' blob:",
-    "font-src 'self'",
-    "style-src 'self' 'unsafe-inline'",
-    "script-src 'self'",
-    "connect-src 'self'",
-    "object-src 'none'",
-    "base-uri 'self'",
-    "frame-ancestors 'none'",
-  ].join('; '),
-  'Referrer-Policy': 'strict-origin-when-cross-origin',
-  'X-Frame-Options': 'DENY',
-  'Permissions-Policy': 'camera=(), microphone=(), geolocation=()',
-}
-
-const API_SECURITY_HEADERS = {
-  ...TRANSPORT_SECURITY_HEADERS,
-  'Referrer-Policy': 'no-referrer',
-  'X-Frame-Options': 'DENY',
-  'Permissions-Policy': 'camera=(), microphone=(), geolocation=()',
 }
 
 function withSecurityHeaders(response) {

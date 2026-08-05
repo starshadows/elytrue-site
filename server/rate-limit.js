@@ -10,7 +10,7 @@ export function resetMemoryRateLimitsForTests() {
 /**
  * @typedef {'register' | 'login' | 'recoverIp' | 'recoverAccount' | 'recoveryKey' |
  * 'comment' | 'upload' | 'like' | 'report' | 'admin' | 'userUpdate' | 'logout' |
- * 'logoutAll' | 'bootstrap'} RateLimitAction
+ * 'logoutAll' | 'bootstrap' | 'userFind'} RateLimitAction
  */
 
 /** @type {Record<RateLimitAction, readonly [number, number]>} */
@@ -29,6 +29,7 @@ const POLICIES = {
     logout: [30, 10 * 60],
     logoutAll: [10, 60 * 60],
     bootstrap: [5, 60 * 60],
+    userFind: [120, 10 * 60],
 }
 
 /** @param {RateLimitAction} action @param {string | null} identity */
