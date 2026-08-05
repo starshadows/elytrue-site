@@ -6,6 +6,8 @@ import type {
   CommentsApi,
 } from '../../src/features/comments/comments-api'
 import { createCommentsStore } from '../../src/features/comments/comments-store'
+import { HOME_COMMENTS_CACHE_KEY } from '../../src/features/comments/comments-cache'
+import { reconcileComments } from '../../src/features/comments/comments-reconcile'
 import type {
   CommentPage,
   CommentRecord,
@@ -72,7 +74,95 @@ function apiWith(overrides: Partial<CommentsApi>): CommentsApi {
   }
 }
 
+class TestStorage implements Storage {
+  private values = new Map<string, string>()
+  get length(): number {
+    return this.values.size
+  }
+  clear(): void {
+    this.values.clear()
+  }
+  getItem(key: string): string | null {
+    return this.values.get(key) ?? null
+  }
+  key(index: number): string | null {
+    if (index < 0 || index >= this.values.size) return null
+    return null
+  }
+  removeItem(key: string): void {
+    this.values.delete(key)
+  }
+  setItem(key: string, value: string): void {
+    this.values.set(key, value)
+  }
+}
+
 describe('comments store', () => {
+  test('reconciles by id without replacing unchanged records', () => {
+    const first = comment(1)
+    const second = comment(2)
+    const result = reconcileComments(
+      [first, second],
+      [comment(2), comment(1, { comment: 'changed' }), comment(3)],
+    )
+
+    assert.equal(result.items[0], second)
+    assert.equal(result.items[1], first)
+    assert.equal(first.comment, 'changed')
+    assert.deepEqual(result.newIds, new Set([3]))
+    assert.deepEqual(result.removedIds, new Set())
+    assert.deepEqual(result.changedIds, new Set([1]))
+  })
+
+  test('hydrates public cache before revalidation and animates only new ids', async () => {
+    const storage = new TestStorage()
+    Object.defineProperty(globalThis, 'window', {
+      configurable: true,
+      value: { sessionStorage: storage },
+    })
+    storage.setItem(
+      HOME_COMMENTS_CACHE_KEY,
+      JSON.stringify({
+        version: 1,
+        savedAt: Date.now(),
+        items: [comment(1)],
+        hasMore: false,
+      }),
+    )
+    const request = deferred<CommentPage>()
+    const store = createCommentsStore(
+      apiWith({
+        list() {
+          return request.promise
+        },
+      }),
+    )
+
+    const initializing = store.initialize()
+    const cached = store.state.items[0]
+    assert.equal(cached?.id, 1)
+    assert.equal(store.state.loadingInitial, true)
+
+    request.resolve({
+      items: [comment(1, { comment: 'updated' }), comment(2)],
+      hasMore: false,
+    })
+    await initializing
+
+    assert.equal(store.state.items[0]?.id, 2)
+    assert.equal(
+      store.state.items.find((item) => item.id === 1),
+      cached,
+    )
+    assert.equal(cached?.comment, 'updated')
+    assert.deepEqual(store.consumeAnimationIds(), new Set([2]))
+    assert.equal(
+      store.state.items.some((item) => item.id === 1),
+      true,
+    )
+    delete (globalThis as { window?: unknown }).window
+  })
+
   test('deduplicates an in-flight initial load', async () => {
     const request = deferred<CommentPage>()
     let calls = 0

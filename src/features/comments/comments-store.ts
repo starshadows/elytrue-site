@@ -7,8 +7,12 @@ import {
 } from './comments-api'
 import type { CommentRecord } from './comment-types'
 import { markPerformanceEvent } from '../../lib/performance'
+import { readHomeCommentsCache, writeHomeCommentsCache } from './comments-cache'
+import { reconcileComments } from './comments-reconcile'
 
 type LoadKind = 'initial' | 'newer' | 'older' | 'replacement'
+export type CommentRenderOrigin =
+  'cache' | 'initial-network' | 'revalidated' | 'new' | 'created' | 'pagination'
 
 interface CommentsState {
   items: CommentRecord[]
@@ -60,11 +64,47 @@ export function createCommentsStore(api: CommentsApi) {
   let countRequestVersion = 0
   let viewerLikeVersion = 0
   const likeMutationVersions = new Map<number, number>()
+  const animatedCommentIds = new Set<number>()
+  const enteringCommentIds = new Set<number>()
+  let homeCacheHasMore = false
+  let homeCacheNextCursor: number | null = null
 
-  function merge(items: CommentRecord[]): void {
+  function merge(items: CommentRecord[], origin: CommentRenderOrigin): void {
     const merged = new Map(state.items.map((item) => [item.id, item]))
-    items.forEach((item) => merged.set(item.id, item))
+    for (const item of items) {
+      const current = merged.get(item.id)
+      if (current) {
+        reconcileComments([current], [item])
+      } else {
+        merged.set(item.id, item)
+        queueAnimation(item.id, origin)
+      }
+    }
     state.items = [...merged.values()].sort(compareComments)
+  }
+
+  function queueAnimation(id: number, origin: CommentRenderOrigin): void {
+    if (origin === 'cache') {
+      animatedCommentIds.add(id)
+      return
+    }
+    if (animatedCommentIds.has(id)) return
+    animatedCommentIds.add(id)
+    enteringCommentIds.add(id)
+  }
+
+  function hydrateHomeCache(): boolean {
+    if (state.items.length > 0) return false
+    const cached = readHomeCommentsCache()
+    if (!cached) return false
+    state.items = cached.items.sort(compareComments)
+    homeCacheHasMore = cached.hasMore
+    homeCacheNextCursor = cached.nextCursor ?? null
+    nextOlderCursor = homeCacheNextCursor
+    state.reachedNewest = true
+    state.reachedOldest = !cached.hasMore
+    for (const item of cached.items) queueAnimation(item.id, 'cache')
+    return true
   }
 
   function setLoading(kind: LoadKind, loading: boolean): void {
@@ -100,19 +140,36 @@ export function createCommentsStore(api: CommentsApi) {
                 (insertedVersions.get(item.id) ?? 0) > requestInsertionVersion,
             )
           : []
-        if (replace) state.items = []
-        merge(page.items)
-        merge(insertedDuringRequest)
+        const visiblePageItems = page.items.filter((item) => !item.hidden)
+        const origin: CommentRenderOrigin =
+          kind === 'initial'
+            ? state.items.length > 0
+              ? 'revalidated'
+              : 'initial-network'
+            : kind === 'newer'
+              ? 'new'
+              : kind === 'older'
+                ? 'pagination'
+                : 'revalidated'
+        if (replace) {
+          const result = reconcileComments(state.items, visiblePageItems)
+          state.items = result.items.sort(compareComments)
+          for (const id of result.newIds) queueAnimation(id, origin)
+        } else merge(visiblePageItems, origin)
+        merge(insertedDuringRequest, 'created')
         if (kind === 'initial') {
           markPerformanceEvent('comments-state-committed', {
             count: state.items.length,
           })
         }
-        for (const item of page.items) insertedVersions.delete(item.id)
+        for (const item of visiblePageItems) insertedVersions.delete(item.id)
         if (kind === 'initial') {
           // 首次加载请求的就是最新一页:已到最新端,避免无谓的 loadNewer
           state.reachedNewest = true
           state.reachedOldest = !page.hasMore
+          homeCacheHasMore = page.hasMore
+          homeCacheNextCursor = page.nextCursor ?? null
+          writeHomeCommentsCache(state.items, page.hasMore, page.nextCursor)
         }
         if (kind === 'newer') {
           state.reachedNewest = !page.hasMore
@@ -182,13 +239,21 @@ export function createCommentsStore(api: CommentsApi) {
   }
 
   function initialize(): Promise<void> {
-    if (state.items.length > 0 || state.loadingInitial) {
+    const cacheUsed = hydrateHomeCache()
+    if (state.items.length > 0 && !state.initialError) {
       return (
         pending.get('initial') ??
         pending.get('replacement') ??
-        Promise.resolve()
+        (cacheUsed ? loadInitialAfterCache() : Promise.resolve())
       )
     }
+    if (state.loadingInitial) return pending.get('initial') ?? Promise.resolve()
+    return load('initial', { count: 10 }, true).then(() => {
+      if (!todayCountFresh) void refreshTodayCount()
+    })
+  }
+
+  function loadInitialAfterCache(): Promise<void> {
     return load('initial', { count: 10 }, true).then(() => {
       if (!todayCountFresh) void refreshTodayCount()
     })
@@ -274,11 +339,12 @@ export function createCommentsStore(api: CommentsApi) {
     const wasEmpty = state.items.length === 0
     insertionVersion += 1
     insertedVersions.set(comment.id, insertionVersion)
-    merge([comment])
+    merge([comment], 'created')
     state.reachedNewest = true
     state.initialError = false
     if (wasEmpty) state.currentVisibleTime = comment.time
     state.todayCount += 1
+    writeHomeCommentsCache(state.items, homeCacheHasMore, homeCacheNextCursor)
     void refreshTodayCount()
   }
 
@@ -386,6 +452,12 @@ export function createCommentsStore(api: CommentsApi) {
     return request
   }
 
+  function consumeAnimationIds(): Set<number> {
+    const ids = new Set(enteringCommentIds)
+    enteringCommentIds.clear()
+    return ids
+  }
+
   return {
     hasItems: computed(() => state.items.length > 0),
     finishJump,
@@ -399,6 +471,7 @@ export function createCommentsStore(api: CommentsApi) {
     loadNewer,
     loadOlder,
     clearViewerLikes,
+    consumeAnimationIds,
     refresh,
     refreshTodayCount,
     setCurrentVisibleTime,

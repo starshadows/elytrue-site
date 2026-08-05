@@ -13,7 +13,11 @@ import type {
 } from '../features/comments/comment-types'
 import { BACKGROUNDS } from '../config/assets'
 
-const props = defineProps<{ record: CommentRecord; eager?: boolean }>()
+const props = defineProps<{
+  record: CommentRecord
+  eager?: boolean
+  entering?: boolean
+}>()
 const emit = defineEmits<{ lift: []; reply: [number: number] }>()
 const reply = computed<ReplyPreview | null>(
   () => props.record.replyPreview ?? null,
@@ -98,8 +102,8 @@ function report(): void {
 <template>
   <div
     :id="`#${record.id}`"
-    class="commentBox commentItem commentVisualCard"
-    :class="{ hidden: record.hidden }"
+    class="commentBox commentItem"
+    :class="{ commentEnter: entering, hidden: record.hidden }"
     :data-uid="record.uid ?? ''"
     :data-number="record.displayId"
     :data-timestamp="record.time"

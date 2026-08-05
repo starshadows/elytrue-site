@@ -38,6 +38,8 @@ const panelMode = ref<PanelMode>('auto')
 const pinnedHidden = computed(() => Settings.pinnedHidden)
 const initialRequestSettled = ref(false)
 const initialAnimationStarted = ref(false)
+const pinnedEntering = ref(true)
+const enteringCommentIds = ref(new Set<number>())
 let firstCommentAnimationRecorded = false
 let initialPerformanceFinished = false
 let scrollPaused = false
@@ -289,7 +291,10 @@ watch(
 
 watch(
   () => commentsStore.state.items,
-  () => requestPaginationCheck(),
+  () => {
+    syncEnteringComments()
+    requestPaginationCheck()
+  },
   { flush: 'post' },
 )
 
@@ -359,6 +364,23 @@ function handleInitialAnimationStart(event: AnimationEvent): void {
   initialAnimationStarted.value = true
 }
 
+function syncEnteringComments(): void {
+  const ids = commentsStore.consumeAnimationIds()
+  if (!ids.size) return
+  enteringCommentIds.value = new Set([...enteringCommentIds.value, ...ids])
+}
+
+function finishCommentAnimation(id: number, event: AnimationEvent): void {
+  if (event.animationName !== 'commentBoxAppear') return
+  const next = new Set(enteringCommentIds.value)
+  next.delete(id)
+  enteringCommentIds.value = next
+}
+
+function finishPinnedAnimation(event: AnimationEvent): void {
+  if (event.animationName === 'commentBoxAppear') pinnedEntering.value = false
+}
+
 function hidePinned(): void {
   Settings.pinnedHidden = true
   FloatMsgs.show({
@@ -388,6 +410,7 @@ onMounted(() => {
   document.addEventListener('elytrue:open-comment-editor', onOpenEditor)
   document.addEventListener('pointermove', handleDocumentPointerMove)
   setupPaginationObserver()
+  syncEnteringComments()
   bodyObserver = new MutationObserver(() => requestPaginationCheck())
   bodyObserver.observe(document.body, {
     attributes: true,
@@ -445,8 +468,10 @@ defineExpose({ forceLowerPanelDown, forceLowerPanelUp, pauseScroll })
         v-if="!pinnedHidden"
         id="topComment"
         class="commentBox"
+        :class="{ commentEnter: pinnedEntering }"
         :data-initial-request-settled="initialRequestSettled"
         :data-initial-animation-started="initialAnimationStarted"
+        @animationend="finishPinnedAnimation"
       >
         <img class="bg" src="/assets/elytrue-20260724/bg/portrait1.webp" />
         <div class="bgcover"></div>
@@ -526,11 +551,25 @@ defineExpose({ forceLowerPanelDown, forceLowerPanelUp, pauseScroll })
         v-for="(record, index) in commentsStore.state.items"
         :key="record.id"
         :record="record"
-        :eager="index < 4"
+        :eager="index === 0"
+        :entering="enteringCommentIds.has(record.id)"
         @animationstart="index === 0 && handleInitialAnimationStart($event)"
+        @animationend="finishCommentAnimation(record.id, $event)"
         @lift="forceLowerPanelUp"
         @reply="openEditor"
       />
+      <div
+        v-if="
+          commentsStore.state.initialError && commentsStore.state.items.length
+        "
+        class="commentsRevalidateError"
+      >
+        <span class="ui zh">刷新留言失败</span>
+        <span class="ui en">Failed to refresh messages</span>
+        <button type="button" @click="retryInitialLoad">
+          <span class="ui zh">重试</span><span class="ui en">Retry</span>
+        </button>
+      </div>
       <div
         v-if="
           commentsStore.state.initialError && !commentsStore.state.items.length

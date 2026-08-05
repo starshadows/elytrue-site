@@ -94,6 +94,23 @@ function commentPayload(id = 1) {
   }
 }
 
+function seedHomeComments(page, items, savedAt = Date.now()) {
+  return page.addInitScript(
+    ({ items: cachedItems, savedAt: cacheTime }) => {
+      sessionStorage.setItem(
+        'elytrue:home-comments:v1',
+        JSON.stringify({
+          version: 1,
+          savedAt: cacheTime,
+          items: cachedItems,
+          hasMore: false,
+        }),
+      )
+    },
+    { items, savedAt },
+  )
+}
+
 async function fulfillComments(
   route,
   { delay = 0, items = [commentPayload()], status = 200 } = {},
@@ -233,6 +250,107 @@ test('首次加载:认证、公共留言和统计各自单飞且不误触分页'
   expect(mainListRequests).toBe(0)
 })
 
+test('公共留言缓存先渲染,后台相同数据保持 DOM 身份', async ({ page }) => {
+  const cached = commentPayload(41)
+  await seedHomeComments(page, [cached])
+  await page.route('**/api/user/me', (route) => fulfillMe(route))
+  await page.route('**/api/comments/public*', (route) =>
+    fulfillComments(route, { delay: 1500, items: [cached] }),
+  )
+
+  await page.goto('/', { waitUntil: 'domcontentloaded' })
+  const card = page.locator('#comments .commentItem').first()
+  await expect(card).toBeVisible({ timeout: 100 })
+  await expect(page.locator('#comments .commentSkeleton')).toHaveCount(0)
+  const handle = await card.elementHandle()
+  await page.waitForTimeout(1700)
+  expect(
+    await card.evaluate((element, original) => element === original, handle),
+  ).toBe(true)
+  expect(await card.evaluate((element) => element.getAnimations().length)).toBe(
+    0,
+  )
+})
+
+test('公共留言后台校准只为新增 ID 入场并移除已删除留言', async ({ page }) => {
+  const cached = commentPayload(42)
+  let publicCalls = 0
+  await seedHomeComments(page, [cached])
+  await page.route('**/api/user/me', (route) => fulfillMe(route))
+  await page.route('**/api/comments/public*', (route) => {
+    publicCalls += 1
+    return fulfillComments(route, {
+      delay: 300,
+      items:
+        publicCalls === 1 ? [cached, commentPayload(43)] : [commentPayload(43)],
+    })
+  })
+
+  await page.goto('/', { waitUntil: 'domcontentloaded' })
+  await expect(page.locator('#comments .commentItem')).toHaveCount(1)
+  await expect(page.locator('#comments .commentItem')).toHaveCount(2, {
+    timeout: 2000,
+  })
+  const cards = page.locator('#comments .commentItem')
+  await expect
+    .poll(async () => {
+      return cards.evaluateAll((elements) =>
+        elements.map((element) => element.classList.contains('commentEnter')),
+      )
+    })
+    .toEqual([true, false])
+
+  await page.reload({ waitUntil: 'domcontentloaded' })
+  await expect(page.locator('#comments .commentItem')).toHaveCount(1, {
+    timeout: 2000,
+  })
+  await expect(page.locator('#comments .commentItem').first()).toHaveText(
+    /性能留言 43/,
+  )
+})
+
+test('公共留言缓存损坏或过期时删除缓存并回退骨架网络加载', async ({ page }) => {
+  await page.addInitScript(() => {
+    sessionStorage.setItem('elytrue:home-comments:v1', '{broken')
+  })
+  await page.route('**/api/user/me', (route) => fulfillMe(route))
+  await page.route('**/api/comments/public*', (route) =>
+    fulfillComments(route, { delay: 300, items: [commentPayload(44)] }),
+  )
+  await page.goto('/', { waitUntil: 'domcontentloaded' })
+  await expect(page.locator('#comments .commentSkeleton')).toHaveCount(3)
+  await expect(page.locator('#comments .commentItem')).toHaveCount(1, {
+    timeout: 2000,
+  })
+  expect(
+    await page.evaluate(() =>
+      sessionStorage.getItem('elytrue:home-comments:v1'),
+    ),
+  ).not.toBe('{broken')
+})
+
+test('公共留言校准失败时保留缓存并提供非阻塞重试', async ({ page }) => {
+  const cached = commentPayload(45)
+  let calls = 0
+  await seedHomeComments(page, [cached])
+  await page.route('**/api/user/me', (route) => fulfillMe(route))
+  await page.route('**/api/comments/public*', (route) => {
+    calls += 1
+    return fulfillComments(route, {
+      status: calls === 1 ? 500 : 200,
+      items: [cached],
+    })
+  })
+  await page.goto('/', { waitUntil: 'domcontentloaded' })
+  await expect(page.locator('#comments .commentItem')).toHaveCount(1, {
+    timeout: 100,
+  })
+  await expect(page.locator('.commentsRevalidateError')).toBeVisible()
+  await page.locator('.commentsRevalidateError button').click()
+  await expect(page.locator('.commentsRevalidateError')).toHaveCount(0)
+  await expect(page.locator('#comments .commentItem')).toHaveCount(1)
+})
+
 test('滚动到最旧一端只请求一次历史,5 秒空闲后不循环分页', async ({ page }) => {
   await registerAndStayLoggedIn(page, unique('性能旅人'))
   for (let index = 0; index < 35; index += 1) {
@@ -266,12 +384,12 @@ test('滚动到最旧一端只请求一次历史,5 秒空闲后不循环分页',
   expect(beforeRequests).toBe(1)
 })
 
-test('置顶卡片立即稳定显示,首条普通留言独立播放入场动画', async ({ page }) => {
+test('置顶与普通留言使用同一套入场动画', async ({ page }) => {
   await registerAndStayLoggedIn(page, unique('性能旅人'))
   await postViaApi(page, `动画配置 ${Date.now()}`)
-  await page.reload()
-  await liftPanel(page)
+  await page.reload({ waitUntil: 'domcontentloaded' })
   await expect(page.locator('#comments .commentItem').first()).toBeVisible()
+  await page.waitForTimeout(50)
 
   const animationState = await page.evaluate(() => {
     const pinned = document.getElementById('topComment')
@@ -282,14 +400,20 @@ test('置顶卡片立即稳定显示,首条普通留言独立播放入场动画'
     return {
       pinned: getComputedStyle(pinned).animationName,
       first: first ? getComputedStyle(first).animationName : '',
+      pinnedDuration: getComputedStyle(pinned).animationDuration,
+      firstDuration: first ? getComputedStyle(first).animationDuration : '',
+      pinnedTiming: getComputedStyle(pinned).animationTimingFunction,
+      firstTiming: first ? getComputedStyle(first).animationTimingFunction : '',
       sentinels,
       firstStart: performance
         .getEntriesByName('first-comment-animation-start')
         .at(-1)?.startTime,
     }
   })
-  expect(animationState.pinned).toBe('none')
+  expect(animationState.pinned).toBe('commentBoxAppear')
   expect(animationState.first).toBe('commentBoxAppear')
+  expect(animationState.pinnedDuration).toBe(animationState.firstDuration)
+  expect(animationState.pinnedTiming).toBe(animationState.firstTiming)
   expect(animationState.sentinels.every((name) => name === 'none')).toBe(true)
   expect(animationState.firstStart).toBeTruthy()
 })

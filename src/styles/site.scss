@@ -444,8 +444,7 @@ body > #app > * {
 }
 
 body:not(.fullscreen) #lowerPanel.animating:not(.lowerPanelUp) {
-    animation-name: commentsup;
-    animation-duration: 1.7s;
+    animation: none;
 }
 
 @keyframes commentsup {
@@ -565,17 +564,34 @@ body:not(.fullscreen) #lowerPanel.animating:not(.lowerPanelUp) {
     transition: none;
 }
 
-/* 置顶与普通留言共用的入场动画:仅视觉卡片使用,
-   加载器/错误块/sentinel/编辑器均不得继承 */
-.commentVisualCard {
-    animation-name: commentBoxAppear;
-    animation-duration: 0.5s;
+.commentEnter {
+    animation: commentBoxAppear 0.5s ease both;
 }
 
 #comments .commentSkeleton {
     border: 1px solid rgba(255, 255, 255, 0.42);
     background: rgba(35, 33, 43, 0.48);
     box-shadow: inset 0 0 0 1px rgba(20, 18, 28, 0.12);
+}
+
+#comments .commentsRevalidateError {
+    flex-shrink: 0;
+    display: inline-flex;
+    align-items: center;
+    gap: 0.5rem;
+    margin-right: 1.25rem;
+    color: rgba(40, 35, 45, 0.82);
+    white-space: nowrap;
+}
+
+#comments .commentsRevalidateError button,
+#comments .commentsLoadError button {
+    border: 0;
+    border-radius: 0.375rem;
+    padding: 0.35rem 0.6rem;
+    background: rgba(255, 255, 255, 0.72);
+    color: inherit;
+    cursor: pointer;
 }
 
 #comments .commentSkeleton i {
@@ -966,7 +982,7 @@ body:not(.fullscreen) #lowerPanel.animating:not(.lowerPanelUp) {
 }
 
 @media (prefers-reduced-motion: reduce) {
-    .commentVisualCard,
+    .commentEnter,
     #comments .commentSkeleton i,
     #userInfo .userNameSkeleton {
         animation: none;
