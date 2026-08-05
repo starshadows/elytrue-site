@@ -60,6 +60,7 @@ async function installApiRoutes(
   page,
   {
     authDelay = 0,
+    authGate = null,
     authProfile = profile(),
     authStatus = 200,
     userDelay = 0,
@@ -71,7 +72,8 @@ async function installApiRoutes(
   const counters = { auth: 0, user: 0, avatar: 0 }
   await page.route('**/api/user/me', async (route) => {
     counters.auth += 1
-    await delay(authDelay)
+    if (authGate) await authGate
+    else await delay(authDelay)
     await route.fulfill({
       status: authStatus,
       contentType: 'application/json',
@@ -157,9 +159,13 @@ async function openUser(page) {
 test('hint renders immediately and user comments do not wait for auth', async ({
   page,
 }) => {
+  let releaseAuth = () => {}
+  const authGate = new Promise((resolve) => {
+    releaseAuth = resolve
+  })
   await installHint(page)
   const counters = await installApiRoutes(page, {
-    authDelay: 1500,
+    authGate,
     userDelay: 600,
     userPages: { 'perf-user': [comment(1, '并行加载的留言')] },
   })
@@ -179,6 +185,8 @@ test('hint renders immediately and user comments do not wait for auth', async ({
   })
   expect(counters.auth).toBe(1)
   expect(counters.user).toBe(1)
+  releaseAuth()
+  await expect(userHome.locator('.userinfo')).toContainText('认证用户')
 })
 
 test('same-user auth calibration preserves avatar and comment nodes', async ({
