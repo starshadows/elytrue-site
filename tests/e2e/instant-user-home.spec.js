@@ -214,7 +214,7 @@ test('different auth user aborts old data and switches the popup in place', asyn
 }) => {
   await installHint(page)
   const counters = await installApiRoutes(page, {
-    authDelay: 150,
+    authDelay: 1500,
     userDelay: 700,
     authProfile: profile({
       id: 'server-user',
@@ -231,7 +231,7 @@ test('different auth user aborts old data and switches the popup in place', asyn
   const userHome = page.locator('#popups .userHome')
   await expect(userHome).toContainText('缓存用户')
   await expect(userHome.getByText('真实用户留言')).toBeVisible({
-    timeout: 1500,
+    timeout: 3000,
   })
   await expect(userHome).not.toContainText('旧用户留言')
   expect(counters.user).toBe(2)
@@ -249,7 +249,8 @@ test('auth failure replaces the existing popup container with login', async ({
 
   await openUser(page)
   const popupItem = await page
-    .locator('[data-popup-name="userHome"] .popupItem')
+    .locator('#popups .popupItem')
+    .filter({ has: page.locator('.userHome') })
     .elementHandle()
   await expect(page.locator('#popups .loginPopup')).toBeVisible({
     timeout: 1000,

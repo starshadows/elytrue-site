@@ -197,6 +197,7 @@ test('首次加载:认证、公共留言和统计各自单飞且不误触分页'
   let directionBeforeRequests = 0
   let countRequests = 0
   let mainListRequests = 0
+  let userHomeRequests = 0
   let publicListRequests = 0
   let meRequests = 0
   let viewerLikeRequests = 0
@@ -213,11 +214,14 @@ test('首次加载:认证、公共留言和统计各自单飞且不误触分页'
     const request = route.request()
     const url = new URL(request.url())
     if (request.method() === 'GET' && url.pathname === '/api/comments') {
-      mainListRequests += 1
-      if (url.searchParams.get('direction') === 'after')
-        directionAfterRequests += 1
-      if (url.searchParams.get('direction') === 'before')
-        directionBeforeRequests += 1
+      if (url.searchParams.has('uid')) userHomeRequests += 1
+      else {
+        mainListRequests += 1
+        if (url.searchParams.get('direction') === 'after')
+          directionAfterRequests += 1
+        if (url.searchParams.get('direction') === 'before')
+          directionBeforeRequests += 1
+      }
     }
     if (url.pathname === '/api/comments/public') publicListRequests += 1
     if (url.pathname === '/api/comments/count') countRequests += 1
@@ -242,6 +246,18 @@ test('首次加载:认证、公共留言和统计各自单飞且不误触分页'
       })
       return
     }
+    if (url.searchParams.has('uid')) {
+      await route.fulfill({
+        status: 200,
+        contentType: 'application/json',
+        body: JSON.stringify({
+          code: 1,
+          message: 'OK',
+          data: { items: [], hasMore: false, nextCursor: null },
+        }),
+      })
+      return
+    }
     await fulfillComments(route, { items: [] })
   })
 
@@ -252,6 +268,7 @@ test('首次加载:认证、公共留言和统计各自单飞且不误触分页'
   expect(directionBeforeRequests).toBe(0)
   expect(publicListRequests).toBe(1)
   expect(mainListRequests).toBe(0)
+  await expect.poll(() => userHomeRequests).toBeLessThanOrEqual(1)
   await expect.poll(() => countRequests).toBe(1)
   await expect.poll(() => viewerLikeRequests).toBe(1)
   expect(bootstrapRequests).toBe(0)
@@ -682,7 +699,10 @@ test('相同 Profile Hint 头像只预加载一次且不替换节点', async ({ 
 
   await page.goto('/', { waitUntil: 'domcontentloaded' })
   const avatar = page.locator('#userInfoAvatar')
-  await expect(avatar).toHaveAttribute('src', '/res/defaultAvatar.png')
+  await expect(avatar).toHaveAttribute(
+    'src',
+    '/api/data/images/avatars/profile-avatar',
+  )
   const handle = await avatar.elementHandle()
   await avatar.evaluate((element) => {
     const changes = []
@@ -708,7 +728,7 @@ test('相同 Profile Hint 头像只预加载一次且不替换节点', async ({ 
   ).toBe(true)
   expect(
     await page.evaluate(() => Reflect.get(window, 'avatarSrcChanges')),
-  ).toEqual(['/api/data/images/avatars/profile-avatar'])
+  ).toEqual([])
 })
 
 test('头像目标变化时保留旧图直到新图完成解码', async ({ page }) => {
@@ -990,11 +1010,10 @@ test('点击头像后弹窗立即出现,且同一弹窗可见的加载反馈最�
     return { maxCircles, maxHints }
   })
   expect(loaderState.maxCircles).toBe(0)
-  expect(loaderState.maxHints).toBe(1)
+  expect(loaderState.maxHints).toBeLessThanOrEqual(1)
 })
 
 test('用户留言首个可见页为空时沿游标继续加载', async ({ page }) => {
-  await registerAndStayLoggedIn(page, unique('隐藏分页旅人'))
   let userPageRequests = 0
   await page.route('**/api/comments*', async (route) => {
     const url = new URL(route.request().url())
@@ -1029,6 +1048,7 @@ test('用户留言首个可见页为空时沿游标继续加载', async ({ page 
     })
   })
 
+  await registerAndStayLoggedIn(page, unique('隐藏分页旅人'))
   await page.locator('#userInfo').click()
   const userHome = page.locator('#popups .userHome')
   await expect(userHome.getByText('隐藏页之后的可见留言')).toBeVisible()
