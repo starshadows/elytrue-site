@@ -5,6 +5,7 @@ import {
     listComments,
     setLike,
 } from '../../comments.js'
+import { createHash } from 'node:crypto'
 import { apiResponse, httpError, readJSON } from '../../http.js'
 import { enforceRateLimit } from '../../rate-limit.js'
 import { clientIdentity } from '../../middleware/request-context.js'
@@ -85,8 +86,17 @@ export async function viewerLikes(context, stores, path, auth) {
 export async function postComment(context, stores, path, auth) {
     await enforceRateLimit('comment', clientIdentity(context, auth.user.id))
     const body = await readJSON(context.request, 64 * 1024)
+    const idempotencyKey = context.request.headers.get('X-Idempotency-Key')
+    const operationId = idempotencyKey
+        ? `create-${createHash('sha256')
+            .update(`${auth.user.id}\0${idempotencyKey}`)
+            .digest('hex')}`
+        : null
     const comment = await context.commentTiming.measure('commentBodies', () =>
-        createComment(stores.data, auth.user, body, { timing: context.commentTiming }))
+        createComment(stores.data, auth.user, body, {
+            timing: context.commentTiming,
+            operationId,
+        }))
     return apiResponse(comment, { status: 201, message: '留言已发布' })
 }
 

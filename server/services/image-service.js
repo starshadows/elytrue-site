@@ -301,10 +301,7 @@ export async function cleanupStalePendingImages(stores, user) {
     if (userIndexBlobs.length > 0) {
         const referenced = new Set()
         for (const blob of userIndexBlobs) {
-            const match = String(blob.key).match(/\/by-user\/[^/]+\/(\d+)\.json$/u)
-            const id = match ? Number(match[1]) : 0
-            if (!id) continue
-            const comment = await repository.getComment(id).catch(() => null)
+            const comment = await repository.getUserCommentIndex(blob.key).catch(() => null)
             if (comment?.image) {
                 for (const imageId of String(comment.image).split(',')) {
                     if (imageId) referenced.add(imageId)

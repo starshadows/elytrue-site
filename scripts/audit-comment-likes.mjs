@@ -4,6 +4,11 @@ import { resolve } from 'node:path'
 import { fileURLToPath } from 'node:url'
 import { blobKeys } from '../server/domain/blob-keys.js'
 import { getJSON } from '../server/storage.js'
+import {
+  refreshLatestCommentView,
+  writeCommentViews,
+} from '../server/services/comment-view-service.js'
+import { shanghaiDateString } from '../server/comments.js'
 
 const DATA_STORE = 'elytrue-data'
 const PAGE_SIZE = 500
@@ -48,12 +53,9 @@ export async function auditCommentLikes(data, { fix = false } = {}) {
     }
     commentIds.add(keyId)
     const actual = await countLikes(data, keyId)
-    const cache = await getJSON(data, blobKeys.commentLikeCountCache(keyId))
-    const cached = Number.isSafeInteger(cache?.count)
-      ? cache.count
-      : comment.likeCountVersion === 1
-        ? Math.max(0, Number(comment.likeCount) || 0)
-        : null
+    const cached = Number.isSafeInteger(comment.likes)
+      ? Math.max(0, comment.likes)
+      : null
     if (actual !== cached)
       differences.push({ key: blob.key, comment, cached, actual })
   }
@@ -63,7 +65,7 @@ export async function auditCommentLikes(data, { fix = false } = {}) {
     .map((blob) => /^likes\/(\d+)\/[^/]+\.json$/u.exec(String(blob.key))?.[1])
     .filter((id) => id && !commentIds.has(Number(id)))
     .map((id) => Number(id))
-  const markerBlobs = await listEvery(data, 'repairs/comment-like-count/')
+  const markerBlobs = await listEvery(data, 'repairs/comment-views/')
   const markers = []
   for (const blob of markerBlobs) {
     const marker = await getJSON(data, blob.key)
@@ -75,7 +77,12 @@ export async function auditCommentLikes(data, { fix = false } = {}) {
         orphan: true,
       })
     } else {
-      markers.push({ key: blob.key, commentId: id, orphan: false })
+      markers.push({
+        key: blob.key,
+        commentId: id,
+        orphan: false,
+        reason: marker.reason || null,
+      })
     }
   }
 
@@ -92,30 +99,29 @@ export async function auditCommentLikes(data, { fix = false } = {}) {
       const latest = await getJSON(data, difference.key)
       if (!latest || latest.id !== difference.comment.id) continue
       const actual = await countLikes(data, latest.id)
-      await data.setJSON(blobKeys.commentLikeCountCache(latest.id), {
-        commentId: latest.id,
-        count: actual,
-        updatedAt: Date.now(),
-      })
-      await data.delete(blobKeys.commentLikeCountRepair(latest.id))
+      latest.likes = actual
+      latest.updatedAt = Date.now()
+      await data.setJSON(difference.key, latest)
+      await writeCommentViews(data, latest)
+      await data.delete(blobKeys.commentViewRepair(latest.id))
       report.repaired += 1
     }
-    for (const marker of markers.filter((item) => !item.orphan)) {
+    for (const marker of markers.filter(
+      (item) => !item.orphan && item.reason === 'like',
+    )) {
       const difference = report.differences.find(
         (item) => item.comment.id === marker.commentId,
       )
       if (!difference) {
-        const cache = await getJSON(
-          data,
-          blobKeys.commentLikeCountCache(marker.commentId),
-        )
+        const cache = await getJSON(data, blobKeys.comment(marker.commentId))
         const actual = await countLikes(data, marker.commentId)
-        if (Number.isSafeInteger(cache?.count) && cache.count === actual) {
+        if (Number.isSafeInteger(cache?.likes) && cache.likes === actual) {
           await data.delete(marker.key)
           report.repaired += 1
         }
       }
     }
+    await refreshLatestCommentView(data, shanghaiDateString(Date.now()))
   }
   return report
 }

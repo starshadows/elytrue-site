@@ -1,22 +1,32 @@
-import { randomUUID } from 'node:crypto'
+import { createHash, randomUUID } from 'node:crypto'
 import { httpError } from './http.js'
-import {
-    getJSON,
-    getJSONPublic,
-    listAll,
-    listAllPublic,
-    isPreconditionFailure,
-} from './storage.js'
-import { blobKeys, blobPrefixes } from './domain/blob-keys.js'
-import { createReportRepository } from './repositories/report-repository.js'
-import { preserveCommentNumberBeforeDelete } from './services/report-service.js'
+import { blobKeys } from './domain/blob-keys.js'
 import { mapWithConcurrency } from './lib/concurrency.js'
+import { createCommentRepository } from './repositories/comment-repository.js'
+import { preserveCommentNumberBeforeDelete } from './services/report-service.js'
+import {
+    COMMENT_READ_CONCURRENCY,
+    LATEST_COMMENT_COUNT,
+    countPublishedOnDate,
+    hideCommentViews,
+    isCommentCard,
+    isLatestCommentView,
+    listHiddenViewKeys,
+    listPublicViewKeys,
+    loadPublicCards,
+    markCommentViewRepair,
+    mutateCommentViewsAndRefresh,
+    publicViewId,
+    replyPreview,
+    toCommentCard,
+    userViewId,
+    writeCommentViews,
+} from './services/comment-view-service.js'
+import { getJSON, isPreconditionFailure } from './storage.js'
 import { sanitizePlainText, validateComment } from '../shared/validation.js'
+
 const INTERNAL_ID_THRESHOLD = 1e12
-const READ_CONCURRENCY = 8
 const likeMutationQueues = new Map()
-const DETAIL_CONCURRENCY = Math.max(1, Math.floor(READ_CONCURRENCY / 2))
-const NUMBER_BATCH_SIZE = 48
 
 function measure(timing, category, operation) {
     return timing?.measure(category, operation) ?? operation()
@@ -26,23 +36,6 @@ export function newCommentId() {
     return Date.now() * 1000 + Math.floor(Math.random() * 1000)
 }
 
-/**
- * 把「公开编号或内部 ID」解析为内部 ID。
- * 公开编号(小数值)优先查编号索引;tombstone(硬删除空号)返回 null;
- * 旧数据未迁移时回退按内部 ID 直查。
- */
-export async function resolveCommentId(data, value) {
-    const raw = Number(value)
-    if (!Number.isSafeInteger(raw) || raw <= 0) return null
-    if (raw >= INTERNAL_ID_THRESHOLD) return raw
-    const seat = await getJSON(data, blobKeys.commentNumber(raw))
-    if (!seat || seat.tombstone) return null
-    if (seat?.commentId) return Number(seat.commentId)
-    const legacy = await getJSON(data, blobKeys.comment(raw))
-    return legacy ? raw : null
-}
-
-/** 按 Asia/Shanghai 自然日返回 YYYY-MM-DD */
 export function shanghaiDateString(ms) {
     return new Intl.DateTimeFormat('en-CA', {
         timeZone: 'Asia/Shanghai',
@@ -52,20 +45,32 @@ export function shanghaiDateString(ms) {
     }).format(new Date(ms))
 }
 
-/** 原子认领下一个稳定公开编号(onlyIfNew 占位,并发安全,允许空洞) */
+function isVisibleFor(comment, viewer) {
+    return !comment.hidden || viewer?.role === 'admin' || viewer?.id === comment.uid
+}
+
+export async function resolveCommentId(data, value) {
+    const raw = Number(value)
+    if (!Number.isSafeInteger(raw) || raw <= 0) return null
+    if (raw >= INTERNAL_ID_THRESHOLD) {
+        return await getJSON(data, blobKeys.comment(raw)) ? raw : null
+    }
+    const seat = await getJSON(data, blobKeys.commentNumber(raw))
+    return seat?.commentId && !seat.tombstone ? Number(seat.commentId) : null
+}
+
 async function claimCommentNumber(data, commentId, reservationId) {
-    const hint = Number((await getJSON(data, blobKeys.commentNumberHint))?.value || 0)
+    const repository = createCommentRepository(data)
+    const hint = Number((await repository.getNumberHint())?.value || 0)
     let number = hint + 1
     for (let attempt = 0; attempt < 2000; attempt += 1) {
         try {
-            await data.setJSON(blobKeys.commentNumber(number), {
+            await repository.setNumber(number, {
                 commentId,
                 reservationId,
                 createdAt: Date.now(),
             }, { onlyIfNew: true })
-            await data
-                .setJSON(blobKeys.commentNumberHint, { value: number, updatedAt: Date.now() })
-                .catch(() => {})
+            await repository.setNumberHint({ value: number, updatedAt: Date.now() }).catch(() => {})
             return number
         } catch (error) {
             if (!isPreconditionFailure(error)) throw error
@@ -75,121 +80,129 @@ async function claimCommentNumber(data, commentId, reservationId) {
     throw httpError(500, '留言编号分配失败，请稍后再试')
 }
 
-/**
- * 回滚一次留言创建:删除正文、本次占用的编号(仅当 reservationId 匹配)、
- * 以及可能已写入的用户/日期索引。任何一步失败都记录结构化日志,不抛错。
- */
-/**
- * @param {any} data
- * @param {number} commentId
- * @param {{reservationId: string, number?: number, uid: string, date: string}} resources
- */
-async function rollbackCommentResources(data, commentId, { reservationId, number, uid, date }) {
+async function rollbackCreate(data, comment, reservationId, aliases) {
+    const repository = createCommentRepository(data)
     const failures = []
-    if (number) {
-        const seat = await getJSON(data, blobKeys.commentNumber(number)).catch(() => null)
+    if (comment?.number) {
+        const seat = await repository.getNumber(comment.number).catch(() => null)
         if (seat?.reservationId === reservationId) {
-            await data
-                .delete(blobKeys.commentNumber(number))
-                .catch(error => failures.push(`seat:${error?.message || error}`))
-        } else if (seat && seat.commentId !== commentId) {
-            // 占位不属于本次操作:绝不删除,仅记录
-            console.error(JSON.stringify({
-                event: 'comment_rollback_seat_not_owned',
-                commentId,
-                number,
-                seatCommentId: seat.commentId,
-            }))
+            await repository.deleteNumber(comment.number)
+                .catch(error => failures.push(`number:${error?.message || error}`))
         }
     }
-    await data
-        .delete(blobKeys.comment(commentId))
-        .catch(error => failures.push(`comment:${error?.message || error}`))
-    if (uid) {
-        const userIndexDeletes = [
-            ['userIndex', blobKeys.commentByUser(uid, commentId)],
-            ['userIndexV2', blobKeys.commentByUserV2(uid, commentId)],
-        ]
-        await Promise.all(userIndexDeletes.map(async ([label, key]) => {
-            await data.delete(key).catch(error => failures.push(`${label}:${error?.message || error}`))
-        }))
+    if (comment?.id) {
+        const cleanup = await Promise.allSettled([
+            repository.delete(comment.id),
+            repository.deletePublicView(comment.id),
+            repository.deleteHiddenView(comment.id),
+            repository.deleteUserView(comment.uid, comment.id),
+        ])
+        cleanup.forEach((result, index) => {
+            if (result.status === 'rejected') {
+                failures.push(`resource-${index}:${result.reason?.message || result.reason}`)
+            }
+        })
     }
-    if (date) {
-        await data
-            .delete(blobKeys.commentByDate(date, commentId))
-            .catch(error => failures.push(`dateIndex:${error?.message || error}`))
+    for (const { imageId, alias, activated } of aliases) {
+        if (!activated) continue
+        await data.setJSON(blobKeys.imageAlias('comments', imageId), {
+            ...alias,
+            status: 'pending',
+        }).catch(error => failures.push(`image:${error?.message || error}`))
     }
-    await createReportRepository(data)
-        .deleteNumberReverse(commentId)
-        .catch(error => failures.push(`numberReverse:${error?.message || error}`))
     if (failures.length > 0) {
         console.error(JSON.stringify({
-            event: 'comment_rollback_failed',
-            commentId,
-            number,
+            event: 'comment_create_rollback_failed',
+            commentId: comment?.id,
             failures,
         }))
     }
 }
 
+async function claimCreateOperation(data, operationId, body) {
+    if (!operationId) return null
+    const key = blobKeys.commentOperation(operationId)
+    const requestHash = createHash('sha256').update(JSON.stringify(body)).digest('hex')
+    const existing = await getJSON(data, key)
+    if (existing?.requestHash && existing.requestHash !== requestHash) {
+        throw httpError(409, '幂等键已用于其他留言')
+    }
+    if (existing?.status === 'completed' && isCommentCard(existing.result)) return existing.result
+    if (existing?.status === 'materialized' && isCommentCard(existing.result)) {
+        await data.setJSON(key, {
+            ...existing,
+            status: 'completed',
+            completedAt: Date.now(),
+        })
+        return existing.result
+    }
+    if (existing?.status === 'rolled-back') throw httpError(500, '留言发布失败，请使用新的幂等键重试')
+    if (existing) throw httpError(409, '留言正在发布，请稍后重试')
+    try {
+        await data.setJSON(key, {
+            type: 'comment-create',
+            status: 'claimed',
+            requestHash,
+            createdAt: Date.now(),
+        }, { onlyIfNew: true })
+    } catch (error) {
+        if (!isPreconditionFailure(error)) throw error
+        const winner = await getJSON(data, key)
+        if (winner?.requestHash && winner.requestHash !== requestHash) {
+            throw httpError(409, '幂等键已用于其他留言')
+        }
+        if (winner?.status === 'completed' && isCommentCard(winner.result)) return winner.result
+        throw httpError(409, '留言正在发布，请稍后重试')
+    }
+    return null
+}
+
+async function writeOperation(data, operationId, value) {
+    if (!operationId) return
+    const key = blobKeys.commentOperation(operationId)
+    const existing = await getJSON(data, key)
+    await data.setJSON(key, { ...existing, ...value })
+}
+
 /**
- * 创建留言。一致性约定:
- *   - 只有正文、公开编号、用户索引、日期索引全部写入成功才返回;
- *   - 任一步失败都回滚本操作已写入的资源(正文/编号占位/部分索引),
- *     保证不留指向不存在留言的编号占位;
- *   - 编号占位携带 reservationId,回滚只清理属于本次操作的占位。
- * @param {{idFactory?: () => number, timing?: import('./types.js').ServerTiming}} [options]
+ * Reply previews use publish-time snapshot semantics. Later hiding or deleting
+ * the target does not rewrite replies and does not add reads to list requests.
  */
 export async function createComment(data, user, body, options = {}) {
-    const { idFactory = newCommentId, timing } = options
+    const { idFactory = newCommentId, timing, operationId = null } = options
     const commentError = validateComment(body.comment)
     if (commentError) throw httpError(400, commentError)
     const rawImageIds = Array.isArray(body.imageKeys) ? body.imageKeys.map(String) : []
     if (rawImageIds.length > 3) throw httpError(400, '每条留言最多上传 3 张图片')
     const imageIds = [...new Set(rawImageIds)]
-
-    const aliases = []
-    for (const imageId of imageIds) {
+    const aliases = await mapWithConcurrency(imageIds, async imageId => {
         const alias = await getJSON(data, blobKeys.imageAlias('comments', imageId))
         if (!alias || alias.userId !== user.id) throw httpError(400, '留言图片无效')
-        aliases.push({ imageId, alias })
-    }
+        return { imageId, alias, activated: false }
+    }, COMMENT_READ_CONCURRENCY)
 
     let replyid = null
-    let replyTarget = null
+    let replySnapshot
     if (body.replyid !== undefined && body.replyid !== null && body.replyid !== '') {
-        const targetId = await resolveCommentId(data, body.replyid)
-        replyTarget = targetId ? await getJSON(data, blobKeys.comment(targetId)) : null
-        if (!replyTarget) throw httpError(404, '回复的留言不存在')
-        replyid = targetId
+        replyid = await resolveCommentId(data, body.replyid)
+        const target = replyid ? await getJSON(data, blobKeys.comment(replyid)) : null
+        if (!target || !isVisibleFor(target, user)) throw httpError(404, '回复的留言不存在')
+        replySnapshot = replyPreview(target, replyid)
     }
 
+    const claimedResult = await claimCreateOperation(data, operationId, body)
+    if (claimedResult) return claimedResult
+
+    const repository = createCommentRepository(data)
     const reservationId = randomUUID()
     const createdAt = Date.now()
     const date = shanghaiDateString(createdAt)
-
-    // 1. 写入正文(内部 ID 冲突则换号重试,最多 5 次;以 persisted 为准,不依赖对象真值)
-    /** @type {null | {
-     *   id: number,
-     *   number?: number,
-     *   uid: string,
-     *   sender: string,
-     *   avatar: string,
-     *   comment: string,
-     *   image: string,
-     *   replyid: number | null,
-     *   hidden: boolean,
-     *   likeCount: number,
-     *   likeCountVersion: number,
-     *   createdAt: number,
-     *   time: number,
-     * }} */
     let comment = null
-    let persisted = false
-    for (let attempt = 0; attempt < 5 && !persisted; attempt += 1) {
+    for (let attempt = 0; attempt < 5 && !comment; attempt += 1) {
         const id = idFactory()
-        comment = {
+        const candidate = {
             id,
+            number: 0,
             uid: user.id,
             sender: user.name,
             avatar: user.avatarKey || '',
@@ -197,146 +210,293 @@ export async function createComment(data, user, body, options = {}) {
             image: imageIds.join(','),
             replyid,
             hidden: false,
-            likeCount: 0,
-            likeCountVersion: 1,
+            likes: 0,
+            version: 1,
             createdAt,
             time: Math.floor(createdAt / 1000),
+            ...(replySnapshot ? { replyPreview: replySnapshot } : {}),
         }
         try {
-            await data.setJSON(blobKeys.comment(id), comment, { onlyIfNew: true })
-            persisted = true
+            await repository.set(id, candidate, { onlyIfNew: true })
+            comment = candidate
         } catch (error) {
             if (!isPreconditionFailure(error)) throw error
         }
     }
-    if (!persisted || !comment) {
-        console.error(JSON.stringify({
-            event: 'comment_persist_conflict',
-            userId: user.id,
-            attempts: 5,
-        }))
+    if (!comment) throw httpError(500, '留言创建失败，请稍后再试')
+
+    try {
+        await writeOperation(data, operationId, {
+            type: 'comment-create',
+            status: 'publishing',
+            commentId: comment.id,
+            createdAt,
+        })
+    } catch (error) {
+        await repository.delete(comment.id).catch(() => {})
+        if (operationId) await data.delete(blobKeys.commentOperation(operationId)).catch(() => {})
         throw httpError(500, '留言创建失败，请稍后再试')
     }
 
-    // 2. 认领公开编号,占位必须指向实际写入的内部 ID
-    let number
     try {
-        number = await measure(timing, 'index', () =>
+        comment.number = await measure(timing, 'index', () =>
             claimCommentNumber(data, comment.id, reservationId))
-    } catch (error) {
-        await rollbackCommentResources(data, comment.id, { reservationId, uid: user.id, date })
-        console.error(JSON.stringify({
-            event: 'comment_number_claim_failed',
-            commentId: comment.id,
-            error: String(error?.message || error).slice(0, 300),
-        }))
-        throw error
-    }
-    comment.number = number
-
-    // 3. 回写编号 + 用户索引 + 日期索引;任一失败则回滚全部并返回 500
-    try {
-        const indexValue = { commentId: comment.id, createdAt }
-        const writes = await measure(timing, 'index', () => Promise.allSettled([
-            data.setJSON(blobKeys.comment(comment.id), comment),
-            data.setJSON(blobKeys.commentByUser(user.id, comment.id), indexValue),
-            data.setJSON(blobKeys.commentByUserV2(user.id, comment.id), indexValue),
-            data.setJSON(blobKeys.commentByDate(date, comment.id), indexValue),
-            createReportRepository(data).setNumberReverse(comment.id, number),
-        ]))
-        const failure = writes.find(result => result.status === 'rejected')
-        if (failure?.status === 'rejected') throw failure.reason
-    } catch (error) {
-        await rollbackCommentResources(data, comment.id, { reservationId, number, uid: user.id, date })
-        console.error(JSON.stringify({
-            event: 'comment_index_write_failed',
-            commentId: comment.id,
-            number,
-            error: String(error?.message || error).slice(0, 300),
-        }))
-        throw httpError(500, '留言创建失败，请稍后再试')
-    }
-
-    // 图片 pending→active 是留言成功条件:任一失败则回滚正文/编号/索引,
-    // 并把本次已激活的图片还原为 pending,保证「被引用 ⇔ active」不变量
-    const activated = []
-    try {
-        for (const { imageId, alias } of aliases) {
-            if (alias.status !== 'active') {
-                alias.status = 'active'
-                await data.setJSON(blobKeys.imageAlias('comments', imageId), alias)
-                activated.push({ imageId, alias })
-            }
-        }
-    } catch (error) {
-        await rollbackCommentResources(data, comment.id, { reservationId, number, uid: user.id, date })
-        for (const { imageId, alias } of activated) {
-            alias.status = 'pending'
-            await data.setJSON(blobKeys.imageAlias('comments', imageId), alias).catch(rollbackError => {
-                console.error(JSON.stringify({
-                    event: 'comment_alias_revert_failed',
-                    imageId,
-                    error: String(rollbackError?.message || rollbackError).slice(0, 300),
-                }))
+        await repository.set(comment.id, comment)
+        for (const aliasRecord of aliases) {
+            if (aliasRecord.alias.status === 'active') continue
+            await data.setJSON(blobKeys.imageAlias('comments', aliasRecord.imageId), {
+                ...aliasRecord.alias,
+                status: 'active',
             })
+            aliasRecord.activated = true
         }
-        console.error(JSON.stringify({
-            event: 'comment_alias_activation_failed',
+    } catch (error) {
+        await rollbackCreate(data, comment, reservationId, aliases)
+        await writeOperation(data, operationId, {
+            type: 'comment-create',
+            status: 'rolled-back',
             commentId: comment.id,
-            number,
-            error: String(error?.message || error).slice(0, 300),
-        }))
-        throw httpError(500, '留言创建失败，请稍后再试')
+            updatedAt: Date.now(),
+        }).catch(() => {})
+        throw error?.status ? error : httpError(500, '留言创建失败，请稍后再试')
+    }
+
+    let readModelFailure = null
+    try {
+        await repository.setDateFact(date, comment.id, { commentId: comment.id, createdAt })
+        await mutateCommentViewsAndRefresh(
+            data,
+            date,
+            () => writeCommentViews(data, comment),
+            timing,
+        )
+    } catch (error) {
+        readModelFailure = error
+        await markCommentViewRepair(
+            data,
+            comment.id,
+            error?.commentViewStage === 'latest' ? 'latest-view' : 'create-read-model',
+            error,
+            { date },
+        )
+    }
+
+    const result = toCommentCard(comment)
+    try {
+        await writeOperation(data, operationId, {
+            type: 'comment-create',
+            status: 'materialized',
+            commentId: comment.id,
+            materializedAt: Date.now(),
+            result,
+            ...(readModelFailure ? { repairPending: true } : {}),
+        })
+        await writeOperation(data, operationId, {
+            type: 'comment-create',
+            status: 'completed',
+            commentId: comment.id,
+            completedAt: Date.now(),
+            result,
+        })
+    } catch (error) {
+        await markCommentViewRepair(data, comment.id, 'operation-record', error)
+        throw httpError(500, '留言已发布，请使用相同幂等键重试')
+    }
+    return result
+}
+
+async function attachViewerLikes(data, items, viewer, timing) {
+    if (!viewer || items.length === 0) return items
+    const states = await getViewerLikeStates(data, items.map(item => item.id), viewer, timing)
+    const liked = new Map(states.map(state => [state.id, state.liked]))
+    return items.map(item => ({ ...item, liked: liked.get(item.id) === true }))
+}
+
+async function listUserComments(data, query, viewer, uid, timing) {
+    const count = Math.min(100, Math.max(1, Number(query.get('count') || 20)))
+    const offset = Math.max(0, Number(query.get('from') || 0))
+    const cursorValue = query.get('cursor')
+    const cursor = cursorValue ? Number(cursorValue) : 0
+    if (cursorValue && (!Number.isSafeInteger(cursor) || cursor <= 0)) {
+        throw httpError(400, '留言游标无效')
+    }
+    const response = await measure(timing, 'index', () => data.list({
+        prefix: blobKeys.commentsByUserPrefix(uid),
+        limit: Infinity,
+        consistency: 'strong',
+    }))
+    const ids = (response?.blobs || [])
+        .map(blob => ({ blob, id: userViewId(blob.key) }))
+        .filter(entry => entry.id && (!cursor || entry.id < cursor))
+        .slice(offset)
+    const selected = ids.slice(0, count)
+    const values = await measure(timing, 'commentBodies', () => mapWithConcurrency(
+        selected,
+        entry => getJSON(data, entry.blob.key),
+        COMMENT_READ_CONCURRENCY,
+    ))
+    const items = values
+        .filter(isCommentCard)
+        .filter(comment => isVisibleFor(comment, viewer))
+    return {
+        items,
+        hasMore: ids.length > selected.length,
+        nextCursor: ids.length > selected.length && selected.length > 0
+            ? selected.at(-1).id
+            : null,
+    }
+}
+
+async function directComment(data, commentId, viewer, timing) {
+    const comment = await measure(timing, 'commentBodies', () =>
+        getJSON(data, blobKeys.comment(commentId)))
+    if (!comment || !isVisibleFor(comment, viewer)) return []
+    return attachViewerLikes(data, [toCommentCard(comment)], viewer, timing)
+}
+
+function pageFromLatest(view, count) {
+    const items = view.items.slice(0, count)
+    const hasMore = view.items.length > count || Boolean(view.hasMore)
+    return {
+        items,
+        hasMore,
+        ...(hasMore && items.length > 0 ? { nextCursor: items.at(-1).id } : {}),
+        todayCount: view.todayCount,
+    }
+}
+
+function selectPublicEntries(entries, { count, cursor, direction, from, rawCount, beforeTime }) {
+    let candidates = entries
+    let takeFromEnd = false
+    if (cursor) {
+        if (direction === 'after') {
+            candidates = entries.filter(entry => entry.id > cursor)
+            takeFromEnd = true
+        } else {
+            candidates = entries.filter(entry => entry.id < cursor)
+        }
+    } else if (from) {
+        if (rawCount < 0) {
+            candidates = entries.filter(entry => entry.id > from)
+            takeFromEnd = true
+        } else {
+            candidates = entries.filter(entry => entry.id < from)
+        }
+    } else if (beforeTime) {
+        const boundaryMs = beforeTime * 1000 + (Number.isInteger(beforeTime) ? 999 : 0)
+        const upperId = Math.floor(boundaryMs) * 1000 + 999
+        candidates = entries.filter(entry => entry.id <= upperId)
     }
     return {
-        ...comment,
-        displayId: comment.number ?? comment.id,
-        likes: 0,
-        liked: false,
-        ...(replyid
-            ? { replyPreview: replyPreview(isVisibleFor(replyTarget, user) ? replyTarget : null, replyid) }
+        selected: takeFromEnd ? candidates.slice(-count) : candidates.slice(0, count),
+        hasMore: candidates.length > count,
+        takeFromEnd,
+    }
+}
+
+export async function listComments(data, query, viewer, options = {}) {
+    const { timing, publicRead = false, preferLatest = false } = options
+    const uid = query.get('uid')
+    if (uid) return listUserComments(data, query, viewer, uid, timing)
+
+    const requestedCount = Number(query.get('count') || 30)
+    const count = Math.min(100, Math.max(1, Math.abs(requestedCount)))
+    const cursorRaw = query.get('cursor')
+    const cursor = cursorRaw ? Number(cursorRaw) : 0
+    const direction = query.get('direction')
+    if (cursorRaw && (!Number.isSafeInteger(cursor) || cursor <= 0)) {
+        throw httpError(400, '留言游标无效')
+    }
+    if (cursorRaw && !['after', 'before'].includes(direction)) {
+        throw httpError(400, '留言游标方向无效')
+    }
+    const from = Number(query.get('from') || 0)
+    const beforeTime = Number(query.get('time') || 0)
+
+    const numberParam = query.get('number')
+    if (numberParam) {
+        const seat = await measure(timing, 'index', () =>
+            getJSON(data, blobKeys.commentNumber(Number(numberParam))))
+        if (!seat?.commentId || seat.tombstone) throw httpError(404, '留言不存在')
+        const items = await directComment(data, Number(seat.commentId), viewer, timing)
+        if (items.length === 0) return []
+        return items
+    }
+
+    if (from && requestedCount === 1 && !cursorRaw) {
+        const id = await resolveCommentId(data, from)
+        return id ? directComment(data, id, viewer, timing) : []
+    }
+
+    const initial = !cursorRaw && !from && !beforeTime
+    if ((publicRead || preferLatest) && initial && count <= LATEST_COMMENT_COUNT) {
+        const latest = await measure(timing, 'latestView', () =>
+            createCommentRepository(data).getLatest(publicRead))
+        if (isLatestCommentView(latest, shanghaiDateString(Date.now()))) {
+            return pageFromLatest(latest, count)
+        }
+    }
+
+    const blobs = await measure(timing, 'readView', async () => {
+        const publicBlobs = await listPublicViewKeys(data, { publicRead })
+        if (viewer?.role !== 'admin') return publicBlobs
+        return [...publicBlobs, ...await listHiddenViewKeys(data)]
+            .sort((left, right) => String(left.key).localeCompare(String(right.key)))
+    })
+    const entriesById = new Map()
+    for (const blob of blobs) {
+        const id = publicViewId(blob.key)
+        if (!id || (entriesById.has(id) && !String(blob.key).includes('/public/'))) continue
+        entriesById.set(id, { blob, id })
+    }
+    const entries = [...entriesById.values()]
+        .sort((left, right) => right.id - left.id)
+    const page = selectPublicEntries(entries, {
+        count,
+        cursor,
+        direction,
+        from,
+        rawCount: requestedCount,
+        beforeTime,
+    })
+    const items = await loadPublicCards(data, page.selected.map(entry => entry.blob), {
+        publicRead,
+        includeHidden: viewer?.role === 'admin',
+        timing,
+    })
+    return {
+        items: await attachViewerLikes(data, items, viewer, timing),
+        hasMore: page.hasMore,
+        ...(page.hasMore && page.selected.length > 0
+            ? { nextCursor: page.takeFromEnd ? page.selected[0].id : page.selected.at(-1).id }
             : {}),
     }
 }
 
-/** @param {number | null} [fallbackId] */
-function replyPreview(comment, fallbackId = null) {
-    if (!comment) {
-        return {
-            displayId: fallbackId || 0,
-            sender: '',
-            avatar: '',
-            comment: '留言已删除',
-            deleted: true,
-        }
-    }
-    return {
-        id: comment.id,
-        ...(comment.number ? { number: comment.number } : {}),
-        displayId: comment.number ?? comment.id,
-        sender: comment.sender || '',
-        avatar: comment.avatar || '',
-        comment: comment.comment || '',
-    }
+function isValidCalendarDate(year, month, day) {
+    const probe = new Date(Date.UTC(year, month - 1, day))
+    return probe.getUTCFullYear() === year
+        && probe.getUTCMonth() === month - 1
+        && probe.getUTCDate() === day
 }
 
-/** @typedef {{id?: number, number?: number, displayId: number, sender: string, avatar: string, comment: string, deleted?: boolean}} ReplyPreview */
+export async function countComments(data, query, options = {}) {
+    const date = query.get('date') || shanghaiDateString(Date.now())
+    const match = /^(\d{4})-(\d{2})-(\d{2})$/u.exec(date)
+    if (!match) throw httpError(400, '日期格式不正确')
+    const year = Number(match[1])
+    const month = Number(match[2])
+    const day = Number(match[3])
+    if (!isValidCalendarDate(year, month, day)) throw httpError(400, '日期格式不正确')
+    return countPublishedOnDate(data, date, Boolean(options.publicRead))
+}
 
-/** @returns {Promise<Map<number, ReplyPreview>>} */
-async function loadReplyPreviews(data, comments, viewer, timing) {
-    const replyIds = [...new Set(
-        comments
-            .map(comment => Number(comment.replyid))
-            .filter(id => Number.isSafeInteger(id) && id > 0),
-    )]
-    const previews = new Map()
-    const replies = await measure(timing, 'replyPreviews', () => mapWithConcurrency(replyIds, id =>
-        getJSON(data, blobKeys.comment(id)), READ_CONCURRENCY))
-    replyIds.forEach((id, index) => {
-        const comment = replies[index]
-        previews.set(id, replyPreview(comment && isVisibleFor(comment, viewer) ? comment : null, id))
-    })
-    return previews
+export async function getViewerLikeStates(data, ids, user, timing = null) {
+    return mapWithConcurrency(ids, async id => ({
+        id,
+        liked: Boolean(await measure(timing, 'likes', () =>
+            getJSON(data, blobKeys.commentLike(id, user.id)))),
+    }), COMMENT_READ_CONCURRENCY)
 }
 
 export async function countLikeRecords(data, commentId) {
@@ -359,723 +519,135 @@ export async function countLikeRecords(data, commentId) {
     return count
 }
 
-/**
- * 读取点赞计数展示值。普通读取路径禁止扫描点赞事实记录:
- *  1. 独立点赞缓存存在 → 用缓存;
- *  2. 留言本体有可信计数(likeCountVersion === 1)→ 直接用;
- *  3. 都没有 → 精确扫描历史事实并尝试建立缓存;缓存写失败只留下 marker,
- *     不让列表请求失败。
- */
-async function getCachedLikeCount(data, comment, timing, publicRead = false) {
-    const cacheKey = blobKeys.commentLikeCountCache(comment.id)
-    const readJSON = publicRead ? getJSONPublic : getJSON
-    const cached = await measure(timing, 'likes', () => readJSON(data, cacheKey))
-    if (Number.isSafeInteger(cached?.count) && cached.count >= 0) return cached.count
-    if (comment.likeCountVersion === 1) {
-        return Math.max(0, Number(comment.likeCount) || 0)
-    }
-    try {
-        const actual = await measure(timing, 'likes', () => countLikeRecords(data, comment.id))
+async function claimCommentMutation(data, commentId, type) {
+    const repository = createCommentRepository(data)
+    const owner = randomUUID()
+    for (let attempt = 0; attempt < 20; attempt += 1) {
+        const comment = await repository.get(commentId)
+        if (!comment) return null
+        const version = Math.max(1, Number(comment.version) || 1)
+        if (version > 1) {
+            const previousClaim = await repository.getMutationClaim(commentId, version)
+            if (previousClaim && previousClaim.status !== 'completed') {
+                if (attempt < 19) {
+                    await new Promise(resolve => setTimeout(resolve, 5))
+                    continue
+                }
+                await markCommentViewRepair(data, commentId, 'mutation-claim', new Error('previous mutation is incomplete'), {
+                    mutationType: type,
+                    blockedVersion: version,
+                })
+                throw httpError(500, '留言状态更新中，请稍后重试')
+            }
+        }
+        const nextVersion = version + 1
         try {
-            await data.setJSON(cacheKey, {
-                commentId: comment.id,
-                count: actual,
-                updatedAt: Date.now(),
-            })
-            await data.delete(blobKeys.commentLikeCountRepair(comment.id))
-        } catch (error) {
-            await data.setJSON(blobKeys.commentLikeCountRepair(comment.id), {
-                commentId: comment.id,
-                authoritativeLikes: actual,
-                status: 'open',
+            await repository.claimMutation(commentId, nextVersion, {
+                commentId,
+                version: nextVersion,
+                owner,
+                type,
+                status: 'pending',
                 createdAt: Date.now(),
-                error: String(error?.message || error).slice(0, 300),
-            }).catch(() => {})
-        }
-        return actual
-    } catch (error) {
-        await data.setJSON(blobKeys.commentLikeCountRepair(comment.id), {
-            commentId: comment.id,
-            status: 'open',
-            createdAt: Date.now(),
-            error: String(error?.message || error).slice(0, 300),
-        }, { onlyIfNew: true }).catch(() => {})
-        return 0
-    }
-}
-
-/**
- * 读取单条留言,附加展示编号与点赞状态。
- * @param {Map<number, ReplyPreview> | null} [replyPreviews]
- * @param {import('./types.js').ServerTiming | null} [timing]
- */
-export async function getCommentDetail(
-    data,
-    comment,
-    viewer,
-    replyPreviews = null,
-    timing = null,
-    publicRead = false,
-) {
-    const [likes, likedRecord] = await Promise.all([
-        getCachedLikeCount(data, comment, timing, publicRead),
-        viewer ? measure(timing, 'likes', () =>
-            getJSON(data, blobKeys.commentLike(comment.id, viewer.id))) : null,
-    ])
-    const liked = Boolean(likedRecord)
-    return {
-        ...comment,
-        displayId: comment.number ?? comment.id,
-        likes,
-        liked,
-        ...(comment.replyid
-            ? { replyPreview: replyPreviews?.get(comment.replyid) || await loadReplyPreviews(data, [comment], viewer, timing).then(map => map.get(comment.replyid)) }
-            : {}),
-    }
-}
-
-async function listAllCommentKeys(data, publicRead = false) {
-    const blobs = await (publicRead ? listAllPublic : listAll)(
-        data,
-        blobPrefixes.comments,
-        Infinity,
-    )
-    return blobs.map(blob => blob.key)
-}
-
-/** @param {{lowerId?: number, upperId?: number, startNumber?: number | null, timing?: import('./types.js').ServerTiming, publicRead?: boolean}} [options] */
-async function listRecentNumberedComments(data, count, scanCap, viewer, options = {}) {
-    const {
-        lowerId = 0,
-        upperId = 0,
-        startNumber = null,
-        timing,
-        publicRead = false,
-    } = options
-    const readIndexJSON = publicRead ? getJSONPublic : getJSON
-    const hint = Number(await measure(timing, 'index', async () =>
-        (await readIndexJSON(data, blobKeys.commentNumberHint))?.value || 0))
-    const comments = []
-    const ids = []
-    let number = startNumber === null ? hint : Math.min(hint, startNumber)
-    let scanned = 0
-    let nextCursor = null
-    let truncated = false
-
-    while (number > 0 && scanned < scanCap && comments.length < count) {
-        const batchSize = Math.min(
-            NUMBER_BATCH_SIZE,
-            Math.max(1, count - comments.length),
-            number,
-            scanCap - scanned,
-        )
-        const numbers = Array.from({ length: batchSize }, (_, index) => number - index)
-        const seats = await measure(timing, 'index', () => mapWithConcurrency(
-            numbers,
-            item => readIndexJSON(data, blobKeys.commentNumber(item)),
-            READ_CONCURRENCY,
-        ))
-        scanned += batchSize
-        number -= batchSize
-
-        const batchIds = seats
-            .filter(seat => seat?.commentId && !seat.tombstone)
-            .map(seat => Number(seat.commentId))
-            .filter(id => (!lowerId || id > lowerId) && (!upperId || id < upperId))
-        ids.push(...batchIds)
-        const bodies = await measure(timing, 'commentBodies', () => mapWithConcurrency(
-            batchIds,
-            id => getJSON(data, blobKeys.comment(id)),
-            READ_CONCURRENCY,
-        ))
-        for (let index = 0; index < bodies.length; index += 1) {
-            const comment = bodies[index]
-            const consumedId = batchIds[index]
-            if (comment && isVisibleFor(comment, viewer)) {
-                comments.push(comment)
-                if (consumedId) nextCursor = consumedId
-                if (comments.length >= count) {
-                    // 批次或剩余编号里还有内容时不得误判到底;
-                    // 游标取最后一条已推送留言,避免跳过头尾部已扫描但未返回的留言
-                    truncated = index < bodies.length - 1 || number > 0
-                    break
-                }
-            } else if (consumedId) {
-                nextCursor = consumedId
-            }
-        }
-    }
-    return {
-        items: comments.sort((left, right) => right.id - left.id),
-        ids,
-        exhausted: number <= 0,
-        truncated: truncated || (comments.length < count && number > 0),
-        nextCursor,
-        hasNumberedData: hint > 0,
-    }
-}
-
-async function listNewerNumberedComments(data, count, scanCap, viewer, options = {}) {
-    const { startNumber, timing, publicRead = false } = options
-    const readIndexJSON = publicRead ? getJSONPublic : getJSON
-    const hint = Number(await measure(timing, 'index', async () =>
-        (await readIndexJSON(data, blobKeys.commentNumberHint))?.value || 0))
-    const comments = []
-    const ids = []
-    let number = Math.max(1, Number(startNumber) || 1)
-    let scanned = 0
-    let nextCursor = null
-    let truncated = false
-
-    while (number <= hint && scanned < scanCap && comments.length < count) {
-        const batchSize = Math.min(
-            NUMBER_BATCH_SIZE,
-            Math.max(1, count - comments.length),
-            hint - number + 1,
-            scanCap - scanned,
-        )
-        const numbers = Array.from({ length: batchSize }, (_, index) => number + index)
-        const seats = await measure(timing, 'index', () => mapWithConcurrency(
-            numbers,
-            item => readIndexJSON(data, blobKeys.commentNumber(item)),
-            READ_CONCURRENCY,
-        ))
-        scanned += batchSize
-        number += batchSize
-
-        const batchIds = seats
-            .filter(seat => seat?.commentId && !seat.tombstone)
-            .map(seat => Number(seat.commentId))
-        ids.push(...batchIds)
-        const bodies = await measure(timing, 'commentBodies', () => mapWithConcurrency(
-            batchIds,
-            id => getJSON(data, blobKeys.comment(id)),
-            READ_CONCURRENCY,
-        ))
-        for (let index = 0; index < bodies.length; index += 1) {
-            const comment = bodies[index]
-            const consumedId = batchIds[index]
-            if (comment && isVisibleFor(comment, viewer)) {
-                comments.push(comment)
-                if (consumedId) nextCursor = consumedId
-                if (comments.length >= count) {
-                    truncated = index < bodies.length - 1 || number <= hint
-                    break
-                }
-            } else if (consumedId) {
-                nextCursor = consumedId
-            }
-        }
-    }
-    return {
-        items: comments.sort((left, right) => right.id - left.id),
-        ids,
-        exhausted: number > hint,
-        truncated: truncated || (comments.length < count && number <= hint),
-        nextCursor,
-        hasNumberedData: hint > 0,
-    }
-}
-
-function keyToId(key) {
-    const match = String(key).match(/^comments\/(\d+)\.json$/u)
-    return match ? Number(match[1]) : null
-}
-
-function isVisibleFor(comment, viewer) {
-    return !comment.hidden || viewer?.role === 'admin' || viewer?.id === comment.uid
-}
-
-/**
- * 从升序 ids 中按可见留言数量收集,最多 count 条。
- * time 参数语义(Unix 秒):
- *   - 整数秒 T:包含该秒内全部 comment.time <= T 的留言(边界整秒含 ms 0..999);
- *   - 小数秒 T.5:按精确毫秒上界 createdAt <= T.5*1000 处理。
- * 返回 { items(可见留言,id 降序), truncated(是否因 scanCap 截断) }。
- */
-async function collectVisibleComments(data, ids, {
-    count,
-    from,
-    rawCount,
-    beforeTime,
-    viewer,
-    centered,
-    sourceTruncated = false,
-    timing,
-}) {
-    let selected = []
-    if (from && rawCount === 1) {
-        const target = await resolveCommentId(data, from)
-        selected = target ? [target] : []
-    } else if (from && rawCount < 0) {
-        selected = ids.filter(id => id > from).reverse()
-    } else if (from) {
-        if (centered && ids.includes(from)) {
-            const index = ids.indexOf(from)
-            selected = ids.slice(Math.max(0, index - Math.floor(count / 2)), index + Math.ceil(count / 2)).reverse()
-        } else {
-            selected = ids.filter(id => id < from).reverse()
-        }
-    } else if (beforeTime) {
-        // id = createdAtMs*1000 + r(0 ≤ r < 1000);候选上界覆盖整秒(含 ms 999),
-        // 精确边界由 createdAt 过滤决定
-        const upperBound = beforeTime * 1_000_000 + 1_000_000
-        selected = ids.filter(id => id <= upperBound).reverse()
-    } else {
-        selected = [...ids].reverse()
-    }
-
-    const isWholeSecond = Number.isInteger(beforeTime)
-    const beforeTimeMs = beforeTime * 1000
-    const boundaryMs = beforeTimeMs + (isWholeSecond ? 999 : 0)
-
-    const comments = []
-    const scanCap = Math.max(200, count * 20 + 200)
-    let scanned = 0
-    let nextCursor = null
-    while (scanned < selected.length && scanned < scanCap && comments.length < count) {
-        const batchIds = selected.slice(scanned, Math.min(selected.length, scanned + 32, scanCap))
-        const bodies = await measure(timing, 'commentBodies', () => mapWithConcurrency(
-            batchIds,
-            id => getJSON(data, blobKeys.comment(id)),
-            READ_CONCURRENCY,
-        ))
-        scanned += batchIds.length
-        for (let index = 0; index < bodies.length; index += 1) {
-            const comment = bodies[index]
-            nextCursor = batchIds[index] || nextCursor
-            if (!comment) continue
-            if (beforeTime) {
-                // 有 createdAt 时按毫秒精确过滤;旧数据缺 createdAt 时回落 time 比较
-                const createdAt = Number(comment.createdAt)
-                if (Number.isFinite(createdAt) && createdAt > boundaryMs) continue
-                if (!Number.isFinite(createdAt) && comment.time > beforeTime) continue
-            }
-            if (!isVisibleFor(comment, viewer)) continue
-            comments.push(comment)
-            if (comments.length >= count) break
-        }
-    }
-    return {
-        items: comments,
-        truncated: comments.length < count && (sourceTruncated || selected.length > scanned),
-        nextCursor,
-    }
-}
-
-/** @param {{timing?: import('./types.js').ServerTiming, publicRead?: boolean}} [options] */
-export async function listComments(data, query, viewer, options = {}) {
-    const { timing, publicRead = false } = options
-    const readIndexJSON = publicRead ? getJSONPublic : getJSON
-    const uid = query.get('uid')
-    if (uid) return listUserComments(data, query, viewer, uid, timing)
-
-    const cursorParam = query.get('cursor')
-    const cursorMode = cursorParam !== null
-    const fromRaw = query.get('from')
-    const from = cursorMode ? Number(cursorParam) : (fromRaw ? Number(fromRaw) : 0)
-    const requestedCount = Number(query.get('count') || 30)
-    const rawCount = cursorMode
-        ? (query.get('direction') === 'after'
-            ? -Math.abs(requestedCount)
-            : Math.abs(requestedCount))
-        : requestedCount
-    if (cursorMode && (!Number.isSafeInteger(from) || from <= 0)) {
-        throw httpError(400, '留言游标无效')
-    }
-    if (cursorMode && !['after', 'before'].includes(query.get('direction'))) {
-        throw httpError(400, '留言游标方向无效')
-    }
-    const count = Math.min(100, Math.max(1, Math.abs(rawCount)))
-    const beforeTime = Number(query.get('time') || 0)
-
-    // 按公开编号跳转:number=N 返回该条留言(硬删除 tombstone 返回 404)
-    const numberParam = query.get('number')
-    if (numberParam) {
-        const seat = await measure(timing, 'index', () =>
-            readIndexJSON(data, blobKeys.commentNumber(Number(numberParam))))
-        if (!seat || seat.tombstone) throw httpError(404, '留言不存在')
-        const comment = seat?.commentId
-            ? await measure(timing, 'commentBodies', () =>
-                getJSON(data, blobKeys.comment(Number(seat.commentId))))
-            : null
-        if (!comment) throw httpError(404, '留言不存在')
-        if (comment.hidden && viewer?.role !== 'admin' && viewer?.id !== comment.uid) {
-            return []
-        }
-        return [await getCommentDetail(data, comment, viewer, null, timing)]
-    }
-
-    const scanCap = Math.max(200, count * 20 + 200)
-    const directTarget = from && rawCount === 1 && !cursorMode
-        ? await resolveCommentId(data, from)
-        : null
-    let cursorNumber = 0
-    if (cursorMode) {
-        const reverse = await measure(timing, 'index', () =>
-            readIndexJSON(data, blobKeys.commentNumberReverse(from)))
-        cursorNumber = Number(reverse?.number) || 0
-        if (!cursorNumber) {
-            const cursorComment = await measure(timing, 'commentBodies', () =>
-                getJSON(data, blobKeys.comment(from)))
-            cursorNumber = Number(cursorComment?.number) || 0
-        }
-    }
-    const recent = !numberParam && !directTarget && (!from || cursorMode) && !beforeTime
-        ? await (cursorMode && rawCount < 0 && cursorNumber > 0
-            ? listNewerNumberedComments(data, count, scanCap, viewer, {
-                startNumber: cursorNumber + 1,
-                timing,
-                publicRead,
             })
-            : listRecentNumberedComments(
-                data,
-                count,
-                scanCap,
-                viewer,
-                {
-                    lowerId: cursorMode && rawCount < 0 ? from : 0,
-                    upperId: cursorMode && rawCount > 0 ? from : 0,
-                    startNumber: cursorNumber > 0 ? cursorNumber - 1 : null,
-                    timing,
-                    publicRead,
-                },
-            ))
-        : null
-    /** @type {number[]} */
-    let ids = directTarget ? [directTarget] : (recent?.ids || []).sort((a, b) => a - b)
-    let sourceTruncated = recent?.truncated || false
-    let collected = recent
-        ? {
-            items: recent.items,
-            truncated: recent.truncated,
-            nextCursor: recent.nextCursor,
-        }
-        : null
-    if (
-        (!ids?.length && (!recent || !recent.hasNumberedData))
-        || (recent && recent.exhausted && recent.items.length < count)
-    ) {
-        const keys = await measure(timing, 'index', () =>
-            listAllCommentKeys(data, publicRead))
-        ids = keys.map(keyToId).filter(id => id !== null)
-        sourceTruncated = false
-        collected = null
-    }
-
-    // 按可见留言数量收集(count=1 与居中窗口保持跳转语义)
-    if (!collected) {
-        collected = await collectVisibleComments(data, ids, {
-            count,
-            from,
-            rawCount,
-            beforeTime,
-            viewer,
-            centered: Boolean(!cursorMode && from && rawCount !== 1 && ids.includes(from)),
-            sourceTruncated,
-            timing,
-        })
-    }
-
-    // 旧数据(未迁移)缺少 number 字段时,用 id 顺序作为展示编号
-    const needFallback = collected.items.some(comment => !comment.number)
-    const fallbackRanks = needFallback
-        ? new Map(ids.map((id, index) => [id, index + 1]))
-        : null
-
-    const previews = await loadReplyPreviews(data, collected.items, viewer, timing)
-    const items = await mapWithConcurrency(collected.items, comment => getCommentDetail(data, {
-        ...comment,
-        number: comment.number ?? fallbackRanks?.get(comment.id) ?? comment.id,
-    }, viewer, previews, timing, publicRead), DETAIL_CONCURRENCY)
-    return {
-        items,
-        hasMore: collected.truncated,
-        ...(collected.nextCursor ? { nextCursor: collected.nextCursor } : {}),
-    }
-}
-
-function userV2Id(key) {
-    const match = String(key).match(/-(\d{16})\.json$/u)
-    return match ? Number(match[1]) : null
-}
-
-function encodeUserCursor(cursor, floor, phase = 'v2') {
-    return `v2.${Buffer.from(JSON.stringify({ cursor, floor, phase })).toString('base64url')}`
-}
-
-function decodeUserCursor(value) {
-    if (!String(value).startsWith('v2.')) return null
-    try {
-        const parsed = JSON.parse(Buffer.from(String(value).slice(3), 'base64url').toString())
-        const cursorValid = parsed.cursor === null || typeof parsed.cursor === 'string'
-        const phase = parsed.phase === 'legacy' ? 'legacy' : 'v2'
-        return cursorValid && Number.isSafeInteger(Number(parsed.floor))
-            ? { cursor: parsed.cursor, floor: Number(parsed.floor), phase }
-            : null
-    } catch {
-        return null
-    }
-}
-
-async function listLegacyUserComments(data, viewer, uid, {
-    count,
-    cursor = 0,
-    offset = 0,
-    upperId = 0,
-    timing,
-}) {
-    const blobs = await measure(timing, 'index', () =>
-        listAll(data, blobKeys.commentsByUserPrefix(uid), Infinity))
-    const ids = blobs
-        .map(blob => keyToId(blob.key.replace(/^indexes\/comments\/by-user\/[^/]+\//u, 'comments/')))
-        .filter(id => id && (!cursor || id < cursor) && (!upperId || id < upperId))
-        .sort((a, b) => b - a)
-    const scanCap = Math.max(200, count * 20 + 200)
-    const items = []
-    let skipped = offset
-    let scanned = 0
-
-    while (scanned < ids.length && scanned < scanCap && items.length < count) {
-        const batchSize = Math.min(32, Math.max(1, count - items.length + skipped))
-        const batchIds = ids.slice(scanned, Math.min(ids.length, scanned + batchSize, scanCap))
-        const bodies = await measure(timing, 'commentBodies', () => mapWithConcurrency(
-            batchIds,
-            id => getJSON(data, blobKeys.comment(id)),
-            READ_CONCURRENCY,
-        ))
-        scanned += batchIds.length
-        for (const comment of bodies) {
-            if (!comment || !isVisibleFor(comment, viewer)) continue
-            if (skipped > 0) {
-                skipped -= 1
+            return { comment, nextVersion, owner }
+        } catch (error) {
+            if (!isPreconditionFailure(error)) throw error
+            const latest = await repository.get(commentId)
+            if (!latest) return null
+            if (Number(latest.version || 1) >= nextVersion) continue
+            if (attempt < 19) {
+                await new Promise(resolve => setTimeout(resolve, 5))
                 continue
             }
-            items.push(comment)
-            if (items.length >= count) break
+            await markCommentViewRepair(data, commentId, 'mutation-claim', error, {
+                mutationType: type,
+                blockedVersion: nextVersion,
+            })
+            throw httpError(500, '留言状态更新中，请稍后重试')
         }
     }
-    const hasMore = scanned < ids.length
-    return {
-        items,
-        hasMore,
-        nextCursor: hasMore && scanned > 0 ? ids[scanned - 1] : null,
-    }
+    throw httpError(409, '留言状态已变化，请重试')
 }
 
-async function hasLegacyUserCommentsBefore(data, uid, floor, timing) {
-    const page = await measure(timing, 'index', () => data.list({
-        prefix: blobKeys.commentsByUserPrefix(uid),
-        limit: 1,
-        paginate: false,
-        consistency: 'strong',
-    }))
-    const first = page?.blobs?.[0]
-    if (!first) return false
-    const id = keyToId(first.key.replace(/^indexes\/comments\/by-user\/[^/]+\//u, 'comments/'))
-    return Boolean(id && id < floor)
-}
-
-async function listUserComments(data, query, viewer, uid, timing) {
-    const offset = Math.max(0, Number(query.get('from') || 0))
-    const cursorValue = query.get('cursor') || ''
-    const count = Math.min(100, Math.max(1, Number(query.get('count') || 20)))
-    const v2Cursor = decodeUserCursor(cursorValue)
-    if (cursorValue && !v2Cursor) {
-        const legacyCursor = Number(cursorValue)
-        if (!Number.isSafeInteger(legacyCursor) || legacyCursor <= 0) {
-            throw httpError(400, '留言游标无效')
-        }
-        return listLegacyUserComments(data, viewer, uid, {
-            count,
-            cursor: legacyCursor,
-            offset,
-            timing,
+async function completeCommentMutation(data, commentId, claim) {
+    const repository = createCommentRepository(data)
+    const current = await repository.getMutationClaim(commentId, claim.nextVersion).catch(() => null)
+    if (current?.owner === claim.owner) {
+        await repository.setMutationClaim(commentId, claim.nextVersion, {
+            ...current,
+            status: 'completed',
+            completedAt: Date.now(),
         })
     }
-    if (v2Cursor?.phase === 'legacy') {
-        return listLegacyUserComments(data, viewer, uid, {
-            count,
-            offset,
-            upperId: v2Cursor.floor,
-            timing,
-        })
-    }
+}
 
-    const items = []
-    const scanCap = Math.max(200, count * 20 + 200)
-    let scanned = 0
-    let cursor = v2Cursor?.cursor || undefined
-    let floor = v2Cursor?.floor || 0
-    let skipped = offset
-    let sawV2 = Boolean(v2Cursor)
-
-    while (scanned < scanCap && items.length < count) {
-        const page = await measure(timing, 'index', () => data.list({
-            prefix: blobKeys.commentsByUserV2Prefix(uid),
-            limit: Math.min(32, Math.max(1, count - items.length + skipped), scanCap - scanned),
-            paginate: false,
-            ...(cursor ? { cursor } : {}),
-            consistency: 'strong',
-        }))
-        const ids = (page?.blobs || []).map(blob => userV2Id(blob.key)).filter(Boolean)
-        if (ids.length === 0) break
-        sawV2 = true
-        scanned += ids.length
-        floor = floor ? Math.min(floor, ...ids) : Math.min(...ids)
-        const bodies = await measure(timing, 'commentBodies', () => mapWithConcurrency(
-            ids,
-            id => getJSON(data, blobKeys.comment(id)),
-            READ_CONCURRENCY,
-        ))
-        for (const comment of bodies) {
-            if (!comment || !isVisibleFor(comment, viewer)) continue
-            if (skipped > 0) {
-                skipped -= 1
-                continue
-            }
-            items.push(comment)
-        }
-        const next = page?.cursor
-        if (next && next !== cursor) {
-            cursor = next
-            if (items.length < count && scanned < scanCap) continue
-            return {
-                items: items.slice(0, count),
-                hasMore: true,
-                nextCursor: encodeUserCursor(cursor, floor),
-            }
-        }
-        cursor = undefined
-        break
-    }
-
-    const hasLegacy = sawV2
-        ? await hasLegacyUserCommentsBefore(data, uid, floor, timing)
-        : true
-    if (sawV2 && items.length >= count) {
-        return {
-            items: items.slice(0, count),
-            hasMore: hasLegacy,
-            nextCursor: hasLegacy ? encodeUserCursor(null, floor, 'legacy') : null,
-        }
-    }
-
-    if (!hasLegacy) return { items, hasMore: false, nextCursor: null }
-
-    // v2 intentionally contains only new writes. Once exhausted, use the unchanged
-    // legacy index below the oldest v2 id to avoid returning the dual-written rows twice.
-    const legacy = await listLegacyUserComments(data, viewer, uid, {
-        count: Math.max(1, count - items.length),
-        offset: skipped,
-        upperId: sawV2 ? floor : 0,
-        timing,
-    })
-    items.push(...legacy.items.slice(0, count - items.length))
-    return {
-        items,
-        hasMore: legacy.hasMore,
-        nextCursor: legacy.nextCursor,
+async function releaseCommentMutation(data, commentId, claim) {
+    if (!claim) return
+    const repository = createCommentRepository(data)
+    const current = await repository.getMutationClaim(commentId, claim.nextVersion).catch(() => null)
+    if (current?.owner === claim.owner) {
+        await repository.deleteMutationClaim(commentId, claim.nextVersion).catch(() => {})
     }
 }
 
-function isValidCalendarDate(year, month, day) {
-    const probe = new Date(Date.UTC(year, month - 1, day))
-    return probe.getUTCFullYear() === year
-        && probe.getUTCMonth() === month - 1
-        && probe.getUTCDate() === day
-}
-
-export async function countComments(data, query, options = {}) {
-    const date = query.get('date') || shanghaiDateString(Date.now())
-    const match = /^(\d{4})-(\d{2})-(\d{2})$/u.exec(date)
-    if (!match) throw httpError(400, '日期格式不正确')
-    const year = Number(match[1])
-    const month = Number(match[2])
-    const day = Number(match[3])
-    if (!isValidCalendarDate(year, month, day)) throw httpError(400, '日期格式不正确')
-    const blobs = await (options.publicRead ? listAllPublic : listAll)(
-        data,
-        blobKeys.commentsByDatePrefix(date),
-        Infinity,
-    )
-    return blobs.length
-}
-
-export async function getViewerLikeStates(data, ids, user, timing = null) {
-    return mapWithConcurrency(ids, async id => ({
-        id,
-        liked: Boolean(await measure(timing, 'likes', () =>
-            getJSON(data, blobKeys.commentLike(id, user.id)))),
-    }), READ_CONCURRENCY)
-}
-
-/** @param {{timing?: import('./types.js').ServerTiming}} [options] */
 export async function setLike(data, commentId, user, liked, options = {}) {
     const { timing } = options
-    const comment = await measure(timing, 'commentBodies', () =>
-        getJSON(data, blobKeys.comment(commentId)))
-    if (!comment || comment.hidden) throw httpError(404, '留言不存在')
     const previous = likeMutationQueues.get(commentId) || Promise.resolve()
     const mutation = previous.then(async () => {
-        const key = blobKeys.commentLike(commentId, user.id)
-        await measure(timing, 'likes', async () => {
-            if (liked) {
-                await data.setJSON(key, { userId: user.id, createdAt: Date.now() }, { onlyIfNew: true }).catch(error => {
-                    if (!isPreconditionFailure(error)) throw error
-                })
-            } else {
-                await data.delete(key)
-            }
-        })
-        const repairKey = blobKeys.commentLikeCountRepair(commentId)
-        let likes
+        const repository = createCommentRepository(data)
+        const claim = await measure(timing, 'commentBodies', () =>
+            claimCommentMutation(data, commentId, liked ? 'like' : 'unlike'))
+        const comment = claim?.comment
+        if (!claim || !comment || comment.hidden || comment.deleting) {
+            await releaseCommentMutation(data, commentId, claim)
+            throw httpError(404, '留言不存在')
+        }
+        const factKey = blobKeys.commentLike(commentId, user.id)
+        let canonicalCommitted = false
         try {
-            likes = await measure(timing, 'likes', () => countLikeRecords(data, commentId))
+            await measure(timing, 'likes', async () => {
+                if (liked) {
+                    await data.setJSON(factKey, {
+                        userId: user.id,
+                        createdAt: Date.now(),
+                    }, { onlyIfNew: true }).catch(error => {
+                        if (!isPreconditionFailure(error)) throw error
+                    })
+                } else {
+                    await data.delete(factKey)
+                }
+            })
+            const likes = await measure(timing, 'likes', () => countLikeRecords(data, commentId))
+            comment.likes = likes
+            comment.version = claim.nextVersion
+            comment.updatedAt = Date.now()
+            await repository.set(commentId, comment)
+            canonicalCommitted = true
+            try {
+                await mutateCommentViewsAndRefresh(
+                    data,
+                    shanghaiDateString(Date.now()),
+                    () => writeCommentViews(data, comment),
+                    timing,
+                )
+            } catch (error) {
+                await markCommentViewRepair(data, commentId, 'like', error, {
+                    authoritativeLikes: likes,
+                })
+            }
+            await completeCommentMutation(data, commentId, claim)
+            return { liked: Boolean(liked), likes }
         } catch (error) {
-            await data.setJSON(repairKey, {
-                commentId,
-                status: 'open',
-                createdAt: Date.now(),
-                error: String(error?.message || error).slice(0, 300),
-            }).catch(() => {})
+            if (!canonicalCommitted) {
+                const authoritativeLikes = await countLikeRecords(data, commentId).catch(() => null)
+                await markCommentViewRepair(data, commentId, 'like-canonical', error, {
+                    authoritativeLikes,
+                })
+                await releaseCommentMutation(data, commentId, claim)
+            }
             throw error
         }
-        try {
-            // 同一留言在当前实例内串行完成事实、精确计数和缓存写入,避免旧计数覆盖新计数。
-            await measure(timing, 'likes', () => data.setJSON(
-                blobKeys.commentLikeCountCache(commentId),
-                { commentId, count: likes, updatedAt: Date.now() },
-            ))
-            try {
-                await data.delete(repairKey)
-            } catch (error) {
-                await data.setJSON(repairKey, {
-                    commentId,
-                    authoritativeLikes: likes,
-                    status: 'open',
-                    createdAt: Date.now(),
-                    error: String(error?.message || error).slice(0, 300),
-                }).catch(() => {})
-            }
-        } catch (error) {
-            await data.setJSON(repairKey, {
-                commentId,
-                authoritativeLikes: likes,
-                status: 'open',
-                createdAt: Date.now(),
-                error: String(error?.message || error).slice(0, 300),
-            }).catch(() => {})
-            console.error(JSON.stringify({
-                event: 'comment_like_count_cache_update_failed',
-                commentId,
-                likes,
-                error: String(error?.message || error).slice(0, 300),
-            }))
-        }
-        return { liked: Boolean(liked), likes }
-    }, async () => {
-        throw new Error('点赞操作队列失败')
     })
     const queued = mutation.then(() => {}, () => {})
     likeMutationQueues.set(commentId, queued)
@@ -1087,74 +659,76 @@ export async function setLike(data, commentId, user, liked, options = {}) {
 }
 
 export async function moderateComment(data, commentId, action) {
-    const key = blobKeys.comment(commentId)
-    const comment = await getJSON(data, key)
-    if (!comment) throw httpError(404, '留言不存在')
-    if (action === 'delete') {
-        // 可恢复顺序:先写 tombstone(失败则中止,状态未变)→ 删正文 → 删用户索引。
-        // 用户索引删除失败:写 repair marker(repairs/comment-delete/{id}.json)供迁移/修复任务处理,
-        // 不能无标记返回成功。
-        await preserveCommentNumberBeforeDelete(data, comment)
-        if (comment.number) {
-            const seatKey = blobKeys.commentNumber(comment.number)
-            const seat = await getJSON(data, seatKey)
-            if (seat) {
-                try {
-                    await data.setJSON(seatKey, {
-                        ...seat,
-                        commentId: comment.id,
-                        number: comment.number,
-                        tombstone: true,
-                        deletedAt: Date.now(),
-                    })
-                } catch (error) {
-                    console.error(JSON.stringify({
-                        event: 'comment_seat_tombstone_failed',
-                        commentId,
-                        number: comment.number,
-                        error: String(error?.message || error).slice(0, 300),
-                    }))
-                    throw httpError(500, '管理操作失败，请稍后再试')
-                }
-            }
-        }
-        // 日期索引保留:今日留言统计口径为「当天曾发布」(见 docs)
-        // likes/reports 保留:作为审计记录,不做清理
-        await data.delete(key)
-        const userIndexKeys = [
-            blobKeys.commentByUser(comment.uid, commentId),
-            blobKeys.commentByUserV2(comment.uid, commentId),
-        ]
-        const deleteResults = await Promise.allSettled(userIndexKeys.map(indexKey => data.delete(indexKey)))
-        const failedIndexKeys = userIndexKeys.filter((_, index) => deleteResults[index]?.status === 'rejected')
-        if (failedIndexKeys.length > 0) {
-            const error = deleteResults.find(result => result.status === 'rejected')?.reason
-            await data.setJSON(blobKeys.commentDeleteRepair(commentId), {
-                commentId,
-                number: comment.number ?? null,
-                uid: comment.uid,
-                step: 'user-index',
-                failedIndexKeys,
-                status: 'open',
-                createdAt: Date.now(),
-            }, { onlyIfNew: true }).catch(markerError => {
-                console.error(JSON.stringify({
-                    event: 'comment_repair_marker_failed',
-                    commentId,
-                    error: String(markerError?.message || markerError).slice(0, 300),
-                }))
-            })
-            console.error(JSON.stringify({
-                event: 'comment_user_index_delete_failed',
-                commentId,
-                uid: comment.uid,
-                error: String(error?.message || error).slice(0, 300),
-            }))
-        }
-        return
+    if (!['delete', 'hide', 'restore'].includes(action)) {
+        throw httpError(400, '管理操作无效')
     }
-    if (!['hide', 'restore'].includes(action)) throw httpError(400, '管理操作无效')
-    comment.hidden = action === 'hide'
+    const repository = createCommentRepository(data)
+    const claim = await claimCommentMutation(data, commentId, `moderate-${action}`)
+    const comment = claim?.comment
+    if (!claim || !comment) {
+        if (action === 'delete') {
+            const marker = await getJSON(data, blobKeys.commentViewRepair(commentId))
+            if (marker?.deleted) {
+                await mutateCommentViewsAndRefresh(
+                    data,
+                    shanghaiDateString(Date.now()),
+                    async () => {
+                        await repository.deletePublicView(commentId)
+                        await repository.deleteHiddenView(commentId)
+                        if (marker.uid) await repository.deleteUserView(marker.uid, commentId)
+                    },
+                )
+            }
+            return
+        }
+        throw httpError(404, '留言不存在')
+    }
+    const date = shanghaiDateString(Date.now())
+    const original = structuredClone(comment)
+    comment.hidden = action !== 'restore'
+    comment.deleting = action === 'delete'
+    comment.version = claim.nextVersion
     comment.updatedAt = Date.now()
-    await data.setJSON(key, comment)
+    let canonicalCommitted = false
+    try {
+        await mutateCommentViewsAndRefresh(data, date, async () => {
+            if (action === 'hide' || action === 'delete') {
+                await hideCommentViews(data, comment)
+            }
+            try {
+                await repository.set(comment.id, comment)
+                canonicalCommitted = true
+            } catch (error) {
+                if (action !== 'restore') await writeCommentViews(data, original).catch(() => {})
+                throw error
+            }
+            if (action === 'restore') await writeCommentViews(data, comment)
+            if (action !== 'delete') return
+
+            await preserveCommentNumberBeforeDelete(data, comment)
+            const seat = await repository.getNumber(comment.number)
+            if (seat) {
+                await repository.setNumber(comment.number, {
+                    ...seat,
+                    commentId: comment.id,
+                    number: comment.number,
+                    tombstone: true,
+                    deletedAt: Date.now(),
+                })
+            }
+            await repository.delete(comment.id)
+            await repository.deleteUserView(comment.uid, comment.id)
+            await repository.deleteHiddenView(comment.id)
+        })
+        if (action !== 'delete') await completeCommentMutation(data, commentId, claim)
+    } catch (error) {
+        if (canonicalCommitted) await completeCommentMutation(data, commentId, claim)
+        else await releaseCommentMutation(data, commentId, claim)
+        await markCommentViewRepair(data, comment.id, action, error, {
+            uid: comment.uid,
+            number: comment.number,
+            deleted: action === 'delete',
+        })
+        throw httpError(500, '管理操作失败，请稍后再试')
+    }
 }

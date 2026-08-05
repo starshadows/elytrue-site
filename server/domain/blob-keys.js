@@ -1,9 +1,8 @@
 /**
  * EdgeOne Blob key contract.
  *
- * These helpers intentionally preserve the historical strings byte-for-byte.
- * Changing padding, prefixes, suffixes, or identifier normalization would make
- * existing production data unreachable.
+ * Comment read-model keys intentionally have no legacy aliases. The site had
+ * no production comments when this schema was introduced.
  */
 
 const paddedCommentId = id => String(id).padStart(16, '0')
@@ -14,7 +13,8 @@ export const blobPrefixes = Object.freeze({
     comments: 'comments/',
     commentNumbers: 'indexes/comments/number/',
     commentUsers: 'indexes/comments/by-user/',
-    commentUsersV2: 'indexes/comments/by-user-v2/',
+    commentPublicViews: 'views/comments/public/',
+    commentHiddenViews: 'views/comments/hidden/',
     commentAliases: 'uploads/aliases/comments/',
     avatarAliases: 'uploads/aliases/avatars/',
     reports: 'reports/',
@@ -31,23 +31,27 @@ export const blobKeys = Object.freeze({
 
     comment: commentId => `${blobPrefixes.comments}${paddedCommentId(commentId)}.json`,
     commentNumber: number => `${blobPrefixes.commentNumbers}${Number(number)}.json`,
-    commentNumberReverse: commentId =>
-        `indexes/comments/by-id/${paddedCommentId(commentId)}.json`,
     commentsByUserPrefix: userId => `${blobPrefixes.commentUsers}${userId}/`,
     commentByUser: (userId, commentId) =>
-        `${blobPrefixes.commentUsers}${userId}/${paddedCommentId(commentId)}.json`,
-    commentsByUserV2Prefix: userId => `${blobPrefixes.commentUsersV2}${userId}/`,
-    commentByUserV2: (userId, commentId) =>
-        `${blobPrefixes.commentUsersV2}${userId}/${invertedCommentId(commentId)}-${paddedCommentId(commentId)}.json`,
+        `${blobPrefixes.commentUsers}${userId}/${invertedCommentId(commentId)}-${paddedCommentId(commentId)}.json`,
+    commentPublicView: commentId =>
+        `${blobPrefixes.commentPublicViews}${invertedCommentId(commentId)}-${paddedCommentId(commentId)}.json`,
+    commentPublicViewsPrefix: blobPrefixes.commentPublicViews,
+    commentHiddenView: commentId =>
+        `${blobPrefixes.commentHiddenViews}${invertedCommentId(commentId)}-${paddedCommentId(commentId)}.json`,
+    commentHiddenViewsPrefix: blobPrefixes.commentHiddenViews,
+    commentsLatestView: 'views/comments/latest.json',
+    commentsLatestLock: 'operations/comments-latest-lock.json',
     commentsByDatePrefix: date => `dates/${date}/`,
     commentByDate: (date, commentId) => `dates/${date}/${paddedCommentId(commentId)}.json`,
     commentNumberHint: 'meta/comments-number-hint.json',
     commentLikePrefix: commentId => `likes/${commentId}/`,
     commentLike: (commentId, userId) => `likes/${commentId}/${userId}.json`,
-    commentLikeCountCache: commentId => `cache/comment-like-count/${commentId}.json`,
     commentReport: (commentId, userId) => `reports/${commentId}/${userId}.json`,
-    commentDeleteRepair: commentId => `repairs/comment-delete/${commentId}.json`,
-    commentLikeCountRepair: commentId => `repairs/comment-like-count/${commentId}.json`,
+    commentViewRepair: commentId => `repairs/comment-views/${commentId}.json`,
+    commentOperation: operationId => `operations/comments/${operationId}.json`,
+    commentMutationClaim: (commentId, version) =>
+        `operations/comment-mutations/${commentId}/${Number(version)}.json`,
 
     uploadUsage: 'usage/uploads.json',
     imageUploadOperation: imageId => `operations/image-uploads/${imageId}.json`,

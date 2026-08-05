@@ -114,11 +114,11 @@ npm run audit:uploads
 
 ```powershell
 node scripts/check-duplicate-users.mjs
-node scripts/rebuild-comment-indexes.mjs
+npm run rebuild:comment-views
 node scripts/rebuild-usage.mjs
 ```
 
-任何写入都必须先完成备份，并显式使用脚本要求的 `--fix`、`--confirm-production-migration` 等确认参数。留言编号迁移会修改本体和索引，不能通过“只删索引”回滚；没有生产变更授权时不得执行。
+任何写入都必须先完成备份，并显式使用脚本要求的 `--fix`、`--confirm-production-repair` 或 `--confirm-production-migration` 确认参数。留言 read view 修复会按 canonical 与点赞事实重写公开/用户/latest 视图；没有生产变更授权时不得执行。
 
 ## 7. 可选的非生产集成测试
 

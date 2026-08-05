@@ -2,6 +2,8 @@ const COMMENT_CATEGORIES = [
     'auth',
     'routing',
     'index',
+    'readView',
+    'latestView',
     'commentBodies',
     'likes',
     'replyPreviews',

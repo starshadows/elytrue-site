@@ -41,21 +41,5 @@ export function createReportRepository(data) {
         listForComment: commentId =>
             listEntries(data, `${blobPrefixes.reports}${commentId}/`),
         patch: (key, report) => data.setJSON(key, report),
-        getNumberReverse: commentId => getJSON(data, blobKeys.commentNumberReverse(commentId)),
-        setNumberReverse: (commentId, number) =>
-            data.setJSON(blobKeys.commentNumberReverse(commentId), {
-                commentId,
-                number,
-                updatedAt: Date.now(),
-            }),
-        deleteNumberReverse: commentId => data.delete(blobKeys.commentNumberReverse(commentId)),
-        listNumberPage: async ({ cursor, limit }) => data.list({
-            prefix: blobPrefixes.commentNumbers,
-            cursor,
-            limit,
-            paginate: false,
-            consistency: 'strong',
-        }),
-        getNumberSeat: key => getJSON(data, key),
     })
 }

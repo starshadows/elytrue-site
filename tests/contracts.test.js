@@ -9,8 +9,8 @@ import {
   validateApiRouteRegistry,
 } from '../server/routes/registry.js'
 
-describe('historical Blob key contract', () => {
-  test('preserves every production key shape', () => {
+describe('Blob key contract', () => {
+  test('defines the comment read-model key shapes', () => {
     assert.equal(blobKeys.user('u-1'), 'users/u-1.json')
     assert.equal(blobKeys.userNameIndex('abc'), 'indexes/users/name/abc.json')
     assert.equal(blobKeys.userEmailIndex('def'), 'indexes/users/email/def.json')
@@ -22,23 +22,22 @@ describe('historical Blob key contract', () => {
     assert.equal(blobKeys.comment(123), 'comments/0000000000000123.json')
     assert.equal(blobKeys.commentNumber(7), 'indexes/comments/number/7.json')
     assert.equal(
-      blobKeys.commentNumberReverse(123),
-      'indexes/comments/by-id/0000000000000123.json',
+      blobKeys.commentByUser('u-1', 123),
+      'indexes/comments/by-user/u-1/9007199254740868-0000000000000123.json',
     )
     assert.equal(
-      blobKeys.commentByUser('u-1', 123),
-      'indexes/comments/by-user/u-1/0000000000000123.json',
+      blobKeys.commentPublicView(123),
+      'views/comments/public/9007199254740868-0000000000000123.json',
     )
+    assert.equal(blobKeys.commentsLatestView, 'views/comments/latest.json')
     assert.equal(
       blobKeys.commentByDate('2026-08-02', 123),
       'dates/2026-08-02/0000000000000123.json',
     )
     assert.equal(blobKeys.commentLike(123, 'u-1'), 'likes/123/u-1.json')
     assert.equal(blobKeys.commentReport(123, 'u-1'), 'reports/123/u-1.json')
-    assert.equal(
-      blobKeys.commentDeleteRepair(123),
-      'repairs/comment-delete/123.json',
-    )
+    assert.equal(blobKeys.commentViewRepair(123), 'repairs/comment-views/123.json')
+    assert.equal(blobKeys.commentOperation('op-1'), 'operations/comments/op-1.json')
     assert.equal(
       blobKeys.imageAlias('comment', 'image-1'),
       'uploads/aliases/comments/image-1.json',
@@ -103,4 +102,3 @@ describe('declarative API route contract', () => {
   })
 
 })
-
