@@ -17,12 +17,12 @@ EdgeOne 具体项目绑定和运行时约束见 [EdgeOne 运维清单](EDGEONE_S
 
 ## 代码与 Blob 数据边界
 
-代码回滚不等于 Blob 数据回滚。正常回滚不得自动删除、覆盖或重新序列化历史 Blob，也不得复用留言编号、清除墓碑或重建索引。
+代码回滚不等于 Blob 数据回滚。此次 read-model schema 在站点上线前切换；一旦新 schema 已接受留言写入，不得直接回滚到仍解析 v1/v2 用户索引的旧版本。应先停写并前滚修复，或从切换前的完整备份同时恢复代码与 Blob。正常回滚不得自动复用留言编号或清除墓碑。
 
 - 图片 operation 以 alias 和物理 Blob inventory 为恢复依据。`usage/uploads.json` 是可重建缓存；`usage-repair-needed` 表示扣减结果存在不确定性，不得盲目重复扣减。
-- `likes/{id}/{uid}.json` 是点赞事实；计数缓存和 `repairs/comment-like-count/*` 只能通过事实审计后修复。
+- `likes/{id}/{uid}.json` 是点赞事实；canonical/read view 计数和 `repairs/comment-views/*` 只能通过事实审计后修复。
 - `recovery-key-claims/*` 可能是仍在执行的用户写入认领；写流量未停止或版本未判定时不得删除。
-- 留言删除 repair marker、编号 tombstone 和日期“曾发布”索引都属于历史一致性合同，不能因回滚清理。
+- 留言 read-view repair marker、mutation claim、编号 tombstone 和日期“曾发布”索引都属于一致性合同，不能因应用回滚直接清理。
 
 以下命令默认只读：
 
@@ -31,7 +31,7 @@ npm run audit:uploads
 npm run audit:comment-likes
 npm run repair:user-claims
 node scripts/check-duplicate-users.mjs
-node scripts/rebuild-comment-indexes.mjs
+npm run rebuild:comment-views
 node scripts/rebuild-usage.mjs
 ```
 
@@ -41,7 +41,7 @@ node scripts/rebuild-usage.mjs
 npm run audit:comment-likes -- --fix --confirm-production-repair
 npm run repair:user-claims -- --fix --confirm-production-repair
 node scripts/rebuild-usage.mjs --fix --confirm-production-migration
-node scripts/rebuild-comment-indexes.mjs --fix --confirm-production-migration
+npm run rebuild:comment-views -- --fix --confirm-production-repair
 ```
 
 重复用户修复还要求 `ELYTRUE_APP_SECRET`；未完成审计和备份时不得设置修复参数。数据状态不确定时先导出备份、保留 operation/repair marker，并由人工逐项判断。

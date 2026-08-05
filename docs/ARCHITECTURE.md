@@ -53,10 +53,10 @@ Comments store 以 `jumping` 和 `jumpNumber` 管理公开编号跳转：请求�
 - Cookie 名称/属性、CSRF 流程、密码散列和邮箱加密格式。
 - 除已移除的邮件重置接口外，既有 API 路径、HTTP 方法、请求字段、响应 envelope 和状态码语义。
 - 留言 16 位内部 ID、稳定公开编号、编号墓碑和日期“曾发布”口径。
-- 用户/日期索引、`onlyIfNew` 编号占位、repair marker。
+- 单一倒序用户索引、公开 read view、latest 快照、`onlyIfNew` 编号占位和 repair marker。
 - 图片 alias 的 pending/active 生命周期和补偿回滚。
 
-历史数据无需迁移即可读取、更新和删除；代码不依赖 JSON 属性顺序或空白。
+站点在上线前切换到此 schema，不保留旧留言索引、旧 like cache 或 canonical 全量扫描兼容分支。
 
 ### 账号恢复
 
@@ -67,15 +67,31 @@ Comments store 以 `jumping` 和 `jumpNumber` 管理公开编号跳转：请求�
 - 边缘层按 IP、Cloud Functions 层按 IP 与账号标识摘要限流；限流 key 不含恢复密钥或完整邮箱。
 - 没有恢复字段的历史用户仍可登录和使用，不会在启动时自动补写。邮件重置代码已删除；历史 `password-resets/*` 数据保持惰性，不自动迁移或删除。
 
-新留言会建立按内部留言 ID 指向公开编号的轻量反向记录；新举报同时保存 `commentNumber`。读取历史举报时依次使用举报字段、仍存在的留言本体和反向记录。仅对无法解析且已删除的旧举报执行每页 100、最多 10 页的兼容扫描，结果（含未命中）缓存 5 分钟，命中后渐进回填举报与反向记录；不要求生产全量迁移。
+新举报直接保存 `commentNumber`；硬删除前会补齐该留言已有举报的编号，因此删除后不需要扫描编号 seat 或反向索引。
 
 ### 留言读取
 
-- 主时间线优先从 `meta/comments-number-hint.json` 向下读取稳定编号座位：每批最多预取 48 个座位，Blob 读取并发上限为 8，总扫描仍受 `scanCap` 限制；`cursor + direction` 表示严格的内部 ID 分页边界，公开编号跳转和历史 `from` 语义保持不变。仅当编号索引不存在或不足以覆盖历史未编号数据时回退旧 `comments/` 枚举。
-- `likes/{id}/{uid}.json` 是点赞事实来源，点赞/取消点赞的 `onlyIfNew` 记录保持幂等；`cache/comment-like-count/{id}.json` 是独立列表展示缓存，避免更新计数时回写整条留言并与隐藏/删除竞争。新留言以版本化的本体零值省去空缓存读取，历史留言首次读取会按 Like 事实惰性建立缓存。缓存更新失败写 `repairs/comment-like-count/{id}.json`，`npm run audit:comment-likes` 默认只读核对，只有显式 `--fix --confirm-production-repair` 才修复缓存和 marker。
-- 新留言同时写 `indexes/comments/by-user-v2/{uid}/{invertedId}-{commentId}.json`，用户主页按倒序 key 每页最多读取 20 条；没有 v2 数据的历史用户自动回退 `indexes/comments/by-user/{uid}/`，无需全量迁移。隐藏留言页使用服务端 `nextCursor` 继续扫描，避免空页循环或遗漏。
-- 一页内的 `replyid` 先去重，再直接读取目标留言并返回最小 `replyPreview`；目标删除或对当前用户不可见时返回删除占位，不暴露隐藏内容。`CommentCard` 不再挂载后逐卡发请求。
-- 留言路由返回 `Server-Timing` 的 `auth`、`index`、`comments`、`likes`、`replies` 和 `total` 分项，字段不包含用户标识或凭据。
+- `comments/{id}.json` 是完整事实；`indexes/comments/number/{n}.json` 是唯一公开编号映射。`views/comments/public/{invertedId}-{id}.json` 保存可直接渲染的完整卡片，隐藏时移入 `views/comments/hidden/`、恢复时移回；普通分页一次 list 后每条最多一次 get，并发上限为 8，管理员列表会额外合并隐藏视图。
+- `views/comments/latest.json` 保存最新 12 条公开卡片、`nextCursor`、`todayCount`、上海日期、`generatedAt` 和版本。`GET /comments/public` 与 bootstrap 首屏正常命中只读取此 Blob；日期过期、缺失或损坏时回退 public view，不把快照当事实来源。写入通过 Blob `onlyIfNew` 锁跨实例串行，mutation 开始时先删除旧快照，失败时保持 fallback 而不是继续提供已知过期内容。
+- `indexes/comments/by-user/{uid}/{invertedId}-{id}.json` 是唯一用户留言索引，值本身是主页摘要。每页一次 list、每条一次 get；全隐藏页仍返回可推进 cursor，不在单请求内反复扫空页。
+- `likes/{id}/{uid}.json` 保持幂等事实，展示计数直接写 canonical/public/user/latest。普通列表不读取或 list 点赞事实；登录态通过 `/comments/viewer-likes` 以并发上限 8 批量读取。
+- `replyPreview` 在回复发布时固化；目标后来隐藏或删除仍显示发布当时摘要。这一历史快照语义避免首页 N 次回复回源。
+- 点赞、隐藏、恢复和删除先通过 `operations/comment-mutations/{id}/{version}.json` 原子认领 canonical 下一版本，认领覆盖到 read view 更新完成，避免并发点赞用旧本体撤销隐藏或复活删除。read view/latest 写失败写 `repairs/comment-views/{id}.json`，不撤销已完成的 canonical 发布。`npm run rebuild:comment-views` 默认只读，显式 `--fix --confirm-production-repair` 才按 canonical 与点赞事实修复。留言路由输出 `readView`、`latestView`、`commentBodies`、`likes` 等可读 `Server-Timing` 分类。
+
+#### 改造前读取基线
+
+2026-08-05 使用带 `get/list` 计数与并发峰值记录的 `MemoryStore` 对旧实现实测：
+
+| 请求 | 旧 Blob 读取 | 主要来源 |
+| --- | ---: | --- |
+| 公共首页 10 条 | 31 get | 1 hint + 10 seat + 10 canonical + 10 like cache |
+| 公共首页 12 条 | 37 get | 1 hint + 12 seat + 12 canonical + 12 like cache |
+| 匿名 bootstrap 12 条 | 37 get + 1 list | 上述 37 次 + 当日日期索引 list |
+| 用户首页 20 条 | 20 get + 1 list | v2 list + 20 canonical |
+| 12 条回复共享一个目标 | 38 get | 首页 37 次 + 1 reply canonical |
+| 登录用户 12 条 liked 状态 | 12 get | 每条一个 like fact，受并发上限 8 约束 |
+
+自动化预算测试现在要求 latest 命中不超过 2 次数据读取；fallback 和用户页均为一次 list 加最多 `count` 次并发 get；普通首页不得读取 `likes/` 或回复 canonical。
 
 ### 图片操作
 

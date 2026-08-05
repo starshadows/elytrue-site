@@ -13,17 +13,16 @@
 - `npm run mock:server` + `npm run test:e2e`:本地 Playwright E2E(先 `npm run build`;mock-server 用 MemoryStore 提供后端,见 scripts/mock-server.mjs)
 - `npm run export:data`:需要环境变量 `EDGEONE_PROJECT_ID`、`EDGEONE_API_TOKEN`,输出到被 gitignore 的 `exports/`
 - `npm run repair:user-claims`:报告用户 mutation claim;生产修复必须先停写并传 `--fix --confirm-production-repair`,仅删除超过 5 分钟且版本可判定的占位
-- 数据脚本(同需上述环境变量,先备份再 --fix):`scripts/check-duplicate-users.mjs`(重复用户名报告/修复,`--fix` 另需 `ELYTRUE_APP_SECRET`)、`scripts/rebuild-comment-indexes.mjs`(留言编号/日期/用户索引迁移,**--fix 必须带 --confirm-production-migration**,新旧混合默认中止,回滚需恢复完整备份)、`scripts/rebuild-usage.mjs`(按别名重算图片空间统计)
+- 数据脚本(同需上述环境变量,先备份再 --fix):`scripts/check-duplicate-users.mjs`(重复用户名报告/修复,`--fix` 另需 `ELYTRUE_APP_SECRET`)、`scripts/rebuild-comment-views.mjs`(留言 read view/点赞计数/latest 快照核对与修复,**--fix 必须带 --confirm-production-repair**)、`scripts/rebuild-usage.mjs`(按别名重算图片空间统计)
 
 ## 架构
 
 - `cloud-functions/api/[[default]].js` → `server/app.js` 的 `handleApiRequest`:全部 `/api/*` 路由是手写路由表(路径去掉 `/api` 前缀后精确匹配)。`server/` 是纯 JS、无构建步骤;`shared/validation.js` 前后端共用
 - 存储:`server/storage.js` 的 `createStores` 固定取两个 Blob Store——`elytrue-data`(用户/会话/留言/索引)和 `elytrue-uploads`(头像/留言图);key 约定如 `users/{id}.json`、`uploads/aliases/...`。生产环境只注入,测试注入 `MemoryStore`
-- 留言数据(server/comments.js):评论本体 `comments/{16位内部ID}.json`(内部 ID 保持稳定,点赞/回复/图片引用它);**稳定公开编号** `indexes/comments/number/{n}.json`(onlyIfNew 原子占位,允许空洞,占位带 reservationId 供回滚识别;硬删除时转为 `tombstone:true` 空号,跳转 404、不复用、迁移校验豁免);自然日计数 `dates/{YYYY-MM-DD}/{id}.json`(Asia/Shanghai,`comments/count` 用;删除留言不删此索引,口径为「当天曾发布」);新用户留言索引 `indexes/comments/by-user-v2/{uid}/{invertedId}-{id}.json`(倒序每页 20 条),历史数据回退 `indexes/comments/by-user/{uid}/{id}.json`,硬删除时同步删除两者。`number` 查询参数按公开编号跳转,`from` 仍是内部 ID 语义(精确命中时是居中窗口)。旧数据无 `number` 字段时回落 id 顺序展示编号,迁移脚本可回填
-- 分页按**可见留言数量**收集(越过隐藏留言直到凑够 count 或窗口结束):主列表保持数组返回(scanCap 截断时返回 `{items, hasMore:true}` 对象),用户列表返回 `{items, hasMore, nextCursor}`(nextCursor 是最后扫描的索引位,即使整页隐藏也能继续);`time` 参数为 Unix 秒(整数含整秒 ms0..999,小数按精确毫秒上界),内部 ID 候选上界 `time*1e6+1e6`,最终按 createdAt 精确过滤
-- createComment 一致性:正文→编号占位→(回写 number+用户索引+日期索引)→图片 pending→active,任一失败回滚本次已写资源(仅删自己 reservationId 的占位;已激活图片还原为 pending)并记结构化日志(`comment_*` 事件),不返回 201;编号占位不得指向不存在的留言
-- 点赞事实来源为 `likes/{id}/{uid}.json`,`cache/comment-like-count/{id}.json` 仅作列表展示缓存;新留言本体的版本化零值省去空缓存读取,历史留言首次读取惰性建立缓存;缓存写失败留 `repairs/comment-like-count/{id}.json`,用 `npm run audit:comment-likes` 只读审计,生产修复必须显式 `--fix --confirm-production-repair`
-- 硬删除:先写 tombstone(失败则 500 中止)→删正文→删用户索引(失败写 `repairs/comment-delete/{id}.json` marker 供迁移脚本识别/修复)
+- 留言事实为 `comments/{16位内部ID}.json`;公开编号只用 `indexes/comments/number/{n}.json`,硬删除转 tombstone。公开卡片为 `views/comments/public/{invertedId}-{id}.json`,用户摘要为唯一的 `indexes/comments/by-user/{uid}/{invertedId}-{id}.json`,首屏快照为 `views/comments/latest.json`。无旧索引或 canonical 扫描 fallback
+- public/bootstrap 首屏优先单读 latest;损坏或缺失时 list 一次 public view 并按并发上限 8 每条 get 一次。用户页同样一次 list+每条一次 get;空隐藏页返回推进后的 `nextCursor`,不在单次请求内无限扫描
+- 回复预览采用发布时快照,目标后来隐藏/删除仍保留历史摘要;列表不读取回复目标。点赞事实仍是 `likes/{id}/{uid}.json`,计数直接写 canonical/public/user/latest,普通列表不扫描事实
+- 创建的 canonical/编号/图片关键步骤失败会补偿回滚;read view/latest 写失败不丢弃已发布留言,统一写 `repairs/comment-views/{id}.json`。隐藏、恢复、删除和点赞均更新 read model;重建脚本可检测并修复。`X-Idempotency-Key` 可使发布请求安全重试
 - 图片别名 status 缺失按 active 处理:`DELETE /api/uploads/image?imageId=` 只允许 pending;自动清理(>24h)会先经用户留言索引核对引用,被引用的 pending 不删
 - updateUser 索引事务:先全部预校验+预计算(含 passwordHash)→原子认领新索引→经用户版本认领写本体→删除旧索引前强一致校验归属(他人索引不删,记 `user_old_index_not_owned`);失败只回滚本次认领
 - 图片别名带 `status`:`pending`(未关联留言,可被 `DELETE /api/uploads/image?imageId=` 删除或 24h 后自动清理)/`active`;缺省视为 active

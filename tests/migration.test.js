@@ -1,375 +1,145 @@
 import assert from 'node:assert/strict'
-import { mkdtempSync, existsSync, readFileSync, readdirSync } from 'node:fs'
-import { tmpdir } from 'node:os'
-import { join } from 'node:path'
-import { after, before, describe, it } from 'node:test'
+import { describe, it } from 'node:test'
+import { blobKeys } from '../server/domain/blob-keys.js'
+import { createComment, setLike } from '../server/comments.js'
 import { MemoryStore } from '../server/storage.js'
-import { runCommentIndexMigration } from '../scripts/rebuild-comment-indexes.mjs'
-import { shanghaiDateString } from '../server/comments.js'
+import { rebuildCommentViews } from '../scripts/rebuild-comment-views.mjs'
 
-class FlakyStore extends MemoryStore {
-    constructor(failures = {}) {
-        super()
-        this.failures = failures
-    }
+const user = { id: 'repair-user', name: '修复用户', avatarKey: '' }
 
-    async setJSON(key, value, options = {}) {
-        if (this.failures.setJSON?.(key, options)) throw new Error('injected setJSON failure')
-        return super.setJSON(key, value, options)
-    }
-}
-
-function commentKey(id) {
-    return `comments/${String(id).padStart(16, '0')}.json`
-}
-
-function seedComment(store, { id, createdAt, uid = 'u1', text = `留言${id}` }) {
-    return store.setJSON(commentKey(id), {
-        id,
-        uid,
-        sender: '迁移用户',
-        comment: text,
-        image: '',
-        hidden: false,
-        createdAt,
-        time: Math.floor(createdAt / 1000),
-    })
-}
-
-function seedMigrated(store, { id, createdAt, number, uid = 'u1' }) {
-    return Promise.all([
-        seedComment(store, { id, createdAt, uid }),
-        store.setJSON(`indexes/comments/number/${number}.json`, { commentId: id, createdAt }),
-        store.setJSON(`dates/${shanghaiDateString(createdAt)}/${String(id).padStart(16, '0')}.json`, { commentId: id, createdAt }),
-        store.setJSON(`indexes/comments/by-user/${uid}/${String(id).padStart(16, '0')}.json`, { commentId: id, createdAt }),
-    ]).then(async () => {
-        const body = await store.get(commentKey(id), { type: 'json' })
-        body.number = number
-        await store.setJSON(commentKey(id), body)
-    })
-}
-
-let workDir
-
-before(() => {
-    workDir = mkdtempSync(join(tmpdir(), 'elytrue-migration-'))
-})
-
-after(() => {
-    // 保留目录以便失败时排查
-})
-
-const FIX_CONFIRM = { fix: true, confirmProductionMigration: true, quiet: true }
-
-describe('comment index migration', () => {
-    it('assigns stable numbers to all-legacy comments sorted by createdAt', async () => {
-        const store = new MemoryStore()
-        await seedComment(store, { id: 300, createdAt: 3000 })
-        await seedComment(store, { id: 100, createdAt: 1000 })
-        await seedComment(store, { id: 200, createdAt: 2000 })
-
-        const result = await runCommentIndexMigration(store, {
-            ...FIX_CONFIRM,
-            manifestDir: workDir,
-            reportDir: workDir,
+describe('rebuild comment views', () => {
+    it('is read-only by default and reports damaged views', async () => {
+        const data = new MemoryStore()
+        const created = await createComment(data, user, { comment: '待检查' })
+        await data.delete(blobKeys.commentPublicView(created.id))
+        await data.setJSON(blobKeys.comment(created.id), {
+            ...(await data.get(blobKeys.comment(created.id), { type: 'json' })),
+            likes: 7,
         })
-        assert.equal(result.aborted, false)
-        assert.equal(result.validation.length, 0)
-        assert.deepEqual(result.report.assigned.map(entry => entry.id), [100, 200, 300])
-        assert.deepEqual(result.report.assigned.map(entry => entry.number), [1, 2, 3])
+        const before = new Map(data.values)
 
-        const seat1 = await store.get('indexes/comments/number/1.json', { type: 'json' })
-        assert.equal(Number(seat1.commentId), 100)
-        const body = await store.get(commentKey(100), { type: 'json' })
-        assert.equal(body.number, 1)
-        assert.equal(await store.get(`dates/${shanghaiDateString(1000)}/${String(100).padStart(16, '0')}.json`, { type: 'json' }) != null, true)
-        assert.equal(await store.get(`indexes/comments/by-user/u1/${String(100).padStart(16, '0')}.json`, { type: 'json' }) != null, true)
+        const report = await rebuildCommentViews(data)
+
+        assert.equal(report.aborted, false)
+        assert.equal(report.mode, 'report')
+        assert.ok(report.issues.some(issue => issue.type === 'public-view'))
+        assert.ok(report.issues.some(issue => issue.type === 'like-count'))
+        assert.deepEqual(data.values, before, '默认报告模式不得写入')
     })
 
-    it('treats fully migrated data as healthy and is idempotent', async () => {
-        const store = new MemoryStore()
-        await seedMigrated(store, { id: 100, createdAt: 1000, number: 1 })
-        await seedMigrated(store, { id: 200, createdAt: 2000, number: 2 })
-
-        const first = await runCommentIndexMigration(store, {
-            ...FIX_CONFIRM,
-            manifestDir: workDir,
-            reportDir: workDir,
-        })
-        assert.equal(first.aborted, false)
-        assert.equal(first.validation.length, 0)
-        assert.equal(first.report.executed.length, 0, '无缺口的健康数据不应有写入')
-
-        const second = await runCommentIndexMigration(store, {
-            ...FIX_CONFIRM,
-            manifestDir: workDir,
-            reportDir: workDir,
-        })
-        assert.equal(second.report.executed.length, 0, '重复运行应幂等')
-        assert.equal(second.report.assigned.length, 0)
-    })
-
-    it('aborts by default on mixed numbering and requires an explicit flag', async () => {
-        const store = new MemoryStore()
-        await seedComment(store, { id: 100, createdAt: 1000 })
-        await seedMigrated(store, { id: 200, createdAt: 2000, number: 1 })
-
-        const aborted = await runCommentIndexMigration(store, {
-            ...FIX_CONFIRM,
-            manifestDir: workDir,
-            reportDir: workDir,
-        })
-        assert.equal(aborted.aborted, true)
-        assert.equal(aborted.reason, 'mixed-numbering')
-        const body = await store.get(commentKey(100), { type: 'json' })
-        assert.equal(body.number, undefined, '中止时不得修改任何数据')
-
-        const allowed = await runCommentIndexMigration(store, {
-            ...FIX_CONFIRM,
-            allowMixedNumbering: true,
-            quiet: true,
-            manifestDir: workDir,
-            reportDir: workDir,
-        })
-        assert.equal(allowed.aborted, false)
-        assert.equal(allowed.validation.length, 0)
-        assert.equal(Number((await store.get(commentKey(100), { type: 'json' })).number), 2, '旧留言编号排在新留言之后')
-    })
-
-    it('refuses to fix without the explicit production confirmation', async () => {
-        const store = new MemoryStore()
-        await seedComment(store, { id: 100, createdAt: 1000 })
-        const result = await runCommentIndexMigration(store, {
-            fix: true,
-            quiet: true,
-            manifestDir: workDir,
-            reportDir: workDir,
-        })
+    it('requires explicit confirmation for writes', async () => {
+        const data = new MemoryStore()
+        await createComment(data, user, { comment: '确认参数' })
+        const result = await rebuildCommentViews(data, { fix: true })
         assert.equal(result.aborted, true)
         assert.equal(result.reason, 'missing-confirm')
-        assert.equal((await store.get(commentKey(100), { type: 'json' })).number, undefined)
     })
 
-    it('skips number seats already claimed by another comment', async () => {
-        const store = new MemoryStore()
-        await seedComment(store, { id: 100, createdAt: 1000 })
-        await seedComment(store, { id: 200, createdAt: 2000 })
-        await seedComment(store, { id: 300, createdAt: 3000 })
-        // 预置一个被占用的编号 1(指向 100,但 100 尚未迁移编号)
-        await store.setJSON('indexes/comments/number/1.json', { commentId: 100, createdAt: 1000 })
-
-        const result = await runCommentIndexMigration(store, {
-            ...FIX_CONFIRM,
-            manifestDir: workDir,
-            reportDir: workDir,
+    it('repairs canonical counts, public/user/latest views and markers idempotently', async () => {
+        const data = new MemoryStore()
+        const first = await createComment(data, user, { comment: '第一条' })
+        const second = await createComment(data, user, { comment: '第二条' })
+        await setLike(data, first.id, user, true)
+        const firstBody = await data.get(blobKeys.comment(first.id), { type: 'json' })
+        firstBody.likes = 99
+        await data.setJSON(blobKeys.comment(first.id), firstBody)
+        await data.setJSON(blobKeys.commentPublicView(first.id), { broken: true })
+        await data.delete(blobKeys.commentByUser(user.id, second.id))
+        await data.setJSON(blobKeys.commentsLatestView, { version: 1, items: 'broken' })
+        await data.setJSON(blobKeys.commentViewRepair(first.id), {
+            commentId: first.id,
+            status: 'open',
         })
-        assert.equal(result.aborted, false)
-        const assigned = result.report.assigned.map(entry => entry.number)
-        assert.ok(!assigned.includes(1), '不得重复认领已占用的编号')
-        assert.equal(new Set(assigned).size, assigned.length)
-        // 预置冲突仍会被校验报告(脚本不覆盖他人占位)
-        assert.ok(
-            result.validation.some(issue => issue.includes('编号 1') || issue.includes('与编号索引不一致')),
-            '冲突应出现在校验报告中',
+
+        const fixed = await rebuildCommentViews(data, {
+            fix: true,
+            confirmProductionRepair: true,
+        })
+        assert.equal(fixed.aborted, false)
+        assert.equal((await data.get(blobKeys.comment(first.id), { type: 'json' })).likes, 1)
+        assert.equal((await data.get(blobKeys.commentPublicView(first.id), { type: 'json' })).likes, 1)
+        assert.ok(await data.get(blobKeys.commentByUser(user.id, second.id), { type: 'json' }))
+        assert.deepEqual(
+            (await data.get(blobKeys.commentsLatestView, { type: 'json' })).items.map(item => item.id),
+            [second.id, first.id].sort((left, right) => right - left),
         )
-    })
+        assert.equal(await data.get(blobKeys.commentViewRepair(first.id), { type: 'json' }), null)
 
-    it('writes a manifest with body snapshots and planned/actual number keys', async () => {
-        const store = new MemoryStore()
-        await seedComment(store, { id: 100, createdAt: 1000 })
-        const dir = mkdtempSync(join(tmpdir(), 'elytrue-manifest-'))
-        const result = await runCommentIndexMigration(store, {
-            ...FIX_CONFIRM,
-            manifestDir: dir,
-            reportDir: dir,
+        const secondRun = await rebuildCommentViews(data, {
+            fix: true,
+            confirmProductionRepair: true,
         })
-        assert.ok(result.manifestPath)
-        assert.equal(existsSync(result.manifestPath), true)
-        const manifest = JSON.parse(readFileSync(result.manifestPath, 'utf8'))
-        assert.equal(manifest.comments.length, 1)
-        assert.equal(manifest.comments[0].bodySnapshot.comment, '留言100')
-        assert.equal(manifest.comments[0].numberBefore, null)
-        assert.equal(manifest.comments[0].plannedSeatKey, 'indexes/comments/number/1.json')
-        assert.equal(manifest.comments[0].actualSeatKey, 'indexes/comments/number/1.json')
-        assert.equal(manifest.comments[0].actualNumber, 1)
-        assert.ok(manifest.comments[0].indexKeys.date.startsWith('dates/'))
-        assert.ok(manifest.comments[0].indexKeys.byUser.startsWith('indexes/comments/by-user/'))
-        assert.ok(manifest.executedAt, '执行完成后应重写清单补上实际结果')
+        assert.equal(secondRun.issues.length, 0)
     })
 
-    it('records distinct planned candidates for multiple missing comments and actual numbers after conflicts', async () => {
-        const store = new MemoryStore()
-        await seedComment(store, { id: 100, createdAt: 1000 })
-        await seedComment(store, { id: 200, createdAt: 2000 })
-        // 预占一个「无效 seat」(不参与 maxNumber 统计),制造实际编号冲突
-        await store.setJSON('indexes/comments/number/1.json', { commentId: null, createdAt: 0 })
-        const dir = mkdtempSync(join(tmpdir(), 'elytrue-manifest-conflict-'))
-        const result = await runCommentIndexMigration(store, {
-            ...FIX_CONFIRM,
-            manifestDir: dir,
-            reportDir: dir,
-        })
-        const manifest = JSON.parse(readFileSync(result.manifestPath, 'utf8'))
-        assert.deepEqual(manifest.comments.map(entry => entry.plannedSeatKey), [
-            'indexes/comments/number/1.json',
-            'indexes/comments/number/2.json',
-        ])
-        assert.deepEqual(manifest.comments.map(entry => entry.actualNumber), [2, 3], '冲突后实际编号应后移')
-        assert.equal(manifest.comments[0].actualSeatKey, 'indexes/comments/number/2.json')
-    })
-
-    it('keeps body snapshots pristine in the final manifest after migration', async () => {
-        const store = new MemoryStore()
-        await seedComment(store, { id: 100, createdAt: 1000 })
-        await seedComment(store, { id: 200, createdAt: 2000 })
-        const dir = mkdtempSync(join(tmpdir(), 'elytrue-snapshot-'))
-        const result = await runCommentIndexMigration(store, {
-            ...FIX_CONFIRM,
-            manifestDir: dir,
-            reportDir: dir,
-        })
-        const manifest = JSON.parse(readFileSync(result.manifestPath, 'utf8'))
-        for (const entry of manifest.comments) {
-            assert.equal(entry.bodySnapshot.number, undefined, '快照不得包含迁移分配的 number')
-            assert.equal(entry.numberBefore, null)
-            assert.ok(entry.actualNumber >= 1)
-        }
-        // 实际留言本体包含 number,与快照明确不同
-        const body = await store.get(commentKey(100), { type: 'json' })
-        assert.equal(body.number, 1)
-        assert.notEqual(body.number, undefined)
-        assert.notEqual(manifest.comments[0].bodySnapshot.number, body.number)
-        assert.equal(manifest.comments[0].bodySnapshot.comment, body.comment, '快照其余字段与本体一致')
-    })
-
-    it('keeps reports healthy after a hard delete via tombstone seats', async () => {
-        const store = new MemoryStore()
-        await seedMigrated(store, { id: 100, createdAt: 1000, number: 1 })
-        await seedMigrated(store, { id: 200, createdAt: 2000, number: 2 })
-
-        // 模拟硬删除 100:正文删除、seat 转 tombstone、用户索引删除、日期索引保留
-        await store.delete(`comments/${String(100).padStart(16, '0')}.json`)
-        await store.setJSON('indexes/comments/number/1.json', {
-            commentId: 100,
+    it('removes orphan views left by interrupted deletes', async () => {
+        const data = new MemoryStore()
+        const id = 1752000000000777
+        await data.setJSON(blobKeys.commentPublicView(id), {
+            id,
             number: 1,
-            tombstone: true,
-            deletedAt: 3000,
-            createdAt: 1000,
+            displayId: 1,
+            uid: user.id,
+            sender: user.name,
+            avatar: '',
+            comment: '孤立视图',
+            image: '',
+            replyid: null,
+            hidden: false,
+            likes: 0,
+            liked: false,
+            createdAt: Date.now(),
+            time: Math.floor(Date.now() / 1000),
         })
-        await store.delete(`indexes/comments/by-user/u1/${String(100).padStart(16, '0')}.json`)
+        await data.setJSON(blobKeys.commentByUser(user.id, id), {
+            id,
+            number: 1,
+            comment: '孤立视图',
+            uid: user.id,
+            time: 1,
+        })
 
-        // 报告模式:不应把 tombstone 判为悬空缺口
-        const report = await runCommentIndexMigration(store, {
-            manifestDir: workDir,
-            reportDir: workDir,
-        })
-        assert.equal(report.report.indexes.number.gap, 0)
-        assert.equal(report.report.indexes.byUser.gap, 0)
-        assert.equal(report.report.tombstoneSeats, 1)
+        const report = await rebuildCommentViews(data)
+        assert.equal(report.orphanPublic.length, 1)
+        assert.equal(report.orphanUser.length, 1)
 
-        // 修复模式校验:合法 tombstone 不算问题
-        const fix = await runCommentIndexMigration(store, {
-            ...FIX_CONFIRM,
-            manifestDir: workDir,
-            reportDir: workDir,
+        await rebuildCommentViews(data, {
+            fix: true,
+            confirmProductionRepair: true,
         })
-        assert.equal(fix.aborted, false)
-        assert.equal(fix.validation.length, 0, '合法 tombstone 不应出现在校验问题中')
+        assert.equal(await data.get(blobKeys.commentPublicView(id), { type: 'json' }), null)
+        assert.equal(await data.get(blobKeys.commentByUser(user.id, id), { type: 'json' }), null)
     })
 
-    it('recovers from a mid-migration failure after restoring the partial writes', async () => {
-        const store = new FlakyStore({})
-        await seedComment(store, { id: 100, createdAt: 1000 })
-        await seedComment(store, { id: 200, createdAt: 2000 })
-        await seedComment(store, { id: 300, createdAt: 3000 })
-
-        // 第 2 条留言(按 createdAt 排序)的正文写入失败
-        store.failures = {
-            setJSON: (key, options) => key === commentKey(200),
-        }
-        await assert.rejects(
-            () => runCommentIndexMigration(store, {
-                ...FIX_CONFIRM,
-                manifestDir: workDir,
-                reportDir: workDir,
-            }),
-            /injected setJSON failure/u,
-        )
-        // 失败运行留下悬空占位:200 的编号 2 已认领但正文从未写入 number
-        const danglingSeat = await store.get('indexes/comments/number/2.json', { type: 'json' })
-        assert.equal(Number(danglingSeat.commentId), 200)
-        assert.equal((await store.get(commentKey(200), { type: 'json' })).number, undefined)
-
-        // 未清理前重跑会被「新旧混合编号」安全拦截
-        store.failures = {}
-        const blocked = await runCommentIndexMigration(store, {
-            ...FIX_CONFIRM,
-            manifestDir: workDir,
-            reportDir: workDir,
+    it('retains unresolved markers when canonical numbering is invalid', async () => {
+        const data = new MemoryStore()
+        const id = 1752000000000666
+        await data.setJSON(blobKeys.comment(id), {
+            id,
+            number: 0,
+            uid: user.id,
+            sender: user.name,
+            avatar: '',
+            comment: '无效编号',
+            image: '',
+            replyid: null,
+            hidden: false,
+            likes: 0,
+            version: 1,
+            createdAt: Date.now(),
+            time: Math.floor(Date.now() / 1000),
         })
-        assert.equal(blocked.aborted, true)
-        assert.equal(blocked.reason, 'mixed-numbering')
-
-        // 按备份恢复:清理失败运行残留的悬空占位后重跑,必须补齐且不产生重复编号
-        await store.delete('indexes/comments/number/2.json')
-        const result = await runCommentIndexMigration(store, {
-            ...FIX_CONFIRM,
-            allowMixedNumbering: true,
-            quiet: true,
-            manifestDir: workDir,
-            reportDir: workDir,
-        })
-        assert.equal(result.aborted, false)
-        assert.equal(result.validation.length, 0, '重跑后必须完整一致')
-        assert.deepEqual(result.report.assigned.map(entry => entry.number), [2, 3])
-        const numbers = result.report.assigned.map(entry => entry.number)
-        assert.equal(new Set([1, ...numbers]).size, 3)
-        // 备份依据:清单与报告都留在 workDir
-        assert.ok(readdirSync(workDir).some(file => file.includes('rebuild-comment-indexes')))
-    })
-})
-
-describe('repair markers', () => {
-    it('reports and resolves comment-delete repair markers in fix mode', async () => {
-        const store = new MemoryStore()
-        await seedMigrated(store, { id: 100, createdAt: 1000, number: 1 })
-        await seedMigrated(store, { id: 200, createdAt: 2000, number: 2 })
-
-        // 模拟硬删除 100 但用户索引删除失败:正文删除、seat tombstone、byUser 残留、marker
-        await store.delete(`comments/${String(100).padStart(16, '0')}.json`)
-        await store.setJSON('indexes/comments/number/1.json', {
-            commentId: 100, number: 1, tombstone: true, deletedAt: 3000, createdAt: 1000,
-        })
-        await store.setJSON(`repairs/comment-delete/100.json`, {
-            commentId: 100, number: 1, uid: 'u1', step: 'user-index', status: 'open', createdAt: 3000,
+        await data.setJSON(blobKeys.commentViewRepair(id), {
+            commentId: id,
+            reason: 'create-read-model',
+            status: 'open',
         })
 
-        // 报告模式:识别 marker 并计入缺口
-        const report = await runCommentIndexMigration(store, {
-            manifestDir: workDir,
-            reportDir: workDir,
+        const result = await rebuildCommentViews(data, {
+            fix: true,
+            confirmProductionRepair: true,
         })
-        assert.equal(report.report.repairMarkers.length, 1)
-        assert.equal(report.report.repairMarkers[0].commentId, 100)
-
-        // 修复模式:清理残留用户索引并移除 marker
-        const fix = await runCommentIndexMigration(store, {
-            ...FIX_CONFIRM,
-            manifestDir: workDir,
-            reportDir: workDir,
-        })
-        assert.equal(fix.aborted, false)
-        assert.ok(fix.report.executed.some(event => event.includes('repair')))
-        assert.equal(await store.get(`indexes/comments/by-user/u1/${String(100).padStart(16, '0')}.json`, { type: 'json' }), null)
-        assert.equal(await store.get('repairs/comment-delete/100.json', { type: 'json' }), null)
-        assert.equal(fix.validation.length, 0, '修复后校验必须通过')
-
-        // 再次报告:不再有 marker,健康
-        const after = await runCommentIndexMigration(store, {
-            manifestDir: workDir,
-            reportDir: workDir,
-        })
-        assert.equal(after.report.repairMarkers.length, 0)
-        assert.equal(after.report.indexes.number.gap, 0)
+        assert.ok(result.issues.some(issue => issue.type === 'invalid-number'))
+        assert.ok(await data.get(blobKeys.commentViewRepair(id), { type: 'json' }))
     })
 })

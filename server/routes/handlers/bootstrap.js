@@ -7,12 +7,41 @@ export async function bootstrap(context, stores, path, auth) {
     const profile = auth
         ? authenticatedProfile(auth.user, environmentFor(context), auth.session)
         : null
-    const [commentsResult, todayCountResult] = await Promise.allSettled([
-        listComments(stores.data, params, auth?.user, {
+    /** @type {PromiseSettledResult<any>} */
+    let commentsResult
+    try {
+        commentsResult = {
+            status: 'fulfilled',
+            value: await listComments(stores.data, params, null, {
             timing: context.commentTiming,
+            publicRead: true,
+            preferLatest: true,
         }),
-        context.commentTiming.measure('todayCount', () => countComments(stores.data, params)),
-    ])
+        }
+    } catch (reason) {
+        commentsResult = { status: 'rejected', reason }
+    }
+    const snapshotCount = commentsResult.status === 'fulfilled'
+        && Number.isSafeInteger(commentsResult.value?.todayCount)
+        ? commentsResult.value.todayCount
+        : null
+    /** @type {PromiseSettledResult<number>} */
+    let todayCountResult
+    if (snapshotCount !== null) {
+        todayCountResult = { status: 'fulfilled', value: snapshotCount }
+    } else {
+        try {
+            todayCountResult = {
+                status: 'fulfilled',
+                value: await context.commentTiming.measure(
+                'todayCount',
+                () => countComments(stores.data, params, { publicRead: true }),
+            ),
+            }
+        } catch (reason) {
+            todayCountResult = { status: 'rejected', reason }
+        }
+    }
     if (commentsResult.status === 'rejected') {
         console.error(JSON.stringify({
             event: 'bootstrap_comments_failed',

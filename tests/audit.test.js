@@ -3,48 +3,57 @@ import { describe, it } from 'node:test'
 import { auditCommentLikes } from '../scripts/audit-comment-likes.mjs'
 import { auditUploadStorage } from '../scripts/audit-upload-storage.mjs'
 import { MemoryStore } from '../server/storage.js'
+import { createComment } from '../server/comments.js'
+import { blobKeys } from '../server/domain/blob-keys.js'
 
 describe('comment like audit', () => {
-    it('reports and repairs cache differences without touching comment facts', async () => {
+    it('reports and repairs canonical/read-view differences without touching like facts', async () => {
         const data = new MemoryStore()
-        const commentId = 1234567890123456
-        await data.setJSON(`comments/${String(commentId).padStart(16, '0')}.json`, {
-            id: commentId,
-            likeCount: 0,
-            likeCountVersion: 1,
-        })
+        const created = await createComment(data, {
+            id: 'user-owner', name: '作者', avatarKey: '',
+        }, { comment: '审计留言' }, { idFactory: () => 1234567890123456 })
+        const commentId = created.id
         await data.setJSON(`likes/${commentId}/user-a.json`, { userId: 'user-a' })
         await data.setJSON(`likes/${commentId}/user-b.json`, { userId: 'user-b' })
-        await data.setJSON(`cache/comment-like-count/${commentId}.json`, {
-            commentId,
-            count: 1,
-        })
-        await data.setJSON(`repairs/comment-like-count/${commentId}.json`, {
+        const canonical = await data.get(blobKeys.comment(commentId), { type: 'json' })
+        canonical.likes = 1
+        await data.setJSON(blobKeys.comment(commentId), canonical)
+        await data.setJSON(blobKeys.commentViewRepair(commentId), {
             commentId,
             status: 'open',
         })
 
         const report = await auditCommentLikes(data)
         assert.equal(report.differences.length, 1)
-        assert.deepEqual(report.differences[0], {
-            key: `comments/${String(commentId).padStart(16, '0')}.json`,
-            comment: {
-                id: commentId,
-                likeCount: 0,
-                likeCountVersion: 1,
-            },
-            cached: 1,
-            actual: 2,
-        })
+        assert.equal(report.differences[0].cached, 1)
+        assert.equal(report.differences[0].actual, 2)
 
         const fixed = await auditCommentLikes(data, { fix: true })
         assert.equal(fixed.repaired, 1)
         assert.equal(
-            (await data.get(`cache/comment-like-count/${commentId}.json`, { type: 'json' })).count,
+            (await data.get(blobKeys.comment(commentId), { type: 'json' })).likes,
             2,
         )
-        assert.equal(await data.get(`repairs/comment-like-count/${commentId}.json`, { type: 'json' }), null)
+        assert.equal(await data.get(blobKeys.commentViewRepair(commentId), { type: 'json' }), null)
+        assert.equal(
+            (await data.get(blobKeys.commentPublicView(commentId), { type: 'json' })).likes,
+            2,
+        )
         assert.ok(await data.get(`likes/${commentId}/user-a.json`, { type: 'json' }))
+    })
+
+    it('does not consume a non-like read-model repair marker', async () => {
+        const data = new MemoryStore()
+        const created = await createComment(data, {
+            id: 'user-owner', name: '作者', avatarKey: '',
+        }, { comment: '其他修复' })
+        await data.setJSON(blobKeys.commentViewRepair(created.id), {
+            commentId: created.id,
+            reason: 'latest-view',
+            status: 'open',
+        })
+        await auditCommentLikes(data, { fix: true })
+        assert.ok(await data.get(blobKeys.commentViewRepair(created.id), { type: 'json' }))
     })
 })
 
