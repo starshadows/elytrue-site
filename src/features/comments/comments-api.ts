@@ -159,7 +159,11 @@ export const commentsApi: CommentsApi = {
   },
   async listUser(uid, cursor, signal) {
     return parseUserCommentPage(
-      await XHR.get<unknown>('comments', { uid, count: 20, cursor }, { signal }),
+      await XHR.get<unknown>(
+        'comments',
+        { uid, count: 20, cursor },
+        { signal },
+      ),
     )
   },
   async like(commentId, liked) {
