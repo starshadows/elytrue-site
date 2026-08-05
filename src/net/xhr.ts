@@ -8,6 +8,7 @@ interface XHRSettings {
   silentStatuses?: number[]
   signal?: AbortSignal
   timeoutMs?: number
+  updateCsrfToken?: boolean
 }
 
 type Payload = BodyInit | object
@@ -46,6 +47,7 @@ const XHR = {
         headers: { 'Accept-Language': Settings.lang },
         signal: settings.signal,
         timeoutMs: settings.timeoutMs,
+        updateCsrfToken: settings.updateCsrfToken,
       })
       if (envelope.code !== 1) {
         FloatMsgs.show({

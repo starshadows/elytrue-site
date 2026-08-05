@@ -9,7 +9,6 @@ import PopupHost from '../components/Popups/Popups.vue'
 import FloatMsgs from '../components/FloatMsgs'
 import ImgViewer from '../components/ImgViewer'
 import Popups from '../components/Popups'
-import { initializeAuth } from '../features/auth/auth-actions'
 import { commentsStore } from '../features/comments/comments-store'
 import { musicController } from '../features/music/music-controller'
 import { createPwaController } from '../features/pwa/pwa-controller'
@@ -115,11 +114,6 @@ onMounted(() => {
   timeline.init()
   pwa.init()
   viewport.init()
-  const authRequest = initializeAuth()
-  const commentsRequest = commentsStore.initialize().catch(() => undefined)
-  void Promise.all([authRequest, commentsRequest]).then(([profile]) => {
-    if (profile) void commentsStore.hydrateViewerLikes().catch(() => undefined)
-  })
   if (location.hash.startsWith('#popup-')) {
     const popup = location.hash.slice(7)
     if (popup === 'loginPopup') Popups.show('loginPopup')

@@ -41,13 +41,13 @@ export interface CommentsApi {
   getCount(): Promise<number>
   getViewerLikes(ids: number[]): Promise<ViewerLikeState[]>
   like(commentId: number, liked: boolean): Promise<LikeResult | void>
+  listInitial?(): Promise<CommentPage>
   list(query?: CommentQuery): Promise<CommentPage>
   listUser(uid: string, cursor?: number | string): Promise<UserCommentPage>
   report(commentId: number, reason: string): Promise<void>
   upload(image: string): Promise<string>
 }
 
-let initialListRequest = true
 const userPageCache = new Map<
   string,
   { page: UserCommentPage; expiresAt: number }
@@ -105,21 +105,22 @@ function parseImageId(response: ApiEnvelope<unknown>): string {
 }
 
 export const commentsApi: CommentsApi = {
-  async list(query = {}) {
-    const usePublicInitial =
-      initialListRequest &&
-      query.count === 10 &&
-      Object.keys(query).length === 1
-    markPerformanceEvent('comments-request-start', { public: usePublicInitial })
+  async listInitial() {
+    markPerformanceEvent('comments-request-start', { public: true })
     const page = parseCommentPage(
-      await XHR.get<unknown>(
-        usePublicInitial ? 'comments/public' : 'comments',
-        query,
-      ),
+      await XHR.get<unknown>('comments/public', { count: 10 }),
     )
-    if (usePublicInitial) initialListRequest = false
     markPerformanceEvent('comments-response', {
-      public: usePublicInitial,
+      public: true,
+      count: page.items.length,
+    })
+    return page
+  },
+  async list(query = {}) {
+    markPerformanceEvent('comments-request-start', { public: false })
+    const page = parseCommentPage(await XHR.get<unknown>('comments', query))
+    markPerformanceEvent('comments-response', {
+      public: false,
       count: page.items.length,
     })
     return page
@@ -189,6 +190,10 @@ export const commentsApi: CommentsApi = {
     requireSuccess(response)
     return parseCommentPage([response.data]).items[0]!
   },
+}
+
+export function loadInitialComments(api: CommentsApi): Promise<CommentPage> {
+  return api.listInitial?.() ?? api.list({ count: 10 })
 }
 
 export async function getComment(

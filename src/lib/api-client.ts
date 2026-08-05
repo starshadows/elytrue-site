@@ -12,6 +12,7 @@ export interface ApiRequestOptions {
   readonly headers?: HeadersInit
   readonly signal?: AbortSignal
   readonly timeoutMs?: number
+  readonly updateCsrfToken?: boolean
 }
 
 export class ApiError<T = unknown> extends Error {
@@ -111,6 +112,7 @@ export class ApiClient {
       headers: suppliedHeaders,
       signal,
       timeoutMs = this.timeoutMs,
+      updateCsrfToken = true,
     }: ApiRequestOptions = {},
   ): Promise<ApiEnvelope<T>> {
     const timeoutController = new AbortController()
@@ -199,7 +201,7 @@ export class ApiClient {
         typeof parsed.data.csrfToken === 'string'
           ? parsed.data.csrfToken
           : ''
-      if (csrf) this.hooks.setCsrfToken?.(csrf)
+      if (csrf && updateCsrfToken) this.hooks.setCsrfToken?.(csrf)
       return parsed as ApiEnvelope<T>
     } catch (error) {
       requestError = error
