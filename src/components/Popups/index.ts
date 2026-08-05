@@ -20,84 +20,151 @@ export interface PopupEntry {
   closing: boolean
 }
 
-const popups = reactive<PopupEntry[]>([])
-let nextId = 0
-const removalTimers = new Map<number, number>()
+export const SINGLETON_POPUPS = [
+  'displaySettings',
+  'getImgPopup',
+  'themeSelectorPopup',
+] as const satisfies readonly PopupName[]
 
-function show(name: PopupName, props?: object): number {
-  const id = nextId++
-  popups.push({ id, name, props, closing: false })
-  location.hash = 'popup'
-  return id
+const singletonNames = new Set<PopupName>(SINGLETON_POPUPS)
+
+interface PopupStoreOptions {
+  cancelRemoval?: (handle: unknown) => void
+  scheduleRemoval?: (callback: () => void, delay: number) => unknown
+  setHash?: (hash: string) => void
 }
 
-function replace(id: number, name: PopupName, props?: object): void {
-  const entry = popups.find((item) => item.id === id)
-  if (!entry) return
-  const timer = removalTimers.get(id)
-  if (timer !== undefined) {
-    window.clearTimeout(timer)
+export interface PopupStore {
+  readonly popups: readonly PopupEntry[]
+  bringToFront(id: number): void
+  close(id?: number): void
+  closeInstant(id?: number): void
+  complete(id: number): void
+  isOpen(): boolean
+  isOpenName(name: PopupName): boolean
+  replace(id: number, name: PopupName, props?: object): void
+  show(name: PopupName, props?: object): number
+  topmost(): PopupEntry | undefined
+}
+
+export function createPopupStore(options: PopupStoreOptions = {}): PopupStore {
+  const popups = reactive<PopupEntry[]>([])
+  const removalTimers = new Map<number, unknown>()
+  let nextId = 0
+
+  const cancelRemoval =
+    options.cancelRemoval ??
+    ((handle) => {
+      if (typeof window !== 'undefined') window.clearTimeout(handle as number)
+    })
+  const scheduleRemoval =
+    options.scheduleRemoval ??
+    ((callback, delay) => window.setTimeout(callback, delay))
+  const setHash =
+    options.setHash ??
+    ((hash) => {
+      if (typeof location !== 'undefined') location.hash = hash
+    })
+
+  function clearRemovalTimer(id: number): void {
+    const timer = removalTimers.get(id)
+    if (timer === undefined) return
+    cancelRemoval(timer)
     removalTimers.delete(id)
   }
-  entry.name = name
-  entry.props = props
-  entry.closing = false
-  location.hash = 'popup'
-}
 
-function close(id?: number): void {
-  const selected = (
-    id == null ? [...popups] : popups.filter((item) => item.id === id)
-  ).filter((item) => item.name !== 'recoveryKeyPopup')
-  closeEntries(selected)
-}
+  function topmost(): PopupEntry | undefined {
+    return [...popups].reverse().find((item) => !item.closing)
+  }
 
-function complete(id: number): void {
-  closeEntries(popups.filter((item) => item.id === id))
-}
+  function bringToFront(id: number): void {
+    const index = popups.findIndex((item) => item.id === id)
+    if (index < 0 || index === popups.length - 1) return
+    const [entry] = popups.splice(index, 1)
+    if (entry) popups.push(entry)
+  }
 
-function closeEntries(selected: PopupEntry[]): void {
-  selected.forEach((item) => {
-    item.closing = true
-    const previousTimer = removalTimers.get(item.id)
-    if (previousTimer !== undefined) window.clearTimeout(previousTimer)
-    const timer = window.setTimeout(() => {
-      removalTimers.delete(item.id)
-      const index = popups.indexOf(item)
+  function show(name: PopupName, props?: object): number {
+    if (singletonNames.has(name)) {
+      const existing = popups.find((item) => item.name === name)
+      if (existing) {
+        clearRemovalTimer(existing.id)
+        existing.props = props
+        existing.closing = false
+        bringToFront(existing.id)
+        setHash('popup')
+        return existing.id
+      }
+    }
+
+    const id = nextId++
+    popups.push({ id, name, props, closing: false })
+    setHash('popup')
+    return id
+  }
+
+  function replace(id: number, name: PopupName, props?: object): void {
+    const entry = popups.find((item) => item.id === id)
+    if (!entry) return
+    clearRemovalTimer(id)
+    entry.name = name
+    entry.props = props
+    entry.closing = false
+    setHash('popup')
+  }
+
+  function closeEntry(entry: PopupEntry): void {
+    if (entry.closing) return
+    entry.closing = true
+    clearRemovalTimer(entry.id)
+    const timer = scheduleRemoval(() => {
+      removalTimers.delete(entry.id)
+      const index = popups.indexOf(entry)
       if (index >= 0) popups.splice(index, 1)
     }, 150)
-    removalTimers.set(item.id, timer)
-  })
-}
+    removalTimers.set(entry.id, timer)
+  }
 
-/**
- * 立即移除弹窗(不播放入场/离场动画),用于在同一个容器内
- * 直接切换弹窗内容,避免「关一个再开一个」产生两次完整动画。
- */
-function closeInstant(id?: number): void {
-  const selected = (
-    id == null ? [...popups] : popups.filter((item) => item.id === id)
-  ).filter((item) => item.name !== 'recoveryKeyPopup')
-  selected.forEach((item) => {
-    const timer = removalTimers.get(item.id)
-    if (timer !== undefined) {
-      window.clearTimeout(timer)
-      removalTimers.delete(item.id)
-    }
-    item.closing = true
-    const index = popups.indexOf(item)
+  function close(id?: number): void {
+    const entry =
+      id === undefined
+        ? topmost()
+        : popups.find((item) => item.id === id && !item.closing)
+    if (!entry || entry.name === 'recoveryKeyPopup') return
+    closeEntry(entry)
+  }
+
+  function complete(id: number): void {
+    const entry = popups.find((item) => item.id === id)
+    if (entry) closeEntry(entry)
+  }
+
+  /** Immediately removes one popup when its content is replaced in-place. */
+  function closeInstant(id?: number): void {
+    const entry =
+      id === undefined
+        ? topmost()
+        : popups.find((item) => item.id === id && !item.closing)
+    if (!entry || entry.name === 'recoveryKeyPopup') return
+    clearRemovalTimer(entry.id)
+    entry.closing = true
+    const index = popups.indexOf(entry)
     if (index >= 0) popups.splice(index, 1)
-  })
+  }
+
+  return {
+    bringToFront,
+    close,
+    closeInstant,
+    complete,
+    isOpen: () => popups.some((item) => !item.closing),
+    isOpenName: (name) =>
+      popups.some((item) => item.name === name && !item.closing),
+    popups: readonly(popups),
+    replace,
+    show,
+    topmost,
+  }
 }
 
-export default {
-  close,
-  closeInstant,
-  complete,
-  isOpen: () => popups.some((item) => !item.closing),
-  isOpenName: (name: PopupName) =>
-    popups.some((item) => item.name === name && !item.closing),
-  popups: readonly(popups),
-  replace,
-  show,
-}
+export default createPopupStore()
