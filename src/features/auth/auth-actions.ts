@@ -4,7 +4,12 @@ import XHR from '../../net/xhr'
 import { markPerformanceEvent } from '../../lib/performance'
 import { commentsStore } from '../comments/comments-store'
 import { invalidateUserCommentCache } from '../comments/comments-api'
-import { authStore, type ProfileAction, type UserProfile } from './auth-store'
+import {
+  authStore,
+  type AuthHydrationSource,
+  type ProfileAction,
+  type UserProfile,
+} from './auth-store'
 import { clearProfileHint, saveProfileHint } from './profile-hint'
 
 interface InputActionContext {
@@ -13,6 +18,17 @@ interface InputActionContext {
 }
 
 let configured = false
+
+async function requestAuthProfile(): Promise<UserProfile | null> {
+  markPerformanceEvent('auth-request-start')
+  const profile = await XHR.get<UserProfile | null>('user/me', undefined, {
+    silentStatuses: [401],
+  })
+  markPerformanceEvent('auth-response', {
+    authenticated: Boolean(profile),
+  })
+  return profile
+}
 
 function configureAuth(): void {
   if (configured) return
@@ -23,15 +39,12 @@ function configureAuth(): void {
       XHR.csrfToken = ''
       clearProfileHint()
     },
+    applyHydratedSession(profile, csrfToken) {
+      if (csrfToken !== undefined) XHR.csrfToken = csrfToken
+      saveProfileHint(profile)
+    },
     async loadProfile() {
-      markPerformanceEvent('auth-request-start')
-      const profile = await XHR.get<UserProfile | null>('user/me', undefined, {
-        silentStatuses: [401],
-      })
-      markPerformanceEvent('auth-response', {
-        authenticated: Boolean(profile),
-      })
-      return profile
+      return requestAuthProfile()
     },
   })
   XHR.unauthorizedHandler = () => {
@@ -49,9 +62,19 @@ export function avatarPath(avatar = ''): string {
 
 export async function initializeAuth(): Promise<UserProfile | null> {
   configureAuth()
-  const profile = await authStore.initialize()
-  if (profile) saveProfileHint(profile)
-  return profile
+  return authStore.initialize()
+}
+
+export function hydrateAuth(
+  hydration: AuthHydrationSource,
+): Promise<UserProfile | null> {
+  configureAuth()
+  return authStore.hydrate(hydration)
+}
+
+export function loadAuthFallback(): Promise<UserProfile | null> {
+  configureAuth()
+  return requestAuthProfile()
 }
 
 export async function refreshAuth(): Promise<UserProfile | null> {
@@ -59,7 +82,6 @@ export async function refreshAuth(): Promise<UserProfile | null> {
   invalidateUserCommentCache()
   const profile = await authStore.refresh()
   if (profile) {
-    saveProfileHint(profile)
     void commentsStore.hydrateViewerLikes().catch(() => undefined)
   } else commentsStore.clearViewerLikes()
   return profile

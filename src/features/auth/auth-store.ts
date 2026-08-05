@@ -22,7 +22,18 @@ interface MutableAuthState {
 export interface AuthAdapter {
   loadProfile(): Promise<UserProfile | null>
   clearSession(): void
+  applyHydratedSession?(profile: UserProfile, csrfToken?: string): void
 }
+
+export interface AuthHydration {
+  profile: UserProfile | null
+  csrfToken?: string
+}
+
+export type AuthHydrationSource =
+  | AuthHydration
+  | Promise<AuthHydration>
+  | ((isCurrent: () => boolean) => Promise<AuthHydration>)
 
 export type ProfileAction =
   | 'changeName'
@@ -53,7 +64,8 @@ export function createAuthStore(initialAdapter?: AuthAdapter) {
     return adapter
   }
 
-  function applyProfile(profile: UserProfile): UserProfile {
+  function applyProfile(profile: UserProfile, csrfToken?: string): UserProfile {
+    adapter?.applyHydratedSession?.(profile, csrfToken)
     mutableState.profile = profile
     mutableState.userId = profile.id
     mutableState.loginState = 'authenticated'
@@ -106,6 +118,27 @@ export function createAuthStore(initialAdapter?: AuthAdapter) {
     return request
   }
 
+  function hydrate(
+    hydration: AuthHydrationSource,
+  ): Promise<UserProfile | null> {
+    requestGeneration += 1
+    const generation = requestGeneration
+    const source =
+      typeof hydration === 'function'
+        ? hydration(() => generation === requestGeneration)
+        : hydration
+    const request = Promise.resolve(source)
+      .then(({ profile, csrfToken }) => {
+        if (generation !== requestGeneration) return mutableState.profile
+        return profile ? applyProfile(profile, csrfToken) : clearState()
+      })
+      .catch(() =>
+        generation === requestGeneration ? clearState() : mutableState.profile,
+      )
+    initialization = request
+    return request
+  }
+
   async function ready(): Promise<UserProfile | null> {
     return initialization ?? initialize()
   }
@@ -124,6 +157,7 @@ export function createAuthStore(initialAdapter?: AuthAdapter) {
     clear,
     configure,
     ensureAuthenticated,
+    hydrate,
     initialize,
     ready,
     refresh,

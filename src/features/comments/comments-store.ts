@@ -2,10 +2,11 @@ import { computed, reactive, readonly } from 'vue'
 import {
   commentsApi,
   getComment,
+  loadInitialComments,
   type CommentQuery,
   type CommentsApi,
 } from './comments-api'
-import type { CommentRecord } from './comment-types'
+import type { CommentPage, CommentRecord } from './comment-types'
 import { markPerformanceEvent } from '../../lib/performance'
 import { readHomeCommentsCache, writeHomeCommentsCache } from './comments-cache'
 import { reconcileComments } from './comments-reconcile'
@@ -13,6 +14,17 @@ import { reconcileComments } from './comments-reconcile'
 type LoadKind = 'initial' | 'newer' | 'older' | 'replacement'
 export type CommentRenderOrigin =
   'cache' | 'initial-network' | 'revalidated' | 'new' | 'created' | 'pagination'
+
+export interface BootstrapCommentHydration {
+  page: CommentPage
+  todayCountRequest?: Promise<number | null>
+  todayCountResolved: boolean
+  viewerLikesComplete: boolean
+}
+
+export type BootstrapCommentHydrationSource =
+  | Promise<BootstrapCommentHydration>
+  | ((isCurrent: () => boolean) => Promise<BootstrapCommentHydration>)
 
 interface CommentsState {
   items: CommentRecord[]
@@ -118,6 +130,7 @@ export function createCommentsStore(api: CommentsApi) {
     kind: LoadKind,
     query: CommentQuery,
     replace = false,
+    suppliedRequest?: Promise<CommentPage>,
   ): Promise<void> {
     const existing = pending.get(kind)
     if (existing) return existing
@@ -126,8 +139,7 @@ export function createCommentsStore(api: CommentsApi) {
     const requestLikeVersions = new Map(likeMutationVersions)
     const pendingLikeAtStart = new Set(state.likePendingIds)
     setLoading(kind, true)
-    const request = api
-      .list(query)
+    const request = (suppliedRequest ?? api.list(query))
       .then((page) => {
         if (requestGeneration !== generation) return
         if (kind === 'initial' || kind === 'replacement')
@@ -252,6 +264,26 @@ export function createCommentsStore(api: CommentsApi) {
     } else state.todayCount = Math.max(state.todayCount, count)
   }
 
+  function hydrateBootstrapTodayCount(
+    request: Promise<number | null>,
+    requestGeneration: number,
+  ): void {
+    const requestVersion = ++countRequestVersion
+    const requestDate = shanghaiDate()
+    void request.then((count) => {
+      if (
+        count === null ||
+        requestGeneration !== generation ||
+        requestVersion !== countRequestVersion ||
+        requestDate !== shanghaiDate()
+      )
+        return
+      todayCountDate = requestDate
+      state.todayCount = Math.max(state.todayCount, count)
+      todayCountFresh = true
+    })
+  }
+
   async function refresh(): Promise<void> {
     resetForReplacement()
     await load('initial', { count: 10 }, true)
@@ -268,14 +300,53 @@ export function createCommentsStore(api: CommentsApi) {
       )
     }
     if (state.loadingInitial) return pending.get('initial') ?? Promise.resolve()
-    return load('initial', { count: 10 }, true).then(() => {
-      if (!todayCountFresh) void refreshTodayCount()
-    })
+    return load('initial', { count: 10 }, true, loadInitialComments(api)).then(
+      () => {
+        if (!todayCountFresh) void refreshTodayCount()
+      },
+    )
   }
 
   function loadInitialAfterCache(): Promise<void> {
-    return load('initial', { count: 10 }, true).then(() => {
-      if (!todayCountFresh) void refreshTodayCount()
+    return load('initial', { count: 10 }, true, loadInitialComments(api)).then(
+      () => {
+        if (!todayCountFresh) void refreshTodayCount()
+      },
+    )
+  }
+
+  function hydrateBootstrap(
+    hydration: BootstrapCommentHydrationSource,
+  ): Promise<boolean> {
+    hydrateHomeCache()
+    const hydrationGeneration = generation
+    let metadata: BootstrapCommentHydration | undefined
+    const source =
+      typeof hydration === 'function'
+        ? hydration(() => hydrationGeneration === generation)
+        : hydration
+    const pageRequest = source.then((result) => {
+      metadata = result
+      if (result.todayCountRequest) {
+        hydrateBootstrapTodayCount(
+          result.todayCountRequest,
+          hydrationGeneration,
+        )
+      }
+      return result.page
+    })
+    return load('initial', { count: 10 }, true, pageRequest).then(async () => {
+      if (
+        hydrationGeneration === generation &&
+        !todayCountFresh &&
+        !metadata?.todayCountResolved
+      ) {
+        await refreshTodayCount()
+      }
+      return (
+        hydrationGeneration === generation &&
+        metadata?.viewerLikesComplete === true
+      )
     })
   }
 
@@ -485,6 +556,7 @@ export function createCommentsStore(api: CommentsApi) {
     finishJump,
     gotoId,
     gotoNumber,
+    hydrateBootstrap,
     hydrateViewerLikes,
     initialize,
     insertCreatedComment,
