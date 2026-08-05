@@ -3,11 +3,15 @@ import type { UserProfile } from './auth-store'
 
 const STORAGE_KEY = 'elytrue.profileHint'
 
-export interface CachedProfileHint {
-  version: 1
+/** Public fields that are safe to render before the session is verified. */
+export interface OptimisticProfile {
   userId: string
   name: string
   avatar: string
+}
+
+export interface CachedProfileHint extends OptimisticProfile {
+  version: 1
   savedAt: number
 }
 

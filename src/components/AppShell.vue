@@ -1,5 +1,5 @@
 <script setup lang="ts">
-import { computed, nextTick } from 'vue'
+import { computed, nextTick, onBeforeUnmount, watch } from 'vue'
 import Popups from './Popups'
 import {
   avatarPath,
@@ -8,8 +8,12 @@ import {
 } from '../features/auth/auth-actions'
 import { useAuth, type ProfileAction } from '../features/auth/useAuth'
 import { markPerformanceEvent } from '../lib/performance'
-import { profileHint } from '../features/auth/profile-hint'
+import {
+  profileHint,
+  type OptimisticProfile,
+} from '../features/auth/profile-hint'
 import StableAvatar from './StableAvatar.vue'
+import { prefetchUserHomePage } from '../features/comments/user-home-prefetch'
 
 const auth = useAuth()
 const displayProfile = computed(
@@ -23,11 +27,74 @@ const showNameSkeleton = computed(
   () => auth.loginState.value === 'loading' && !displayProfile.value,
 )
 const homeUrl = `${window.location.origin}${window.location.pathname}`
+const optimisticProfile = computed<OptimisticProfile | null>(() => {
+  const hint = profileHint.value
+  return hint
+    ? { userId: hint.userId, name: hint.name, avatar: hint.avatar }
+    : null
+})
+let idleCallbackId: number | undefined
+let idleFallbackId: number | undefined
+
+function lowEndOrSaveData(): boolean {
+  const browserNavigator = navigator as Navigator & {
+    connection?: { saveData?: boolean }
+    deviceMemory?: number
+  }
+  return (
+    browserNavigator.connection?.saveData === true ||
+    (browserNavigator.hardwareConcurrency > 0 &&
+      browserNavigator.hardwareConcurrency <= 2) ||
+    (browserNavigator.deviceMemory !== undefined &&
+      browserNavigator.deviceMemory <= 2)
+  )
+}
+
+function prefetchCurrentUserComments(): void {
+  const profile = auth.profile.value
+  if (!profile) return
+  void prefetchUserHomePage({
+    viewerId: profile.id,
+    profileUserId: profile.id,
+  }).catch(() => undefined)
+}
+
+function prefetchOnIntent(): void {
+  prefetchCurrentUserComments()
+}
+
+function scheduleIdlePrefetch(profile: typeof auth.profile.value): void {
+  if (!profile || lowEndOrSaveData()) return
+  if (idleCallbackId !== undefined) {
+    window.cancelIdleCallback(idleCallbackId)
+    idleCallbackId = undefined
+  }
+  if (idleFallbackId !== undefined) window.clearTimeout(idleFallbackId)
+  if (typeof window.requestIdleCallback === 'function') {
+    idleCallbackId = window.requestIdleCallback(
+      () => {
+        idleCallbackId = undefined
+        prefetchCurrentUserComments()
+      },
+      { timeout: 2_000 },
+    )
+  } else {
+    idleFallbackId = window.setTimeout(() => {
+      idleFallbackId = undefined
+      prefetchCurrentUserComments()
+    }, 0)
+  }
+}
+
+watch(() => auth.profile.value, scheduleIdlePrefetch, { immediate: true })
 
 async function openUser(): Promise<void> {
   if (Popups.popups.some((item) => item.name === 'userHome')) return
   if (auth.loginState.value === 'loading') {
-    Popups.show('userHome', { loadingAuth: true })
+    Popups.show('userHome', {
+      loadingAuth: true,
+      optimisticProfile: optimisticProfile.value ?? undefined,
+    })
     void initializeAuth()
   } else if (auth.loggedIn.value) {
     Popups.show('userHome', { profile: auth.profile.value ?? undefined })
@@ -41,6 +108,11 @@ async function openUser(): Promise<void> {
 function action(value: ProfileAction): void {
   runProfileAction(value)
 }
+
+onBeforeUnmount(() => {
+  if (idleCallbackId !== undefined) window.cancelIdleCallback(idleCallbackId)
+  if (idleFallbackId !== undefined) window.clearTimeout(idleFallbackId)
+})
 </script>
 
 <template>
@@ -84,8 +156,16 @@ function action(value: ProfileAction): void {
       @click="openUser"
       @keydown.enter="openUser"
       @keydown.space.prevent="openUser"
+      @pointerenter="prefetchOnIntent"
+      @focusin="prefetchOnIntent"
     >
-      <StableAvatar id="userInfoAvatar" :src="avatar" alt="" loading="eager" />
+      <StableAvatar
+        id="userInfoAvatar"
+        :src="avatar"
+        alt=""
+        loading="eager"
+        fetchpriority="high"
+      />
       <span id="userInfoName">
         <span
           v-if="showNameSkeleton"

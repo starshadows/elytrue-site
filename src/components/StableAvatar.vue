@@ -1,5 +1,6 @@
 <script setup lang="ts">
 import { computed, onBeforeUnmount, ref, watch } from 'vue'
+import { preloadAvatar } from '../features/auth/avatar-loader'
 
 const DEFAULT_AVATAR = '/res/defaultAvatar.png'
 
@@ -23,20 +24,12 @@ const fallback = computed(() => props.fallbackSrc.trim() || DEFAULT_AVATAR)
 const targetSource = computed(() => props.src.trim() || fallback.value)
 const isDynamicAvatar = (source: string): boolean =>
   source.includes('/api/data/images/avatars/')
-const displayedSrc = ref(
-  isDynamicAvatar(targetSource.value) ? fallback.value : targetSource.value,
-)
+const displayedSrc = ref(targetSource.value)
 let loadVersion = 0
-let pendingImage: HTMLImageElement | undefined
 let pendingSource = ''
 let unmounted = false
 
 function clearPendingImage(): void {
-  if (pendingImage) {
-    pendingImage.onload = null
-    pendingImage.onerror = null
-  }
-  pendingImage = undefined
   pendingSource = ''
 }
 
@@ -64,19 +57,20 @@ function loadSource(source: string): void {
 
   const version = ++loadVersion
   clearPendingImage()
-  if (!isDynamicAvatar(source)) {
-    displayedSrc.value = source
-    return
-  }
-
-  const image = new Image()
-  pendingImage = image
   pendingSource = source
-  image.onload = () => void commitLoadedAvatar(image, source, version)
-  image.onerror = () => {
-    if (version === loadVersion) clearPendingImage()
-  }
-  image.src = source
+  void preloadAvatar(source)
+    .then((image) => commitLoadedAvatar(image, source, version))
+    .catch(() => {
+      if (version === loadVersion) clearPendingImage()
+    })
+}
+
+function handleDisplayedError(): void {
+  if (!isDynamicAvatar(targetSource.value)) return
+  if (displayedSrc.value !== targetSource.value) return
+  loadVersion += 1
+  clearPendingImage()
+  displayedSrc.value = fallback.value
 }
 
 watch(targetSource, loadSource, { immediate: true })
@@ -95,5 +89,6 @@ onBeforeUnmount(() => {
     :alt="alt"
     :loading="loading"
     :fetchpriority="fetchpriority"
+    @error="handleDisplayedError"
   />
 </template>
