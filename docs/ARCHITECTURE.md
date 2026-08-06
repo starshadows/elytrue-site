@@ -82,14 +82,14 @@ Comments store 以 `jumping` 和 `jumpNumber` 管理公开编号跳转：请求�
 
 2026-08-05 使用带 `get/list` 计数与并发峰值记录的 `MemoryStore` 对旧实现实测：
 
-| 请求 | 旧 Blob 读取 | 主要来源 |
-| --- | ---: | --- |
-| 公共首页 10 条 | 31 get | 1 hint + 10 seat + 10 canonical + 10 like cache |
-| 公共首页 12 条 | 37 get | 1 hint + 12 seat + 12 canonical + 12 like cache |
-| 匿名 bootstrap 12 条 | 37 get + 1 list | 上述 37 次 + 当日日期索引 list |
-| 用户首页 20 条 | 20 get + 1 list | v2 list + 20 canonical |
-| 12 条回复共享一个目标 | 38 get | 首页 37 次 + 1 reply canonical |
-| 登录用户 12 条 liked 状态 | 12 get | 每条一个 like fact，受并发上限 8 约束 |
+| 请求                      |    旧 Blob 读取 | 主要来源                                        |
+| ------------------------- | --------------: | ----------------------------------------------- |
+| 公共首页 10 条            |          31 get | 1 hint + 10 seat + 10 canonical + 10 like cache |
+| 公共首页 12 条            |          37 get | 1 hint + 12 seat + 12 canonical + 12 like cache |
+| 匿名 bootstrap 12 条      | 37 get + 1 list | 上述 37 次 + 当日日期索引 list                  |
+| 用户首页 20 条            | 20 get + 1 list | v2 list + 20 canonical                          |
+| 12 条回复共享一个目标     |          38 get | 首页 37 次 + 1 reply canonical                  |
+| 登录用户 12 条 liked 状态 |          12 get | 每条一个 like fact，受并发上限 8 约束           |
 
 自动化预算测试现在要求 latest 命中不超过 2 次数据读取；fallback 和用户页均为一次 list 加最多 `count` 次并发 get；普通首页不得读取 `likes/` 或回复 canonical。
 

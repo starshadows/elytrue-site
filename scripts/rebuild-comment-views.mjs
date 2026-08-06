@@ -36,7 +36,8 @@ export async function listEvery(store, prefix) {
     const pageBlobs = page?.blobs || []
     blobs.push(...pageBlobs)
     const nextCursor = page?.cursor
-    if (!nextCursor || nextCursor === cursor || pageBlobs.length < PAGE_SIZE) break
+    if (!nextCursor || nextCursor === cursor || pageBlobs.length < PAGE_SIZE)
+      break
     cursor = nextCursor
   } while (true)
   return blobs
@@ -79,26 +80,39 @@ export async function rebuildCommentViews(data, options = {}) {
   const issues = []
   const repaired = []
 
-  if (comments.length !== blobCount) issues.push({ type: 'canonical-corruption' })
+  if (comments.length !== blobCount)
+    issues.push({ type: 'canonical-corruption' })
   if (fix && comments.length !== blobCount) {
     return { aborted: true, reason: 'canonical-corruption', issues }
   }
 
   const mutationBlobs = await listEvery(data, 'operations/comment-mutations/')
   for (const blob of mutationBlobs) {
-    const match = /^operations\/comment-mutations\/(\d+)\/(\d+)\.json$/u.exec(String(blob.key))
+    const match = /^operations\/comment-mutations\/(\d+)\/(\d+)\.json$/u.exec(
+      String(blob.key),
+    )
     const claim = await getJSON(data, blob.key)
     const commentId = match ? Number(match[1]) : Number(claim?.commentId)
     const version = match ? Number(match[2]) : Number(claim?.version)
-    const comment = canonicalIds.has(commentId) ? await getJSON(data, blobKeys.comment(commentId)) : null
-    if (!claim || !Number.isSafeInteger(commentId) || !Number.isSafeInteger(version)) {
+    const comment = canonicalIds.has(commentId)
+      ? await getJSON(data, blobKeys.comment(commentId))
+      : null
+    if (
+      !claim ||
+      !Number.isSafeInteger(commentId) ||
+      !Number.isSafeInteger(version)
+    ) {
       issues.push({ type: 'invalid-mutation-claim', key: blob.key })
       continue
     }
     if (claim.status !== 'completed') {
       issues.push({ type: 'pending-mutation-claim', commentId, version })
       if (fix && comment && Number(comment.version || 1) >= version) {
-        await data.setJSON(blob.key, { ...claim, status: 'completed', completedAt: Date.now() })
+        await data.setJSON(blob.key, {
+          ...claim,
+          status: 'completed',
+          completedAt: Date.now(),
+        })
         repaired.push(`mutation:${commentId}:${version}`)
       }
     }
@@ -151,10 +165,14 @@ export async function rebuildCommentViews(data, options = {}) {
     if (!cardsEqual(userView, expected)) {
       issues.push({ type: 'user-view', commentId: id })
     }
-    if (comment.hidden ? publicView !== null : !cardsEqual(publicView, expected)) {
+    if (
+      comment.hidden ? publicView !== null : !cardsEqual(publicView, expected)
+    ) {
       issues.push({ type: 'public-view', commentId: id })
     }
-    if (comment.hidden ? !cardsEqual(hiddenView, expected) : hiddenView !== null) {
+    if (
+      comment.hidden ? !cardsEqual(hiddenView, expected) : hiddenView !== null
+    ) {
       issues.push({ type: 'hidden-view', commentId: id })
     }
 
@@ -164,11 +182,15 @@ export async function rebuildCommentViews(data, options = {}) {
     Object.assign(comment, repairedComment)
     await data.setJSON(blobKeys.comment(id), repairedComment)
     try {
-      await data.setJSON(blobKeys.commentNumber(number), {
-        commentId: id,
-        number,
-        rebuiltAt: Date.now(),
-      }, { onlyIfNew: true })
+      await data.setJSON(
+        blobKeys.commentNumber(number),
+        {
+          commentId: id,
+          number,
+          rebuiltAt: Date.now(),
+        },
+        { onlyIfNew: true },
+      )
     } catch (error) {
       if (!isPreconditionFailure(error)) throw error
       const claimed = await getJSON(data, blobKeys.commentNumber(number))
@@ -186,9 +208,21 @@ export async function rebuildCommentViews(data, options = {}) {
     } catch (error) {
       if (!isPreconditionFailure(error)) throw error
     }
-    if (marker && Number(marker.commentId) === id && !marker.deleted && (!marker.reason || [
-      'create-read-model', 'latest-view', 'like', 'like-canonical', 'hide', 'restore', 'delete',
-    ].includes(marker.reason))) {
+    if (
+      marker &&
+      Number(marker.commentId) === id &&
+      !marker.deleted &&
+      (!marker.reason ||
+        [
+          'create-read-model',
+          'latest-view',
+          'like',
+          'like-canonical',
+          'hide',
+          'restore',
+          'delete',
+        ].includes(marker.reason))
+    ) {
       await data.delete(blobKeys.commentViewRepair(id)).catch(() => {})
     }
     repaired.push(id)
@@ -200,12 +234,21 @@ export async function rebuildCommentViews(data, options = {}) {
     listEvery(data, 'indexes/comments/by-user/'),
     listEvery(data, 'repairs/comment-views/'),
   ])
-  const orphanPublic = publicBlobs.filter((blob) => !canonicalIds.has(publicViewId(blob.key)))
-  const orphanHidden = hiddenBlobs.filter((blob) => !canonicalIds.has(publicViewId(blob.key)))
-  const orphanUser = userBlobs.filter((blob) => !canonicalIds.has(userViewId(blob.key)))
-  for (const blob of orphanPublic) issues.push({ type: 'orphan-public-view', key: blob.key })
-  for (const blob of orphanHidden) issues.push({ type: 'orphan-hidden-view', key: blob.key })
-  for (const blob of orphanUser) issues.push({ type: 'orphan-user-view', key: blob.key })
+  const orphanPublic = publicBlobs.filter(
+    (blob) => !canonicalIds.has(publicViewId(blob.key)),
+  )
+  const orphanHidden = hiddenBlobs.filter(
+    (blob) => !canonicalIds.has(publicViewId(blob.key)),
+  )
+  const orphanUser = userBlobs.filter(
+    (blob) => !canonicalIds.has(userViewId(blob.key)),
+  )
+  for (const blob of orphanPublic)
+    issues.push({ type: 'orphan-public-view', key: blob.key })
+  for (const blob of orphanHidden)
+    issues.push({ type: 'orphan-hidden-view', key: blob.key })
+  for (const blob of orphanUser)
+    issues.push({ type: 'orphan-user-view', key: blob.key })
   if (fix) {
     await Promise.all([
       ...orphanPublic.map((blob) => data.delete(blob.key)),
@@ -227,19 +270,23 @@ export async function rebuildCommentViews(data, options = {}) {
     generatedAt: Date.now(),
     todayCount: dateBlobs.length,
     items: latestItems,
-    hasMore: comments.filter((comment) => !comment.hidden).length > latestItems.length,
-    nextCursor: comments.filter((comment) => !comment.hidden).length > latestItems.length
-      && latestItems.length > 0
-      ? latestItems.at(-1).id
-      : null,
+    hasMore:
+      comments.filter((comment) => !comment.hidden).length > latestItems.length,
+    nextCursor:
+      comments.filter((comment) => !comment.hidden).length >
+        latestItems.length && latestItems.length > 0
+        ? latestItems.at(-1).id
+        : null,
   }
   const latest = await getJSON(data, blobKeys.commentsLatestView)
-  if (!isLatestCommentView(latest)
-    || latest.date !== latestExpected.date
-    || !cardsEqual(latest.items, latestExpected.items)
-    || latest.todayCount !== latestExpected.todayCount
-    || Boolean(latest.hasMore) !== latestExpected.hasMore
-    || latest.nextCursor !== latestExpected.nextCursor) {
+  if (
+    !isLatestCommentView(latest) ||
+    latest.date !== latestExpected.date ||
+    !cardsEqual(latest.items, latestExpected.items) ||
+    latest.todayCount !== latestExpected.todayCount ||
+    Boolean(latest.hasMore) !== latestExpected.hasMore ||
+    latest.nextCursor !== latestExpected.nextCursor
+  ) {
     issues.push({ type: 'latest-view' })
   }
   if (fix) {
@@ -273,14 +320,21 @@ async function main() {
   const projectId = process.env.EDGEONE_PROJECT_ID
   const token = process.env.EDGEONE_API_TOKEN
   if (!projectId || !token) {
-    throw new Error('缺少环境变量:必须设置 EDGEONE_PROJECT_ID 与 EDGEONE_API_TOKEN')
+    throw new Error(
+      '缺少环境变量:必须设置 EDGEONE_PROJECT_ID 与 EDGEONE_API_TOKEN',
+    )
   }
   const args = process.argv.slice(2)
   const fix = args.includes('--fix')
   if (fix && !args.includes('--confirm-production-repair')) {
     throw new Error('写修复必须同时传入 --fix --confirm-production-repair')
   }
-  const data = getStore({ name: DATA_STORE, projectId, token, consistency: 'strong' })
+  const data = getStore({
+    name: DATA_STORE,
+    projectId,
+    token,
+    consistency: 'strong',
+  })
   const report = await rebuildCommentViews(data, {
     fix,
     confirmProductionRepair: args.includes('--confirm-production-repair'),
@@ -293,7 +347,8 @@ async function main() {
   }
 }
 
-const isMain = process.argv[1] && fileURLToPath(import.meta.url) === resolve(process.argv[1])
+const isMain =
+  process.argv[1] && fileURLToPath(import.meta.url) === resolve(process.argv[1])
 if (isMain) {
   main().catch((error) => {
     console.error(`检查失败:${error?.message || error}`)
