@@ -66,6 +66,7 @@ export function createCommentsStore(api: CommentsApi) {
   })
   const pending = new Map<LoadKind, Promise<void>>()
   const likeLocks = new Map<number, Promise<void>>()
+  let refreshRequest: Promise<void> | undefined
   let generation = 0
   let insertionVersion = 0
   const insertedVersions = new Map<number, number>()
@@ -83,6 +84,7 @@ export function createCommentsStore(api: CommentsApi) {
 
   function merge(items: CommentRecord[], origin: CommentRenderOrigin): void {
     const merged = new Map(state.items.map((item) => [item.id, item]))
+    let added = false
     for (const item of items) {
       const current = merged.get(item.id)
       if (current) {
@@ -90,9 +92,10 @@ export function createCommentsStore(api: CommentsApi) {
       } else {
         merged.set(item.id, item)
         queueAnimation(item.id, origin)
+        added = true
       }
     }
-    state.items = [...merged.values()].sort(compareComments)
+    if (added) state.items = [...merged.values()].sort(compareComments)
   }
 
   function queueAnimation(id: number, origin: CommentRenderOrigin): void {
@@ -284,10 +287,41 @@ export function createCommentsStore(api: CommentsApi) {
     })
   }
 
-  async function refresh(): Promise<void> {
-    resetForReplacement()
-    await load('initial', { count: 10 }, true)
-    if (!todayCountFresh) void refreshTodayCount()
+  function refresh(): Promise<void> {
+    if (refreshRequest) return refreshRequest
+    const request = refreshIncrementally().finally(() => {
+      if (refreshRequest === request) refreshRequest = undefined
+    })
+    refreshRequest = request
+    return request
+  }
+
+  async function refreshIncrementally(): Promise<void> {
+    const initialRequest = pending.get('initial') ?? pending.get('replacement')
+    if (initialRequest) {
+      await initialRequest
+      return
+    }
+    if (!state.items.length) {
+      await initialize()
+      return
+    }
+
+    const refreshGeneration = generation
+    state.reachedNewest = false
+    nextNewerCursor = null
+    do {
+      await loadNewer(100)
+    } while (
+      refreshGeneration === generation &&
+      !state.jumping &&
+      !state.reachedNewest
+    )
+    if (refreshGeneration !== generation || state.jumping) return
+
+    state.initialError = false
+    writeHomeCommentsCache(state.items, homeCacheHasMore, homeCacheNextCursor)
+    void refreshTodayCount()
   }
 
   function initialize(): Promise<void> {

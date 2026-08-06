@@ -465,7 +465,7 @@ test('公共留言后台校准只为新增 ID 入场并移除已删除留言', a
   )
 })
 
-test('公共留言缓存损坏或过期时删除缓存并回退骨架网络加载', async ({ page }) => {
+test('公共留言缓存损坏或过期时删除缓存并直接等待网络加载', async ({ page }) => {
   await page.addInitScript(() => {
     sessionStorage.setItem('elytrue:home-comments:v1', '{broken')
   })
@@ -473,7 +473,7 @@ test('公共留言缓存损坏或过期时删除缓存并回退骨架网络加�
     fulfillBootstrap(route, { delay: 300, items: [commentPayload(44)] }),
   )
   await page.goto('/', { waitUntil: 'domcontentloaded' })
-  await expect(page.locator('#comments .commentSkeleton')).toHaveCount(3)
+  await expect(page.locator('#comments .commentSkeleton')).toHaveCount(0)
   await expect(page.locator('#comments .commentItem')).toHaveCount(1, {
     timeout: 2000,
   })
@@ -482,6 +482,73 @@ test('公共留言缓存损坏或过期时删除缓存并回退骨架网络加�
       sessionStorage.getItem('elytrue:home-comments:v1'),
     ),
   ).not.toBe('{broken')
+})
+
+test('刷新仅追加新留言且空结果只播放刷新动画', async ({ page }) => {
+  const current = commentPayload(47)
+  let afterRequests = 0
+  const afterQueries = []
+  await page.route('**/api/bootstrap', (route) =>
+    fulfillBootstrap(route, { items: [current] }),
+  )
+  await page.route('**/api/comments*', async (route) => {
+    const url = new URL(route.request().url())
+    if (url.pathname === '/api/comments/count') {
+      await route.fulfill({
+        status: 200,
+        contentType: 'application/json',
+        body: JSON.stringify({ code: 1, message: 'OK', data: 1 }),
+      })
+      return
+    }
+    if (
+      url.pathname === '/api/comments' &&
+      url.searchParams.get('direction') === 'after'
+    ) {
+      afterRequests += 1
+      afterQueries.push(Object.fromEntries(url.searchParams))
+      await fulfillComments(route, {
+        items: afterRequests === 1 ? [] : [commentPayload(48)],
+      })
+      return
+    }
+    await route.continue()
+  })
+
+  await page.goto('/')
+  await liftPanel(page)
+  const originalCard = page.locator('#comments .commentItem').first()
+  const originalHandle = await originalCard.elementHandle()
+  const action = page.locator('.refreshCommentsAction')
+  await page.locator('#menu').hover()
+  await action.click()
+  await expect(action).toHaveClass(/refreshing/u)
+  expect(
+    await action
+      .locator('.refreshIcon:visible')
+      .evaluate((element) => getComputedStyle(element).animationName),
+  ).toBe('rotate')
+  await expect.poll(() => afterRequests).toBe(1)
+  await expect(action).not.toHaveClass(/refreshing/u)
+  expect(
+    await originalCard.evaluate(
+      (element, original) => element === original,
+      originalHandle,
+    ),
+  ).toBe(true)
+  await expect(page.locator('#comments .commentItem')).toHaveCount(1)
+
+  await page.locator('#menu').hover()
+  await action.click()
+  await expect.poll(() => afterRequests).toBe(2)
+  await expect(page.locator('#comments .commentItem')).toHaveCount(2)
+  await expect(page.locator('#comments .commentItem').first()).toHaveText(
+    /性能留言 48/u,
+  )
+  expect(afterQueries).toEqual([
+    { count: '-100', cursor: '47', direction: 'after' },
+    { count: '-100', cursor: '47', direction: 'after' },
+  ])
 })
 
 test('公共留言校准失败时保留缓存并提供非阻塞重试', async ({ page }) => {
@@ -575,13 +642,15 @@ test('置顶与已有留言只随父级面板整体上升', async ({ page }) => 
   expect(animationState.firstStart).toBeTruthy()
 })
 
-test('1500ms bootstrap 请求期间立即显示置顶卡和三个骨架', async ({ page }) => {
+test('1500ms bootstrap 请求期间显示置顶卡且不显示留言占位卡', async ({
+  page,
+}) => {
   await page.route('**/api/bootstrap', (route) =>
     fulfillBootstrap(route, { delay: 1500 }),
   )
   await page.goto('/', { waitUntil: 'domcontentloaded' })
   await expect(page.locator('#topComment')).toBeVisible({ timeout: 100 })
-  await expect(page.locator('#comments .commentSkeleton')).toHaveCount(3)
+  await expect(page.locator('#comments .commentSkeleton')).toHaveCount(0)
   await expect(page.locator('#comments .loadingCircle')).toHaveCount(0)
   await expect(page.locator('#comments .commentItem')).toHaveCount(1)
   await expect(page.locator('#comments .commentSkeleton')).toHaveCount(0)

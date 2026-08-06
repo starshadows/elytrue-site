@@ -4,6 +4,7 @@ import Popups from './Popups'
 import { commentsStore } from '../features/comments/comments-store'
 import { changeLang } from '../settings/lang'
 import { setConfig } from '../settings/config'
+import FloatMsgs from './FloatMsgs'
 
 const emit = defineEmits<{
   fullscreen: []
@@ -11,6 +12,7 @@ const emit = defineEmits<{
   newComment: []
 }>()
 const goto = ref('')
+const refreshing = ref(false)
 
 function setLanguage(language: '' | 'zh' | 'en'): void {
   changeLang(language)
@@ -20,6 +22,24 @@ function setLanguage(language: '' | 'zh' | 'en'): void {
 function gotoComment(): void {
   if (goto.value)
     void commentsStore.gotoNumber(goto.value).catch(() => undefined)
+}
+
+async function refreshComments(): Promise<void> {
+  if (refreshing.value) return
+  refreshing.value = true
+  try {
+    await Promise.all([
+      commentsStore.refresh(),
+      new Promise<void>((resolve) => window.setTimeout(resolve, 500)),
+    ])
+  } catch {
+    FloatMsgs.show({
+      type: 'error',
+      msg: '<span class="ui zh">刷新留言失败</span><span class="ui en">Failed to refresh messages</span>',
+    })
+  } finally {
+    refreshing.value = false
+  }
 }
 </script>
 
@@ -35,9 +55,17 @@ function gotoComment(): void {
       <div id="menu" class="toolbarItem">
         <span class="ui zh">工具 🛠</span><span class="ui en">Tools 🛠</span>
         <ul>
-          <li @click="commentsStore.refresh()">
-            <span class="ui zh">🔄 刷新</span
-            ><span class="ui en">🔄 Refresh</span>
+          <li
+            class="refreshCommentsAction"
+            :class="{ refreshing }"
+            :aria-busy="refreshing"
+            @click="refreshComments"
+          >
+            <span class="ui zh"
+              ><i class="refreshIcon" aria-hidden="true">🔄</i> 刷新</span
+            ><span class="ui en"
+              ><i class="refreshIcon" aria-hidden="true">🔄</i> Refresh</span
+            >
           </li>
           <li @click="Popups.show('themeSelectorPopup')">
             <span class="ui zh">🖌️ 主题&音乐设置</span

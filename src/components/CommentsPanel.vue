@@ -555,22 +555,6 @@ defineExpose({ forceLowerPanelDown, forceLowerPanelUp, pauseScroll })
         @focus="forceLowerPanelUp"
         @sent="handleSent"
       />
-      <div
-        v-for="index in 3"
-        v-if="
-          commentsStore.state.loadingInitial &&
-          !commentsStore.state.items.length &&
-          !commentsStore.state.initialError
-        "
-        :key="`comment-skeleton-${index}`"
-        class="commentBox commentSkeleton"
-        aria-hidden="true"
-      >
-        <i class="commentSkeletonAvatar"></i>
-        <i class="commentSkeletonName"></i>
-        <i class="commentSkeletonLine"></i>
-        <i class="commentSkeletonLine short"></i>
-      </div>
       <CommentCard
         v-for="(record, index) in commentsStore.state.items"
         :key="record.id"

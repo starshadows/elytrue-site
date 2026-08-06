@@ -396,6 +396,69 @@ describe('comments store', () => {
     assert.equal(listCalls, 1)
   })
 
+  test('keeps the current list untouched when refresh finds no new comments', async () => {
+    const queries: CommentQuery[] = []
+    const store = createCommentsStore(
+      apiWith({
+        async list(query = {}) {
+          queries.push(query)
+          return queries.length === 1
+            ? { items: [comment(2), comment(1)], hasMore: false }
+            : { items: [], hasMore: false }
+        },
+      }),
+    )
+    await store.initialize()
+    const items = store.state.items
+    const newest = items[0]
+
+    await store.refresh()
+
+    assert.equal(store.state.items, items)
+    assert.equal(store.state.items[0], newest)
+    assert.deepEqual(queries[1], {
+      cursor: 2,
+      direction: 'after',
+      count: -100,
+    })
+    assert.deepEqual([...store.consumeAnimationIds()], [])
+  })
+
+  test('refresh incrementally collects every newer page', async () => {
+    const queries: CommentQuery[] = []
+    const store = createCommentsStore(
+      apiWith({
+        async list(query = {}) {
+          queries.push(query)
+          if (queries.length === 1) {
+            return { items: [comment(2), comment(1)], hasMore: true }
+          }
+          if (query.cursor === 2) {
+            return {
+              items: [comment(3)],
+              hasMore: true,
+              nextCursor: 3,
+            }
+          }
+          return { items: [comment(4)], hasMore: false }
+        },
+      }),
+    )
+    await store.initialize()
+
+    await store.refresh()
+
+    assert.deepEqual(
+      store.state.items.map((item) => item.id),
+      [4, 3, 2, 1],
+    )
+    assert.deepEqual(queries.slice(1), [
+      { cursor: 2, direction: 'after', count: -100 },
+      { cursor: 3, direction: 'after', count: -100 },
+    ])
+    assert.deepEqual([...store.consumeAnimationIds()], [3, 4])
+  })
+
   test('keeps a newly posted comment when an older initial response resolves later', async () => {
     const request = deferred<CommentPage>()
     const store = createCommentsStore(
@@ -871,7 +934,7 @@ describe('comments store', () => {
     assert.equal(store.state.items[0]?.likes, 4)
   })
 
-  test('does not roll a failed like back over a refreshed comment snapshot', async () => {
+  test('does not let a failed like remove comments added by refresh', async () => {
     const request = deferred<void>()
     let listCalls = 0
     const store = createCommentsStore(
@@ -879,7 +942,7 @@ describe('comments store', () => {
         async list() {
           listCalls += 1
           return {
-            items: [comment(1, { likes: listCalls === 1 ? 0 : 5 })],
+            items: listCalls === 1 ? [comment(1)] : [comment(2, { likes: 5 })],
             hasMore: false,
           }
         },
@@ -893,7 +956,9 @@ describe('comments store', () => {
     assert.equal(store.state.items[0]?.likes, 5)
     request.reject(new Error('offline'))
     await assert.rejects(liking, /offline/)
-    assert.equal(store.state.items[0]?.liked, false)
+    assert.equal(store.state.items.find((item) => item.id === 1)?.liked, false)
+    assert.equal(store.state.items.find((item) => item.id === 1)?.likes, 0)
+    assert.equal(store.state.items[0]?.id, 2)
     assert.equal(store.state.items[0]?.likes, 5)
     assert.equal(store.isLikePending(1), false)
   })
