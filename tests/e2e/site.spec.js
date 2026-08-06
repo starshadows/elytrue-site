@@ -766,6 +766,7 @@ test('时间轴：跳转到今天返回留言而非空数组', async ({ page }) 
   })
   const response = await responsePromise
   const body = await response.json()
-  expect(body.data.length).toBeGreaterThan(0)
+  const items = Array.isArray(body.data) ? body.data : body.data.items
+  expect(items.length).toBeGreaterThan(0)
   await expect(page.locator('#comments .commentItem').first()).toBeVisible()
 })
