@@ -1,6 +1,7 @@
 import type { ApiEnvelope } from '../../lib/api-client'
 import XHR from '../../net/xhr'
 import { markPerformanceEvent } from '../../lib/performance'
+import { invalidateUserHomeCache } from './user-home-cache'
 import {
   parseCommentPage,
   parseUserCommentPage,
@@ -43,7 +44,11 @@ export interface CommentsApi {
   like(commentId: number, liked: boolean): Promise<LikeResult | void>
   listInitial?(): Promise<CommentPage>
   list(query?: CommentQuery): Promise<CommentPage>
-  listUser(uid: string, cursor?: number | string): Promise<UserCommentPage>
+  listUser(
+    uid: string,
+    cursor?: number | string,
+    signal?: AbortSignal,
+  ): Promise<UserCommentPage>
   report(commentId: number, reason: string): Promise<void>
   upload(image: string): Promise<string>
 }
@@ -86,7 +91,10 @@ export function cacheUserCommentPage(
 
 export function invalidateUserCommentCache(cacheKey?: string): void {
   if (cacheKey) userPageCache.delete(cacheKey)
-  else userPageCache.clear()
+  else {
+    userPageCache.clear()
+    invalidateUserHomeCache()
+  }
 }
 
 function requireSuccess(response: ApiEnvelope<unknown>): void {
@@ -150,9 +158,13 @@ export const commentsApi: CommentsApi = {
       ]
     })
   },
-  async listUser(uid, cursor) {
+  async listUser(uid, cursor, signal) {
     return parseUserCommentPage(
-      await XHR.get<unknown>('comments', { uid, count: 20, cursor }),
+      await XHR.get<unknown>(
+        'comments',
+        { uid, count: 20, cursor },
+        { signal },
+      ),
     )
   },
   async like(commentId, liked) {
