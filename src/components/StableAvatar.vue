@@ -61,7 +61,14 @@ async function commitLoadedAvatar(
 }
 
 function loadSource(source: string): void {
-  if (source === displayedSrc.value || source === pendingSource) return
+  if (source === displayedSrc.value) {
+    if (pendingSource && pendingSource !== source) {
+      loadVersion += 1
+      clearPendingImage()
+    }
+    return
+  }
+  if (source === pendingSource) return
 
   const version = ++loadVersion
   clearPendingImage()

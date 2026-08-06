@@ -17,6 +17,8 @@ export const blobPrefixes = Object.freeze({
     commentHiddenViews: 'views/comments/hidden/',
     commentAliases: 'uploads/aliases/comments/',
     avatarAliases: 'uploads/aliases/avatars/',
+    avatarUpdateOperations: 'operations/avatar-updates/',
+    avatarDeleteOperations: 'operations/avatar-deletes/',
     reports: 'reports/',
     repairs: 'repairs/',
 })
@@ -56,6 +58,9 @@ export const blobKeys = Object.freeze({
     uploadUsage: 'usage/uploads.json',
     imageUploadOperation: imageId => `operations/image-uploads/${imageId}.json`,
     imageDeleteOperation: imageId => `operations/image-deletes/${imageId}.json`,
+    avatarUpdateOperation: operationId => `operations/avatar-updates/${operationId}.json`,
+    avatarDeleteOperation: imageId => `operations/avatar-deletes/${imageId}.json`,
+    avatarUpdateRepair: operationId => `repairs/avatar-update/${operationId}.json`,
     imageAlias: (kind, imageId) =>
         `uploads/aliases/${kind === 'avatar' || kind === 'avatars' ? 'avatars' : 'comments'}/${imageId}.json`,
     uploadBlob: (kind, userId, imageId, extension) =>

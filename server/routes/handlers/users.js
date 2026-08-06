@@ -2,8 +2,8 @@ import {
     destroySession,
     findUserById,
     findUserByIdentifier,
+    prepareUserUpdate,
     privateProfile,
-    updateUser,
 } from '../../auth.js'
 import { apiResponse, httpError, readJSON } from '../../http.js'
 import { enforceRateLimit } from '../../rate-limit.js'
@@ -56,20 +56,68 @@ export async function updateProfile(context, stores, path, auth) {
     if (body.name !== undefined) updates.name = body.name
     if (body.email !== undefined) updates.email = body.email
     if (body.password !== undefined) updates.password = body.password
-    if (body.avatar) {
-        await enforceRateLimit('upload', clientIdentity(context, auth.user.id))
-        const { saveImage } = await loadImageService()
-        const saved = await saveImage(stores, auth.user, body.avatar, 'avatar')
-        updates.avatarKey = saved.imageId
+    const avatarRequested = body.avatar !== undefined
+    let imageService
+    let preparedImage = null
+    if (avatarRequested) {
+        if (typeof body.avatar !== 'string') throw httpError(400, '图片数据无效')
+        imageService = await loadImageService()
+        if (body.avatar) {
+            await enforceRateLimit('upload', clientIdentity(context, auth.user.id))
+            preparedImage = imageService.validateImageUpload(body.avatar, 'avatar')
+        }
     }
-    if (Object.keys(updates).length === 0) throw httpError(400, '没有可更新的资料')
-    const user = await updateUser(
+    if (Object.keys(updates).length === 0 && !avatarRequested) {
+        throw httpError(400, '没有可更新的资料')
+    }
+
+    const transaction = await prepareUserUpdate(
         stores.data,
-        stores.uploads,
         environmentFor(context),
         auth.user,
         updates,
     )
+    let avatarOperation = null
+    let userCommitted = false
+    let user
+    try {
+        if (avatarRequested) {
+            avatarOperation = await imageService.prepareAvatarUpdate(
+                stores,
+                auth.user,
+                preparedImage,
+                auth.user.avatarKey || '',
+                {
+                    profileIndexKeys: transaction.claimedIndexKeys,
+                    oldProfileIndexKeys: transaction.oldIndexKeys,
+                },
+            )
+        }
+        user = await transaction.commit(avatarRequested
+            ? {
+                avatarKey: avatarOperation.newAvatarId,
+                avatarOperationId: avatarOperation.operationId,
+            }
+            : {})
+        userCommitted = true
+        if (avatarOperation) {
+            await imageService.commitAvatarUpdate(stores, avatarOperation, user)
+        }
+    } catch (error) {
+        if (avatarOperation && !userCommitted) {
+            if (error?.userWriteAmbiguous) {
+                await imageService.markAvatarUpdateRepairNeeded(
+                    stores,
+                    avatarOperation,
+                    error,
+                )
+            } else {
+                await imageService.compensateAvatarUpdate(stores, avatarOperation)
+            }
+        }
+        await transaction.rollback()
+        throw error
+    }
     const cookies = body.password !== undefined
         ? await destroySession(
             stores.data,

@@ -96,4 +96,157 @@ describe('upload storage audit', () => {
             phase: 'usage-repair-needed',
         }])
     })
+
+    it('detects and repairs avatar inventory, references, usage, and operations', async () => {
+        const data = new MemoryStore()
+        const uploads = new MemoryStore()
+        const now = Date.UTC(2026, 7, 5)
+        const stale = now - 25 * 60 * 60 * 1000
+        await data.setJSON('users/user-current.json', {
+            id: 'user-current',
+            avatarKey: 'current',
+            recoveryKeyVersion: 1,
+        })
+        await data.setJSON('users/user-missing.json', {
+            id: 'user-missing',
+            avatarKey: 'missing-alias',
+            recoveryKeyVersion: 1,
+        })
+        await data.setJSON('users/user-mismatch.json', {
+            id: 'user-mismatch',
+            avatarKey: 'foreign',
+            recoveryKeyVersion: 1,
+        })
+        await data.setJSON('uploads/aliases/avatars/current.json', {
+            imageId: 'current',
+            userId: 'user-current',
+            blobKey: 'avatars/user-current/current.png',
+            size: 5,
+            status: 'pending',
+            operationId: 'current',
+            createdAt: now,
+        })
+        await uploads.set('avatars/user-current/current.png', new Uint8Array(5))
+        await data.setJSON('operations/avatar-updates/current.json', {
+            version: 1,
+            operationId: 'current',
+            userId: 'user-current',
+            oldAvatarId: '',
+            newAvatarId: 'current',
+            blobKey: 'avatars/user-current/current.png',
+            size: 5,
+            phase: 'repair-needed',
+            usageApplied: true,
+            createdAt: now,
+            updatedAt: now,
+        })
+        await data.setJSON('repairs/avatar-update/current.json', {
+            operationId: 'current',
+            status: 'open',
+        })
+        await data.setJSON('uploads/aliases/avatars/stale.json', {
+            imageId: 'stale',
+            userId: 'user-current',
+            blobKey: 'avatars/user-current/stale.png',
+            size: 3,
+            status: 'pending',
+            createdAt: stale,
+        })
+        await uploads.set('avatars/user-current/stale.png', new Uint8Array(3))
+        await data.setJSON('uploads/aliases/avatars/unreferenced.json', {
+            imageId: 'unreferenced',
+            userId: 'user-current',
+            blobKey: 'avatars/user-current/unreferenced.png',
+            size: 7,
+            status: 'active',
+            createdAt: now,
+        })
+        await uploads.set('avatars/user-current/unreferenced.png', new Uint8Array(7))
+        await data.setJSON('uploads/aliases/avatars/foreign.json', {
+            imageId: 'foreign',
+            userId: 'user-current',
+            blobKey: 'avatars/user-current/foreign.png',
+            size: 2,
+            status: 'active',
+            createdAt: now,
+        })
+        await uploads.set('avatars/user-current/foreign.png', new Uint8Array(2))
+        await data.setJSON('uploads/aliases/avatars/statusless.json', {
+            imageId: 'statusless',
+            userId: 'user-current',
+            blobKey: 'avatars/user-current/statusless.png',
+            size: 6,
+            createdAt: now,
+        })
+        await uploads.set('avatars/user-current/statusless.png', new Uint8Array(6))
+        await data.setJSON('uploads/aliases/avatars/dangling.json', {
+            imageId: 'dangling',
+            userId: 'user-current',
+            blobKey: 'avatars/user-current/dangling.png',
+            size: 4,
+            status: 'active',
+            createdAt: now,
+        })
+        await uploads.set('avatars/user-current/orphan.png', new Uint8Array(9))
+        await data.setJSON('usage/uploads.json', { uploadedBytes: 99 })
+
+        const report = await auditUploadStorage(data, uploads, { now })
+        assert.deepEqual(report.referencedPendingAvatars, ['current'])
+        assert.deepEqual(report.stalePendingAvatars, ['stale'])
+        assert.deepEqual(report.unreferencedActiveAvatars.sort(), [
+            'dangling',
+            'unreferenced',
+        ])
+        assert.deepEqual(report.missingAvatarAliases, ['missing-alias'])
+        assert.deepEqual(report.invalidAvatarOwnership, ['user-mismatch:foreign'])
+        assert.ok(report.invalidAliases.includes('statusless'))
+        assert.deepEqual(report.danglingAliases, ['dangling'])
+        assert.deepEqual(report.orphanBlobs, ['avatars/user-current/orphan.png'])
+        assert.equal(report.openOperations.length, 1)
+        assert.equal(report.repairMarkers.length, 1)
+        assert.notEqual(report.usageDelta, 0)
+
+        const fixed = await auditUploadStorage(data, uploads, { fix: true, now })
+        assert.ok(fixed.repaired > 0)
+        assert.deepEqual(fixed.danglingAliases, [])
+        assert.deepEqual(fixed.orphanBlobs, [])
+        assert.deepEqual(fixed.missingAvatarAliases, [])
+        assert.deepEqual(fixed.invalidAvatarOwnership, [])
+        assert.deepEqual(fixed.invalidAliases, [])
+        assert.deepEqual(fixed.referencedPendingAvatars, [])
+        assert.deepEqual(fixed.stalePendingAvatars, [])
+        assert.deepEqual(fixed.unreferencedActiveAvatars, [])
+        assert.deepEqual(fixed.openOperations, [])
+        assert.deepEqual(fixed.repairMarkers, [])
+        assert.equal(fixed.usageDelta, 0)
+        assert.equal(fixed.usageBytes, 5)
+        assert.equal(
+            await uploads.get('avatars/user-current/statusless.png', {
+                type: 'arrayBuffer',
+            }),
+            null,
+        )
+        assert.equal(
+            (await data.get('uploads/aliases/avatars/current.json', { type: 'json' })).status,
+            'active',
+        )
+        assert.equal(
+            (await data.get('users/user-missing.json', { type: 'json' })).avatarKey,
+            '',
+        )
+        assert.equal(
+            (await data.get('operations/avatar-updates/current.json', { type: 'json' })).phase,
+            'committed',
+        )
+
+        await data.setJSON('repairs/avatar-update/current.json', {
+            operationId: 'current',
+            status: 'open',
+        })
+        const terminalMarkerFixed = await auditUploadStorage(data, uploads, {
+            fix: true,
+            now,
+        })
+        assert.deepEqual(terminalMarkerFixed.repairMarkers, [])
+    })
 })

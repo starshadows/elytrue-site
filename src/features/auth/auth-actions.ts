@@ -87,6 +87,13 @@ export async function refreshAuth(): Promise<UserProfile | null> {
   return profile
 }
 
+export function applyUpdatedProfile(profile: UserProfile): UserProfile {
+  configureAuth()
+  const applied = authStore.apply(profile)
+  saveProfileHint(applied)
+  return applied
+}
+
 export async function ensureLoggedIn(): Promise<boolean> {
   configureAuth()
   if (await authStore.ensureAuthenticated()) return true
@@ -106,14 +113,14 @@ function changeName(): void {
       subtitle: `<span class="ui zh">${profile.hasEmail ? '' : '更改后, <b>将无法使用旧昵称登录</b><br>请确保这是您的账号, 再进行修改, 否则, 请先创建一个自己的账号<br><br>'}输入新昵称</span><span class="ui en">${profile.hasEmail ? '' : "After changing, <b>you won't be able to log in with the old name.</b><br>Make sure this is your account, if not, create a new one.<br><br>"}Enter your new nickname</span>`,
       text: profile.name,
       action(name: string, context: InputActionContext) {
-        void XHR.put('user/update', { name }).then(async (response) => {
+        void XHR.put<UserProfile>('user/update', { name }).then((response) => {
           if (response.code !== 1) return
+          applyUpdatedProfile(response.data)
           context.close()
           FloatMsgs.show({
             type: 'success',
             msg: '<span class="ui zh">修改成功</span><span class="ui en">Successfully changed</span>',
           })
-          await refreshAuth()
         })
       },
     })
@@ -130,16 +137,16 @@ function changeEmail(): void {
       text: profile.email ?? '',
       action(email: string, context: InputActionContext) {
         context.setDisabled(true)
-        void XHR.put('user/update', { email })
-          .then(async (response) => {
+        void XHR.put<UserProfile>('user/update', { email })
+          .then((response) => {
             if (response.code !== 1) return
+            applyUpdatedProfile(response.data)
             context.close()
             FloatMsgs.show({
               type: 'success',
               persist: true,
               msg: '<span class="ui zh">邮箱修改成功，请确认新邮箱长期可用</span><span class="ui en">Email updated successfully</span>',
             })
-            await refreshAuth()
           })
           .finally(() => context.setDisabled(false))
       },

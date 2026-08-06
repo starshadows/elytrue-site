@@ -53,6 +53,9 @@ describe('Blob key contract', () => {
     assert.equal(blobKeys.uploadUsage, 'usage/uploads.json')
     assert.equal(blobKeys.imageUploadOperation('image-1'), 'operations/image-uploads/image-1.json')
     assert.equal(blobKeys.imageDeleteOperation('image-1'), 'operations/image-deletes/image-1.json')
+    assert.equal(blobKeys.avatarUpdateOperation('operation-1'), 'operations/avatar-updates/operation-1.json')
+    assert.equal(blobKeys.avatarDeleteOperation('image-1'), 'operations/avatar-deletes/image-1.json')
+    assert.equal(blobKeys.avatarUpdateRepair('operation-1'), 'repairs/avatar-update/operation-1.json')
   })
 })
 

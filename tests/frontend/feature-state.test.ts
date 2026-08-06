@@ -85,6 +85,27 @@ describe('auth feature state', () => {
     assert.equal(store.state.userId, 'new-user')
     assert.equal(store.state.profile?.id, 'new-user')
   })
+
+  test('applies a mutation profile and ignores an older in-flight request', async () => {
+    let resolveProfile: ((value: UserProfile) => void) | undefined
+    const store = createAuthStore({
+      clearSession() {},
+      loadProfile() {
+        return new Promise<UserProfile>((resolve) => {
+          resolveProfile = resolve
+        })
+      },
+    })
+    const stale = store.initialize()
+    const updated = { ...profile, avatar: 'new-avatar' }
+
+    assert.deepEqual(store.apply(updated), updated)
+    resolveProfile?.(profile)
+    await stale
+
+    assert.deepEqual(store.state.profile, updated)
+    assert.deepEqual(await store.ready(), updated)
+  })
 })
 
 test('an empty automatic theme selection resolves to the current auto theme', () => {

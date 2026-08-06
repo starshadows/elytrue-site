@@ -217,6 +217,15 @@ let profileReadyMarked = false
 const pendingCursorRequests = new Set<string>()
 const completedCursorRequests = new Set<string>()
 
+watch(
+  () => authStore.state.profile,
+  (profile) => {
+    if (!profile || profile.id !== user.value.id) return
+    user.value = profile
+    showAction.value = true
+  },
+)
+
 function userCommentCacheKey(): string {
   return `${authStore.state.userId ?? 'anonymous'}:${user.value.id}`
 }
