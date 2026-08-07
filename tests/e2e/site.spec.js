@@ -911,7 +911,7 @@ test('备案链接与留言共享 lowerPanel 悬停和键盘展开边界', async
   await expect(legal).toHaveAttribute('rel', 'noopener noreferrer')
 })
 
-test('留言区外向下滚轮展开,区内垂直滚轮横向滚动且备案文字为黑色', async ({
+test('页面向下滚轮展开,留言横向滚动不拦截置顶正文且箭头只显示可前进方向', async ({
   page,
 }) => {
   await page.goto('/')
@@ -923,16 +923,7 @@ test('留言区外向下滚轮展开,区内垂直滚轮横向滚动且备案文�
   await expectPanelCollapsed(page)
 
   const panel = page.locator('#lowerPanel')
-  const wheelResult = await panel.evaluate((element) => {
-    const event = new WheelEvent('wheel', {
-      bubbles: true,
-      cancelable: true,
-      deltaY: 120,
-    })
-    element.dispatchEvent(event)
-    return event.defaultPrevented
-  })
-  expect(wheelResult).toBe(true)
+  await page.mouse.wheel(0, 120)
   await expect(panel).toHaveClass(/lowerPanelUp/u)
 
   const comments = page.locator('#comments')
@@ -956,6 +947,35 @@ test('留言区外向下滚轮展开,区内垂直滚轮横向滚动且备案文�
   })
   expect(scrollResult.defaultPrevented).toBe(true)
   expect(scrollResult.scrollLeft).toBe(160)
+  await comments.evaluate((element) => {
+    element.scrollLeft = 0
+    element.dispatchEvent(new Event('scroll'))
+  })
+
+  const pinnedComment = page.locator('#topComment .comment')
+  await expect
+    .poll(() =>
+      pinnedComment.evaluate(
+        (element) => element.scrollHeight > element.clientHeight,
+      ),
+    )
+    .toBe(true)
+  const pinnedBox = await pinnedComment.boundingBox()
+  if (!pinnedBox) throw new Error('Pinned comment is not visible')
+  await page.mouse.move(pinnedBox.x + 20, pinnedBox.y + 20)
+  await page.mouse.wheel(0, 160)
+  await expect
+    .poll(() => pinnedComment.evaluate((element) => element.scrollTop))
+    .toBeGreaterThan(0)
+
+  await expect(page.getByRole('button', { name: '上一页留言' })).toHaveCount(0)
+  await expect(page.getByRole('button', { name: '下一页留言' })).toBeVisible()
+  await comments.evaluate((element) => {
+    element.scrollLeft = element.scrollWidth
+    element.dispatchEvent(new Event('scroll'))
+  })
+  await expect(page.getByRole('button', { name: '上一页留言' })).toBeVisible()
+  await expect(page.getByRole('button', { name: '下一页留言' })).toHaveCount(0)
   await expect(page.locator('.legalLinks a').first()).toHaveCSS(
     'color',
     'rgb(0, 0, 0)',

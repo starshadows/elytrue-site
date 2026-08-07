@@ -43,6 +43,8 @@ const commentsEntrancePlaying = ref(
   !window.matchMedia('(prefers-reduced-motion: reduce)').matches &&
     !document.body.classList.contains('lowend'),
 )
+const canSeekLeft = ref(false)
+const canSeekRight = ref(false)
 const enteringCommentIds = ref(new Set<number>())
 let commentsEntranceRecorded = false
 let initialPerformanceFinished = false
@@ -127,6 +129,18 @@ function seek(direction: -1 | 1): void {
     left: element.scrollLeft + direction * width,
     behavior: 'smooth',
   })
+}
+
+function updateSeekAvailability(): void {
+  const element = container.value
+  if (!element || document.body.classList.contains('fullscreen')) {
+    canSeekLeft.value = false
+    canSeekRight.value = false
+    return
+  }
+  const maxScrollLeft = element.scrollWidth - element.clientWidth
+  canSeekLeft.value = element.scrollLeft > 1
+  canSeekRight.value = element.scrollLeft < maxScrollLeft - 1
 }
 
 function currentItem(): HTMLElement | undefined {
@@ -262,9 +276,10 @@ function requestPaginationCheck(): void {
 function handleScroll(): void {
   if (scrollPaused || !container.value) return
   updateVisibleTime()
+  updateSeekAvailability()
 }
 
-function handlePanelWheel(event: WheelEvent): void {
+function handleDocumentWheel(event: WheelEvent): void {
   if (
     document.body.classList.contains('fullscreen') ||
     event.deltaX ||
@@ -272,11 +287,7 @@ function handlePanelWheel(event: WheelEvent): void {
   )
     return
   const target = event.target
-  if (
-    container.value &&
-    target instanceof Node &&
-    container.value.contains(target)
-  )
+  if (panel.value && target instanceof Node && panel.value.contains(target))
     return
   forceLowerPanelUp()
   event.preventDefault()
@@ -316,6 +327,7 @@ watch(
   () => {
     syncEnteringComments()
     requestPaginationCheck()
+    void nextTick(updateSeekAvailability)
   },
   { flush: 'post' },
 )
@@ -348,12 +360,20 @@ function handleWheel(event: WheelEvent): void {
   const target = event.target
   if (
     target instanceof HTMLElement &&
-    target.closest('textarea, input, select, [contenteditable="true"]')
+    (target.closest('textarea, input, select, [contenteditable="true"]') ||
+      (() => {
+        const scrollable = target.closest<HTMLElement>('.comment')
+        return (
+          scrollable !== null &&
+          scrollable.scrollHeight > scrollable.clientHeight
+        )
+      })())
   )
     return
   event.preventDefault()
   container.value.scrollLeft += event.deltaY
   updateVisibleTime()
+  updateSeekAvailability()
 }
 
 function openEditor(number?: number): void {
@@ -445,17 +465,19 @@ function onOpenEditor(): void {
 onMounted(() => {
   startPerformanceMark('comments-initial')
   container.value?.addEventListener('scroll', handleScroll)
-  panel.value?.addEventListener('wheel', handlePanelWheel, { passive: false })
   container.value?.addEventListener('wheel', handleWheel, { passive: false })
   document.addEventListener('elytrue:seek-comment', onSeek)
   document.addEventListener('elytrue:open-comment-editor', onOpenEditor)
   document.addEventListener('pointermove', handleDocumentPointerMove)
+  document.addEventListener('wheel', handleDocumentWheel, { passive: false })
   setupPaginationObserver()
   syncEnteringComments()
+  void nextTick(updateSeekAvailability)
   bodyObserver = new MutationObserver(() => {
     if (document.body.classList.contains('fullscreen'))
       commentsEntrancePlaying.value = false
     requestPaginationCheck()
+    void nextTick(updateSeekAvailability)
   })
   bodyObserver.observe(document.body, {
     attributes: true,
@@ -465,11 +487,11 @@ onMounted(() => {
 
 onBeforeUnmount(() => {
   container.value?.removeEventListener('scroll', handleScroll)
-  panel.value?.removeEventListener('wheel', handlePanelWheel)
   container.value?.removeEventListener('wheel', handleWheel)
   document.removeEventListener('elytrue:seek-comment', onSeek)
   document.removeEventListener('elytrue:open-comment-editor', onOpenEditor)
   document.removeEventListener('pointermove', handleDocumentPointerMove)
+  document.removeEventListener('wheel', handleDocumentWheel)
   if (pauseTimer !== undefined) window.clearTimeout(pauseTimer)
   disposePaginationObserver()
   bodyObserver?.disconnect()
@@ -627,6 +649,7 @@ defineExpose({ forceLowerPanelDown, forceLowerPanelUp, pauseScroll })
     <TimelinePanel />
     <LegalLinks />
     <button
+      v-if="canSeekLeft"
       type="button"
       class="commentSeekArrow semanticButton"
       style="left: 2vw"
@@ -636,6 +659,7 @@ defineExpose({ forceLowerPanelDown, forceLowerPanelUp, pauseScroll })
       <img src="/res/arrow_left.svg" alt="" />
     </button>
     <button
+      v-if="canSeekRight"
       type="button"
       class="commentSeekArrow semanticButton"
       style="right: 2vw"
