@@ -254,7 +254,7 @@ describe('timeline date calculations', () => {
     try {
       const documentObject = new TimelineDocument()
       const loadedTimes: number[] = []
-      let refreshes = 0
+      let returnsToLatest = 0
       const maxTime = new Date(2027, 0, 15).getTime() / 1_000
       const controller = createTimelineController(
         {
@@ -265,8 +265,8 @@ describe('timeline date calculations', () => {
             loadedTimes.push(time)
           },
           logError() {},
-          refreshComments: () => {
-            refreshes += 1
+          returnToLatest: () => {
+            returnsToLatest += 1
           },
         },
         { document: documentObject as unknown as Document },
@@ -289,7 +289,7 @@ describe('timeline date calculations', () => {
       day.dataset.time = String(dayStart)
       documentObject.container.emit('click', day)
 
-      assert.equal(refreshes, 1)
+      assert.equal(returnsToLatest, 1)
       assert.deepEqual(loadedTimes, [
         getTimelineSelectionTime(
           { type: 'year', year: Number(previousYear.textContent) },

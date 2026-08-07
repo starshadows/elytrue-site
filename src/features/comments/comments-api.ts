@@ -139,9 +139,11 @@ export const commentsApi: CommentsApi = {
   },
   async getViewerLikes(ids) {
     if (!ids.length) return []
-    const result = await XHR.get<unknown>('comments/viewer-likes', {
-      ids: ids.join(','),
-    })
+    const result = await XHR.get<unknown>(
+      'comments/viewer-likes',
+      { ids: ids.join(',') },
+      { suppressUnauthorizedHandler: true },
+    )
     if (!Array.isArray(result)) return []
     return result.flatMap((item) => {
       if (

@@ -155,18 +155,14 @@ export function applyAuthenticatedSession(
 export function continueAfterAuthentication(): void {
   backgroundVerification?.abort()
   backgroundVerification = new AbortController()
-  void refreshAuth(backgroundVerification.signal)
-  void commentsStore
-    .refreshIncrementally()
+  const verification = backgroundVerification
+  void refreshAuth(verification.signal)
+    .then((profile) => {
+      if (!profile || verification.signal.aborted) return
+      return commentsStore.refreshAfterAuthentication()
+    })
     .catch((error: unknown) =>
-      logFrontendError(
-        error,
-        'failed to refresh comments after authentication',
-      ),
-    )
-    .then(() => commentsStore.hydrateViewerLikes())
-    .catch((error: unknown) =>
-      logFrontendError(error, 'failed to hydrate viewer likes'),
+      logFrontendError(error, 'failed to synchronize comments after login'),
     )
 }
 

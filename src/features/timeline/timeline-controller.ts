@@ -119,7 +119,7 @@ export interface TimelineControllerCallbacks {
   isFullscreen(): boolean
   loadCommentsAtTime(time: number): void | Promise<unknown>
   logError(error: unknown, message: string): void
-  refreshComments(): void | Promise<unknown>
+  returnToLatest(): void | Promise<unknown>
 }
 
 export interface TimelineControllerOptions {
@@ -249,7 +249,7 @@ class TimelineControllerImpl implements TimelineController {
 
     if (target.tagName === 'STRONG') {
       if (target === this.requireTimeline().querySelector('strong')) {
-        void this.callbacks.refreshComments()
+        void this.callbacks.returnToLatest()
         return
       }
       const year = Number.parseInt(target.textContent ?? '', 10)

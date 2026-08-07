@@ -851,6 +851,18 @@ test('时间轴：跳转到今天返回留言而非空数组', async ({ page }) 
   const items = Array.isArray(body.data) ? body.data : body.data.items
   expect(items.length).toBeGreaterThan(0)
   await expect(page.locator('#comments .commentItem').first()).toBeVisible()
+
+  const latestResponse = page.waitForResponse((candidate) => {
+    const url = new URL(candidate.url())
+    return (
+      url.pathname === '/api/comments' &&
+      url.searchParams.get('count') === '10' &&
+      !url.searchParams.has('direction')
+    )
+  })
+  await page.locator('#timeline strong').first().click()
+  await latestResponse
+  await expect(page.locator('#comments .commentItem').first()).toBeVisible()
 })
 
 test('时间轴默认显示并由设置状态同步控制', async ({ page }) => {

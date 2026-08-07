@@ -553,10 +553,121 @@ describe('comments store', () => {
       )
       const cached = JSON.parse(
         storage.getItem(HOME_COMMENTS_CACHE_KEY) ?? 'null',
-      )
+      ) as {
+        hasMore: boolean
+        items: Array<{ id: number }>
+        nextCursor?: number
+      }
       assert.equal(cached.items.length, HOME_COMMENTS_CACHE_LIMIT)
       assert.equal(cached.hasMore, true)
       assert.equal(cached.nextCursor, 16)
+    } finally {
+      delete (globalThis as { window?: unknown }).window
+    }
+  })
+
+  test('restores cached older pages without requesting the second page twice', async () => {
+    const storage = new TestStorage()
+    Object.defineProperty(globalThis, 'window', {
+      configurable: true,
+      value: { sessionStorage: storage },
+    })
+    const firstPage = Array.from({ length: 10 }, (_, index) =>
+      comment(100 - index),
+    )
+    const secondPage = Array.from({ length: 10 }, (_, index) =>
+      comment(90 - index),
+    )
+    try {
+      let firstCalls = 0
+      const firstStore = createCommentsStore(
+        apiWith({
+          async list() {
+            firstCalls += 1
+            return firstCalls === 1
+              ? { items: firstPage, hasMore: true, nextCursor: 91 }
+              : { items: secondPage, hasMore: true, nextCursor: 81 }
+          },
+        }),
+      )
+      await firstStore.initialize()
+      await firstStore.loadOlder()
+
+      const cached = JSON.parse(
+        storage.getItem(HOME_COMMENTS_CACHE_KEY) ?? 'null',
+      ) as {
+        hasMore: boolean
+        items: Array<{ id: number }>
+        nextCursor?: number
+      }
+      assert.equal(cached.items.length, 20)
+      assert.equal(cached.nextCursor, 81)
+
+      const restoredQueries: CommentQuery[] = []
+      const restoredStore = createCommentsStore(
+        apiWith({
+          async list(query = {}) {
+            restoredQueries.push(query)
+            if (restoredQueries.length === 1) {
+              return { items: firstPage, hasMore: true, nextCursor: 91 }
+            }
+            return { items: [comment(80)], hasMore: false }
+          },
+        }),
+      )
+      await restoredStore.initialize()
+      assert.deepEqual(
+        restoredStore.state.items.map((item) => item.id),
+        [...firstPage, ...secondPage].map((item) => item.id),
+      )
+
+      await restoredStore.loadOlder()
+      assert.deepEqual(restoredQueries[1], {
+        cursor: 81,
+        direction: 'before',
+        count: 30,
+      })
+    } finally {
+      delete (globalThis as { window?: unknown }).window
+    }
+  })
+
+  test('drops cached older pages when the fresh home page reaches the oldest end', async () => {
+    const storage = new TestStorage()
+    Object.defineProperty(globalThis, 'window', {
+      configurable: true,
+      value: { sessionStorage: storage },
+    })
+    try {
+      writeHomeCommentsCache([comment(3), comment(2), comment(1)], true, 1)
+      const store = createCommentsStore(
+        apiWith({
+          async list() {
+            return { items: [comment(3)], hasMore: false }
+          },
+        }),
+      )
+
+      await store.initialize()
+
+      assert.deepEqual(
+        store.state.items.map((item) => item.id),
+        [3],
+      )
+      assert.equal(store.state.reachedOldest, true)
+      const cached = JSON.parse(
+        storage.getItem(HOME_COMMENTS_CACHE_KEY) ?? 'null',
+      ) as {
+        hasMore: boolean
+        items: Array<{ id: number }>
+        nextCursor?: number
+      }
+      assert.deepEqual(
+        cached.items.map((item) => item.id),
+        [3],
+      )
+      assert.equal(cached.hasMore, false)
+      assert.equal(cached.nextCursor, undefined)
     } finally {
       delete (globalThis as { window?: unknown }).window
     }
@@ -589,6 +700,34 @@ describe('comments store', () => {
     } finally {
       delete (globalThis as { window?: unknown }).window
     }
+  })
+
+  test('hydrates only visible likes after authentication in a historical view', async () => {
+    const queries: CommentQuery[] = []
+    const likedIds: number[][] = []
+    const store = createCommentsStore(
+      apiWith({
+        async list(query = {}) {
+          queries.push(query)
+          if (query.time) return { items: [comment(20)], hasMore: true }
+          return { items: [comment(100)], hasMore: false }
+        },
+        async getViewerLikes(ids) {
+          likedIds.push(ids)
+          return ids.map((id) => ({ id, liked: true }))
+        },
+      }),
+    )
+    await store.initialize()
+    await store.loadAtTime(20)
+    const historicalCard = store.state.items[0]
+
+    await store.refreshAfterAuthentication()
+
+    assert.equal(queries.length, 2)
+    assert.equal(store.state.items[0], historicalCard)
+    assert.equal(historicalCard?.liked, true)
+    assert.deepEqual(likedIds, [[20]])
   })
 
   test('keeps a newly posted comment when an older initial response resolves later', async () => {
@@ -956,6 +1095,61 @@ describe('comments store', () => {
       store.state.items.map((item) => item.id),
       [10],
     )
+  })
+
+  test('returns from a historical view to a fresh home page with home cursors', async () => {
+    const queries: CommentQuery[] = []
+    let initialLoads = 0
+    const store = createCommentsStore(
+      apiWith({
+        async list(query = {}) {
+          queries.push(query)
+          if (query.time) {
+            return {
+              items: [comment(20)],
+              hasMore: true,
+              nextCursor: 19,
+            }
+          }
+          initialLoads += 1
+          if (initialLoads === 1) {
+            return {
+              items: [comment(100), comment(99)],
+              hasMore: true,
+              nextCursor: 98,
+            }
+          }
+          if (initialLoads === 2) {
+            return {
+              items: [comment(110), comment(109)],
+              hasMore: true,
+              nextCursor: 108,
+            }
+          }
+          return { items: [comment(107)], hasMore: false }
+        },
+      }),
+    )
+    await store.initialize()
+    await store.loadAtTime(20)
+    store.setCurrentVisibleTime(20)
+
+    await store.returnToLatest()
+
+    assert.deepEqual(
+      store.state.items.map((item) => item.id),
+      [110, 109],
+    )
+    assert.equal(store.state.reachedNewest, true)
+    assert.equal(store.state.reachedOldest, false)
+    assert.equal(store.state.currentVisibleTime, null)
+
+    await store.loadOlder()
+    assert.deepEqual(queries.at(-1), {
+      cursor: 108,
+      direction: 'before',
+      count: 30,
+    })
   })
 
   test('uses legacy from semantics when jumping by an internal id', async () => {

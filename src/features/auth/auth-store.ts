@@ -108,6 +108,16 @@ export function createAuthStore(initialAdapter?: AuthAdapter) {
     return true
   }
 
+  function releaseUnconfirmedInitialization(generation: number): void {
+    if (
+      generation === requestGeneration &&
+      mutableState.loginState === 'loading' &&
+      mutableState.profile === null
+    ) {
+      initialization = null
+    }
+  }
+
   async function requestProfile(
     generation: number,
     signal?: AbortSignal,
@@ -130,6 +140,7 @@ export function createAuthStore(initialAdapter?: AuthAdapter) {
       if (!(error instanceof DOMException && error.name === 'AbortError')) {
         adapter?.reportError?.(error)
       }
+      releaseUnconfirmedInitialization(generation)
       return mutableState.profile
     }
   }
@@ -167,6 +178,7 @@ export function createAuthStore(initialAdapter?: AuthAdapter) {
         if (!(error instanceof DOMException && error.name === 'AbortError')) {
           adapter?.reportError?.(error)
         }
+        releaseUnconfirmedInitialization(generation)
         return mutableState.profile
       })
     initialization = request

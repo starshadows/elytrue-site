@@ -137,6 +137,7 @@ export function createCommentsStore(api: CommentsApi) {
     query: CommentQuery,
     replace = false,
     suppliedRequest?: Promise<CommentPage>,
+    preserveExistingOlder = false,
   ): Promise<void> {
     const existing = pending.get(kind)
     if (existing) return existing
@@ -181,9 +182,21 @@ export function createCommentsStore(api: CommentsApi) {
               : kind === 'older'
                 ? 'pagination'
                 : 'revalidated'
+        const oldestIncoming = visiblePageItems.at(-1)
+        const retainedOlderItems =
+          replace && preserveExistingOlder && page.hasMore && oldestIncoming
+            ? state.items.filter(
+                (item) =>
+                  compareComments(item, oldestIncoming) > 0 &&
+                  !visiblePageItems.some((incoming) => incoming.id === item.id),
+              )
+            : []
+        const preserveHomePagination = retainedOlderItems.length > 0
         if (replace) {
           const result = reconcileComments(state.items, visiblePageItems)
-          state.items = result.items.sort(compareComments)
+          state.items = [...result.items, ...retainedOlderItems].sort(
+            compareComments,
+          )
           for (const id of result.newIds) queueAnimation(id, origin)
         } else merge(visiblePageItems, origin)
         merge(insertedDuringRequest, 'created')
@@ -200,10 +213,17 @@ export function createCommentsStore(api: CommentsApi) {
         if (kind === 'initial') {
           // 首次加载请求的就是最新一页:已到最新端,避免无谓的 loadNewer
           state.reachedNewest = true
-          state.reachedOldest = !page.hasMore
-          homeCacheHasMore = page.hasMore
-          homeCacheNextCursor = page.nextCursor ?? null
-          writeHomeCommentsCache(state.items, page.hasMore, page.nextCursor)
+          if (!preserveHomePagination) {
+            homeCacheHasMore = page.hasMore
+            homeCacheNextCursor = page.nextCursor ?? null
+          }
+          state.reachedOldest = !homeCacheHasMore
+          nextOlderCursor = homeCacheNextCursor
+          writeHomeCommentsCache(
+            state.items,
+            homeCacheHasMore,
+            homeCacheNextCursor,
+          )
         }
         if (kind === 'newer') {
           state.reachedNewest = !page.hasMore
@@ -213,11 +233,18 @@ export function createCommentsStore(api: CommentsApi) {
         }
         if (kind === 'older') {
           state.reachedOldest = !page.hasMore
-        }
-        if (kind === 'initial' || kind === 'older') {
           nextOlderCursor = page.hasMore
             ? (page.nextCursor ?? page.items.at(-1)?.id ?? null)
             : null
+          if (homeView) {
+            homeCacheHasMore = page.hasMore
+            homeCacheNextCursor = nextOlderCursor
+            writeHomeCommentsCache(
+              state.items,
+              homeCacheHasMore,
+              homeCacheNextCursor,
+            )
+          }
         }
         if (kind === 'replacement') {
           state.reachedNewest = false
@@ -381,11 +408,15 @@ export function createCommentsStore(api: CommentsApi) {
   }
 
   function loadInitialAfterCache(): Promise<void> {
-    return load('initial', { count: 10 }, true, loadInitialComments(api)).then(
-      () => {
-        if (!todayCountFresh) void refreshTodayCount()
-      },
-    )
+    return load(
+      'initial',
+      { count: 10 },
+      true,
+      loadInitialComments(api),
+      true,
+    ).then(() => {
+      if (!todayCountFresh) void refreshTodayCount()
+    })
   }
 
   function hydrateBootstrap(
@@ -458,6 +489,20 @@ export function createCommentsStore(api: CommentsApi) {
         continue
       item.liked = byId.get(item.id) ?? false
     }
+  }
+
+  async function refreshAfterAuthentication(): Promise<void> {
+    if (!homeView) {
+      await hydrateViewerLikes()
+      return
+    }
+    try {
+      await refreshIncrementally()
+    } catch (error) {
+      await hydrateViewerLikes()
+      throw error
+    }
+    await hydrateViewerLikes()
   }
 
   function clearViewerLikes(): void {
@@ -572,6 +617,14 @@ export function createCommentsStore(api: CommentsApi) {
     return load('replacement', { time }, true)
   }
 
+  function returnToLatest(): Promise<void> {
+    resetForReplacement()
+    homeView = true
+    return load('initial', { count: 10 }, true).then(() => {
+      if (!todayCountFresh) void refreshTodayCount()
+    })
+  }
+
   function setCurrentVisibleTime(time: number | null): void {
     state.currentVisibleTime = time
   }
@@ -644,8 +697,10 @@ export function createCommentsStore(api: CommentsApi) {
     clearViewerLikes,
     consumeAnimationIds,
     refresh,
+    refreshAfterAuthentication,
     refreshIncrementally,
     refreshTodayCount,
+    returnToLatest,
     setCurrentVisibleTime,
     state: readonly(state),
     toggleLike,

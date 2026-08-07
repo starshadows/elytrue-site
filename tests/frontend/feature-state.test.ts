@@ -172,17 +172,24 @@ describe('auth feature state', () => {
     assert.equal(store.state.loginState, 'unauthenticated')
   })
 
-  test('an unconfirmed startup remains loading after a network failure', async () => {
+  test('an unconfirmed startup remains loading and retries after a network failure', async () => {
+    let loads = 0
     const store = createAuthStore({
       clearSession() {},
       async loadProfile() {
-        throw new Error('offline')
+        loads += 1
+        if (loads === 1) throw new Error('offline')
+        return profile
       },
     })
 
     assert.equal(await store.initialize(), null)
     assert.equal(store.state.loginState, 'loading')
     assert.equal(store.state.userId, null)
+    assert.equal(await store.ensureAuthenticated(), true)
+    assert.equal(loads, 2)
+    assert.equal(store.state.loginState, 'authenticated')
+    assert.equal(store.state.userId, profile.id)
   })
 })
 

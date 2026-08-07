@@ -66,7 +66,7 @@ const timeline = createTimelineController({
   isFullscreen: () => viewport.isFullscreen,
   loadCommentsAtTime: (time) => commentsStore.loadAtTime(time),
   logError: logFrontendError,
-  refreshComments: () => commentsStore.refresh(),
+  returnToLatest: () => commentsStore.returnToLatest(),
 })
 const viewport = createViewportController({
   closeImageViewer: ImgViewer.close,
