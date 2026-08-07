@@ -911,6 +911,57 @@ test('备案链接与留言共享 lowerPanel 悬停和键盘展开边界', async
   await expect(legal).toHaveAttribute('rel', 'noopener noreferrer')
 })
 
+test('留言区外向下滚轮展开,区内垂直滚轮横向滚动且备案文字为黑色', async ({
+  page,
+}) => {
+  await page.goto('/')
+  await page.waitForFunction(
+    () =>
+      !document.getElementById('lowerPanel').classList.contains('animating'),
+  )
+  await page.mouse.move(640, 100)
+  await expectPanelCollapsed(page)
+
+  const panel = page.locator('#lowerPanel')
+  const wheelResult = await panel.evaluate((element) => {
+    const event = new WheelEvent('wheel', {
+      bubbles: true,
+      cancelable: true,
+      deltaY: 120,
+    })
+    element.dispatchEvent(event)
+    return event.defaultPrevented
+  })
+  expect(wheelResult).toBe(true)
+  await expect(panel).toHaveClass(/lowerPanelUp/u)
+
+  const comments = page.locator('#comments')
+  await expect
+    .poll(() =>
+      comments.evaluate((element) => element.scrollWidth > element.clientWidth),
+    )
+    .toBe(true)
+  const scrollResult = await comments.evaluate((element) => {
+    element.scrollLeft = 0
+    const event = new WheelEvent('wheel', {
+      bubbles: true,
+      cancelable: true,
+      deltaY: 160,
+    })
+    element.dispatchEvent(event)
+    return {
+      defaultPrevented: event.defaultPrevented,
+      scrollLeft: element.scrollLeft,
+    }
+  })
+  expect(scrollResult.defaultPrevented).toBe(true)
+  expect(scrollResult.scrollLeft).toBe(160)
+  await expect(page.locator('.legalLinks a').first()).toHaveCSS(
+    'color',
+    'rgb(0, 0, 0)',
+  )
+})
+
 test('移动端与全屏竖向模式保持时间轴可用', async ({ page }) => {
   await page.setViewportSize({ width: 390, height: 844 })
   await page.goto('/')

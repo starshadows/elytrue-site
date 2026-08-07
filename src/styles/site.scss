@@ -1342,18 +1342,18 @@ body:not(.fullscreen) #lowerPanel.animating:not(.lowerPanelUp) {
     gap: 0.25rem 0.8rem;
     min-height: 1.25rem;
     margin: 0 5% 0.2rem;
-    color: rgba(255, 255, 255, 0.82);
+    color: #000;
     font-size: 0.68rem;
     line-height: 1.2;
     text-align: center;
-    text-shadow: 0 0 0.25rem rgba(0, 0, 0, 0.72);
+    text-shadow: none;
 }
 
 .legalLinks a {
     display: inline-flex;
     align-items: center;
     gap: 0.25rem;
-    color: inherit;
+    color: #000;
     white-space: nowrap;
 }
 

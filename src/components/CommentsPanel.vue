@@ -264,6 +264,24 @@ function handleScroll(): void {
   updateVisibleTime()
 }
 
+function handlePanelWheel(event: WheelEvent): void {
+  if (
+    document.body.classList.contains('fullscreen') ||
+    event.deltaX ||
+    event.deltaY <= 0
+  )
+    return
+  const target = event.target
+  if (
+    container.value &&
+    target instanceof Node &&
+    container.value.contains(target)
+  )
+    return
+  forceLowerPanelUp()
+  event.preventDefault()
+}
+
 watch(
   () =>
     [
@@ -319,15 +337,23 @@ watch(
 )
 
 function handleWheel(event: WheelEvent): void {
-  if (document.body.classList.contains('fullscreen') || event.deltaX) return
+  if (
+    scrollPaused ||
+    document.body.classList.contains('fullscreen') ||
+    event.deltaX ||
+    !event.deltaY ||
+    !container.value
+  )
+    return
   const target = event.target
   if (
     target instanceof HTMLElement &&
-    (target.closest('.comment')?.scrollHeight ?? 0) >
-      (target.closest('.comment')?.clientHeight ?? 0)
+    target.closest('textarea, input, select, [contenteditable="true"]')
   )
     return
-  if (Math.abs(event.deltaY) >= 10) seek(event.deltaY > 0 ? 1 : -1)
+  event.preventDefault()
+  container.value.scrollLeft += event.deltaY
+  updateVisibleTime()
 }
 
 function openEditor(number?: number): void {
@@ -419,7 +445,8 @@ function onOpenEditor(): void {
 onMounted(() => {
   startPerformanceMark('comments-initial')
   container.value?.addEventListener('scroll', handleScroll)
-  container.value?.addEventListener('wheel', handleWheel)
+  panel.value?.addEventListener('wheel', handlePanelWheel, { passive: false })
+  container.value?.addEventListener('wheel', handleWheel, { passive: false })
   document.addEventListener('elytrue:seek-comment', onSeek)
   document.addEventListener('elytrue:open-comment-editor', onOpenEditor)
   document.addEventListener('pointermove', handleDocumentPointerMove)
@@ -438,6 +465,7 @@ onMounted(() => {
 
 onBeforeUnmount(() => {
   container.value?.removeEventListener('scroll', handleScroll)
+  panel.value?.removeEventListener('wheel', handlePanelWheel)
   container.value?.removeEventListener('wheel', handleWheel)
   document.removeEventListener('elytrue:seek-comment', onSeek)
   document.removeEventListener('elytrue:open-comment-editor', onOpenEditor)
