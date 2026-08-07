@@ -32,11 +32,7 @@ const background = computed(() => {
   return portraits[Math.abs(props.record.id) % portraits.length]?.preview ?? ''
 })
 const date = computed(() => new Date(props.record.time * 1_000))
-const canReport = computed(
-  () =>
-    authStore.state.userId !== null &&
-    authStore.state.userId !== props.record.uid,
-)
+const canReport = computed(() => authStore.state.userId !== null)
 
 async function toggleLike(): Promise<void> {
   if (likePending.value || !(await ensureLoggedIn())) return

@@ -250,7 +250,7 @@ class ViewportControllerImpl implements ViewportController {
   transition: transform 0.5s, padding-bottom 0.5s;
 }
 
-#lowerPanel:hover:not(.lowerPanelDown), #lowerPanel.lowerPanelUp {
+#lowerPanel:hover:not(.lowerPanelDown), #lowerPanel:focus-within:not(.lowerPanelDown), #lowerPanel.lowerPanelUp {
   padding-bottom: ${(bottom.value / 48) * 3}rem;
 }
 `

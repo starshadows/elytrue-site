@@ -1,26 +1,18 @@
 <script setup lang="ts">
 import { computed, ref } from 'vue'
-import { getConfig, setConfig } from '../../settings/config'
 import Settings from '../../settings'
 import GraphicsMode from '../GraphicsMode.vue'
 
-const showTimeline = ref(getConfig('showTimeline') !== 'false')
+const showTimeline = computed({
+  get: () => Settings.showTimeline,
+  set: (value: boolean) => (Settings.showTimeline = value),
+})
 const hideTopComment = computed({
   get: () => Settings.pinnedHidden,
   set: (value: boolean) => (Settings.pinnedHidden = value),
 })
 const showHidden = ref(Settings.showHidden)
 const zoom = ref(Math.round(Settings.pageScale * 100))
-
-function toggleTimeline(): void {
-  setConfig('showTimeline', showTimeline.value)
-  document
-    .getElementById('timelineContainer')
-    ?.style.setProperty('display', showTimeline.value ? 'block' : 'none')
-  document
-    .getElementById('comments')
-    ?.classList.toggle('noscrollbar', showTimeline.value)
-}
 
 function toggleHidden(): void {
   Settings.showHidden = showHidden.value
@@ -44,11 +36,7 @@ function updateZoom(delta = 0): void {
           ><span
             ><span class="ui zh">显示时间轴</span
             ><span class="ui en">Show timeline</span></span
-          ><input
-            id="showTimeline"
-            v-model="showTimeline"
-            type="checkbox"
-            @change="toggleTimeline"
+          ><input id="showTimeline" v-model="showTimeline" type="checkbox"
         /></label>
       </li>
       <li>

@@ -164,7 +164,11 @@
 import FloatMsgs from '../FloatMsgs'
 import Popups from './index'
 import XHR from '../../net/xhr'
-import { refreshAuth } from '../../features/auth/auth-actions'
+import {
+  applyAuthenticatedSession,
+  continueAfterAuthentication,
+  type AuthenticatedSessionResponse,
+} from '../../features/auth/auth-actions'
 import {
   validateEmail,
   validatePassword,
@@ -194,49 +198,40 @@ export default {
   },
 
   methods: {
-    finish(message: string) {
-      return refreshAuth().then((loggedIn) => {
-        if (!loggedIn) {
-          FloatMsgs.show({
-            type: 'error',
-            msg: '<span class="ui zh">登录状态未能保存，请重试</span><span class="ui en">The session could not be saved. Please try again.</span>',
-          })
-          return false
-        }
-        this.$emit('close')
-        FloatMsgs.show({ type: 'success', msg: message })
-        return true
-      })
+    finish(response: AuthenticatedSessionResponse, message: string) {
+      applyAuthenticatedSession(response)
+      this.$emit('close')
+      FloatMsgs.show({ type: 'success', msg: message })
+      continueAfterAuthentication()
     },
 
-    finishRegistration(recoveryKey: string) {
+    finishRegistration(
+      response: AuthenticatedSessionResponse & { recoveryKey: string },
+    ) {
+      applyAuthenticatedSession(response)
       this.$emit('close')
       Popups.show('recoveryKeyPopup', {
-        recoveryKey,
+        recoveryKey: response.recoveryKey,
         reason: 'registration',
       })
-      return refreshAuth().then((loggedIn) => {
-        if (!loggedIn) {
-          FloatMsgs.show({
-            type: 'error',
-            msg: '<span class="ui zh">登录状态未能保存，请重试</span><span class="ui en">The session could not be saved. Please try again.</span>',
-          })
-          return false
-        }
-        return true
-      })
+      continueAfterAuthentication()
     },
 
     login() {
       if (!this.canLogin || this.busy) return
       this.busy = true
-      XHR.post('user/login', {
-        identifier: this.loginIdentifier,
-        password: this.loginPassword,
-      })
+      XHR.post<AuthenticatedSessionResponse>(
+        'user/login',
+        {
+          identifier: this.loginIdentifier,
+          password: this.loginPassword,
+        },
+        { suppressUnauthorizedHandler: true },
+      )
         .then((r) => {
           if (r.code == 1) {
-            return this.finish(
+            this.finish(
+              r.data,
               '<span class="ui zh">登录成功</span><span class="ui en">Logged in</span>',
             )
           }
@@ -260,14 +255,17 @@ export default {
         return
       }
       this.busy = true
-      XHR.post<{ recoveryKey: string }>('user/register', {
-        name: this.regName,
-        email: this.regEmail,
-        password: this.regPassword,
-      })
+      XHR.post<AuthenticatedSessionResponse & { recoveryKey: string }>(
+        'user/register',
+        {
+          name: this.regName,
+          email: this.regEmail,
+          password: this.regPassword,
+        },
+      )
         .then((r) => {
           if (r.code == 1) {
-            return this.finishRegistration(r.data.recoveryKey)
+            this.finishRegistration(r.data)
           }
         })
         .finally(() => {

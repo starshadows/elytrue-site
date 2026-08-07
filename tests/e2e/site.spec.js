@@ -2,6 +2,7 @@ import { test, expect } from '@playwright/test'
 
 const BASE = 'http://127.0.0.1:4173'
 const PASSWORD = 'e2e-test-password-123'
+let loginAttempt = 0
 
 const unique = (prefix) =>
   `${prefix}_${Date.now().toString(36).slice(-6)}${Math.random().toString(36).slice(2, 5)}`
@@ -20,8 +21,7 @@ async function expectVisitor(page) {
 /**
  * #lowerPanel 默认下移 33vh,且 #comments 卡片子元素 pointer-events:none,
  * 必须先把鼠标悬停到面板可见条带将其抬起,页面控件才可点击。
- * 注意:右下角的备案悬浮条(#siteFooter, z-index:5)会遮挡面板底部,
- * 悬停点取面板上部的留言区;并等入场动画(.animating)结束后再悬停。
+ * 先等入场动画(.animating)结束,再悬停面板可见区域。
  */
 async function liftPanel(page) {
   await page.waitForFunction(
@@ -72,6 +72,18 @@ async function openLoginPopup(page) {
 }
 
 async function loginByIdentifier(page, identifier, password) {
+  loginAttempt += 1
+  await page.route(
+    '**/api/user/login',
+    (route) =>
+      route.continue({
+        headers: {
+          ...route.request().headers(),
+          'x-forwarded-for': `203.0.113.${loginAttempt}`,
+        },
+      }),
+    { times: 1 },
+  )
   await openLoginPopup(page)
   const popup = page.locator('#popups .loginPopup')
   await popup.locator('input').nth(0).fill(identifier)
@@ -217,9 +229,10 @@ test('注册：登录态刷新失败时仍先展示一次性恢复密钥', async
   await page.goto('/')
   await expectVisitor(page)
   failProfileRefresh = true
+  const name = unique('刷新失败用户')
   await fillRegisterForm(
     page,
-    unique('刷新失败用户'),
+    name,
     `refresh_failure_${Date.now()}@example.com`,
     PASSWORD,
   )
@@ -231,6 +244,8 @@ test('注册：登录态刷新失败时仍先展示一次性恢复密钥', async
   releaseProfileRefresh()
   await recoveryPopup.locator('.recoveryConfirmation input').check()
   await recoveryPopup.getByTestId('confirm-recovery-key').click()
+  await expectLoggedIn(page, name)
+  await expect(page.getByText(/登录状态未能保存/)).toHaveCount(0)
 })
 
 test('重复用户名注册被拒绝并提示', async ({ page }) => {
@@ -246,6 +261,7 @@ test('重复用户名注册被拒绝并提示', async ({ page }) => {
 
   await expect(page.getByText(/用户名已被使用/)).toBeVisible()
   await expect(page.locator('#popups .loginPopup')).toBeVisible()
+  await expect(page.locator('#popups .loginPopup .okBtn')).toBeEnabled()
 })
 
 test('用户名登录：登出后用户名+密码登录成功', async ({ page, context }) => {
@@ -258,6 +274,21 @@ test('用户名登录：登出后用户名+密码登录成功', async ({ page, c
   await logoutViaCookies(page, context)
   await loginByIdentifier(page, user1Name, PASSWORD)
   await expectLoggedIn(page, user1Name)
+})
+
+test('登录请求失败后按钮 busy 状态恢复', async ({ page }) => {
+  await page.goto('/')
+  await page.route('**/api/user/login', (route) => route.abort('failed'))
+  await openLoginPopup(page)
+  const popup = page.locator('#popups .loginPopup')
+  await popup.locator('input').nth(0).fill(user1Name)
+  await popup.locator('input').nth(1).fill(PASSWORD)
+  const button = popup.locator('.okBtn')
+
+  await button.click()
+
+  await expect(button).toBeEnabled()
+  await expect(button).toContainText('登录')
 })
 
 test('邮箱登录：登出后用邮箱+密码登录成功', async ({ page, context }) => {
@@ -405,7 +436,7 @@ test('发布留言：新留言卡片出现且编号为 #1', async ({ page }) => 
   const card = page.locator('#comments .commentItem').first()
   await expect(card.locator('.id')).toHaveText('#1')
   await expect(card.locator('.comment')).toContainText(user1Message)
-  await expect(card.locator('.btn.report')).toHaveCount(0)
+  await expect(card.locator('.btn.report')).toHaveCount(1)
 })
 
 test('回复：点击回复出现引用块，发送后新卡片含回复引用', async ({ page }) => {
@@ -476,7 +507,59 @@ test('点赞支持键盘操作，快速重复触发只计一次', async ({ page 
   await expect(page.locator('#floatMsgs')).not.toContainText('网络错误')
 })
 
-test('举报：他人留言可举报，自己的留言无举报按钮', async ({ page }) => {
+test('登录成功后 user/me 网络失败仍保持登录和留言', async ({ page }) => {
+  let failProfileRefresh = false
+  await page.route('**/api/user/me', async (route) => {
+    if (failProfileRefresh) await route.abort('failed')
+    else await route.continue()
+  })
+  await page.goto('/')
+  const card = page.locator('#comments .commentItem').first()
+  const originalCard = await card.elementHandle()
+  failProfileRefresh = true
+
+  await loginByIdentifier(page, user1Name, PASSWORD)
+
+  await expectLoggedIn(page, user1Name)
+  await expect(page.getByText(/登录状态未能保存|网络错误/)).toHaveCount(0)
+  expect(
+    await card.evaluate(
+      (element, original) => element === original,
+      originalCard,
+    ),
+  ).toBe(true)
+})
+
+test('登录成功后 user/me 500 与 viewer-likes 失败不清理状态', async ({
+  page,
+}) => {
+  let failProfileRefresh = false
+  await page.route('**/api/user/me', async (route) => {
+    if (!failProfileRefresh) {
+      await route.continue()
+      return
+    }
+    await route.fulfill({
+      status: 500,
+      contentType: 'application/json',
+      body: JSON.stringify({ code: 500, message: '测试校验失败', data: null }),
+    })
+  })
+  await page.route('**/api/comments/viewer-likes*', (route) =>
+    route.abort('failed'),
+  )
+  await page.goto('/')
+  const cardsBefore = await page.locator('#comments .commentItem').count()
+  failProfileRefresh = true
+
+  await loginByIdentifier(page, user1Name, PASSWORD)
+
+  await expectLoggedIn(page, user1Name)
+  await expect(page.getByText(/登录状态未能保存|测试校验失败/)).toHaveCount(0)
+  await expect(page.locator('#comments .commentItem')).toHaveCount(cardsBefore)
+})
+
+test('举报：自己的留言和他人留言均可举报', async ({ page }) => {
   await page.goto('/')
   await expectVisitor(page)
 
@@ -500,21 +583,20 @@ test('举报：他人留言可举报，自己的留言无举报按钮', async ({
 
   await liftPanel(page)
   const ownCard = page.locator('#comments .commentItem').first()
-  await expect(ownCard.locator('.btn.report')).toHaveCount(0)
+  await expect(ownCard.locator('.btn.report')).toHaveCount(1)
+
+  await ownCard.locator('.btn.report').click()
+  const prompt = page.locator('#popups .popupContainer').last()
+  await expect(prompt.locator('h2')).toContainText('举报留言')
+  await prompt.locator('input').fill('测试自我举报原因')
+  await prompt.locator('.okBtn').click()
+  await expect(page.getByText(/举报已提交/)).toBeVisible()
 
   const targetCard = page.locator('#comments .commentItem').filter({
     has: page.locator('.id', { hasText: /^#1$/ }),
   })
   await expect(targetCard).toHaveCount(1)
   await expect(targetCard.locator('.btn.report')).toHaveCount(1)
-  await targetCard.locator('.btn.report').click()
-
-  const prompt = page.locator('#popups .popupContainer').last()
-  await expect(prompt.locator('h2')).toContainText('举报留言')
-  await prompt.locator('input').fill('测试举报原因')
-  await prompt.locator('.okBtn').click()
-
-  await expect(page.getByText(/举报已提交/)).toBeVisible()
 })
 
 test('编号跳转：输入编号回车后显示对应留言', async ({ page }) => {
@@ -769,4 +851,67 @@ test('时间轴：跳转到今天返回留言而非空数组', async ({ page }) 
   const items = Array.isArray(body.data) ? body.data : body.data.items
   expect(items.length).toBeGreaterThan(0)
   await expect(page.locator('#comments .commentItem').first()).toBeVisible()
+})
+
+test('时间轴默认显示并由设置状态同步控制', async ({ page }) => {
+  await page.goto('/')
+  await page.evaluate(() => localStorage.removeItem('showTimeline'))
+  await page.reload()
+
+  await expect(page.locator('#timelineContainer')).toBeVisible()
+  await expect(page.locator('#comments')).toHaveClass(/noscrollbar/u)
+  await liftPanel(page)
+  await page.locator('#menu').hover()
+  await page.locator('#menu').getByText('显示设置').click()
+  const checkbox = page.locator('#showTimeline')
+  await expect(checkbox).toBeChecked()
+  await checkbox.uncheck()
+  await expect(page.locator('#timelineContainer')).toBeHidden()
+  await expect(page.locator('#comments')).not.toHaveClass(/noscrollbar/u)
+
+  await page.reload()
+  await expect(page.locator('#timelineContainer')).toBeHidden()
+  await expect(page.locator('#comments')).not.toHaveClass(/noscrollbar/u)
+})
+
+test('备案链接与留言共享 lowerPanel 悬停和键盘展开边界', async ({ page }) => {
+  await page.goto('/')
+  await liftPanel(page)
+  const legal = page.locator('.legalLinks a').last()
+
+  await legal.hover()
+  await expect
+    .poll(() =>
+      page
+        .locator('#lowerPanel')
+        .evaluate((panel) => panel.getBoundingClientRect().top),
+    )
+    .toBeLessThan(350)
+  await legal.focus()
+  await page.mouse.move(640, 100)
+  await expect
+    .poll(() =>
+      page
+        .locator('#lowerPanel')
+        .evaluate((panel) => panel.getBoundingClientRect().top),
+    )
+    .toBeLessThan(350)
+  await expect(legal).toHaveAttribute('rel', 'noopener noreferrer')
+})
+
+test('移动端与全屏竖向模式保持时间轴可用', async ({ page }) => {
+  await page.setViewportSize({ width: 390, height: 844 })
+  await page.goto('/')
+  await expect(page.locator('#timelineContainer')).toBeVisible()
+  await page.waitForFunction(
+    () =>
+      !document.getElementById('lowerPanel').classList.contains('animating'),
+  )
+  await page.locator('#lowerPanel').hover({ position: { x: 195, y: 20 } })
+  await page.locator('#fullscreenBtn').click()
+
+  await expect(page.locator('body')).toHaveClass(/fullscreen/u)
+  await expect(page.locator('#timelineContainer')).toBeVisible()
+  const timeline = await page.locator('#timelineContainer').boundingBox()
+  expect(timeline.height).toBeGreaterThan(timeline.width)
 })

@@ -1,11 +1,14 @@
 import FloatMsgs from '../../components/FloatMsgs'
 import Popups from '../../components/Popups'
 import XHR from '../../net/xhr'
+import { logFrontendError } from '../../app/app-events'
+import { ApiError } from '../../lib/api-client'
 import { markPerformanceEvent } from '../../lib/performance'
 import { commentsStore } from '../comments/comments-store'
 import { invalidateUserCommentCache } from '../comments/comments-api'
 import {
   authStore,
+  type AuthHydration,
   type AuthHydrationSource,
   type ProfileAction,
   type UserProfile,
@@ -18,16 +21,39 @@ interface InputActionContext {
 }
 
 let configured = false
+let backgroundVerification: AbortController | undefined
 
-async function requestAuthProfile(): Promise<UserProfile | null> {
+async function requestAuthSession(
+  signal?: AbortSignal,
+): Promise<AuthHydration> {
   markPerformanceEvent('auth-request-start')
-  const profile = await XHR.get<UserProfile | null>('user/me', undefined, {
-    silentStatuses: [401],
-  })
+  let response: AuthenticatedSessionResponse | null
+  try {
+    response = await XHR.get<AuthenticatedSessionResponse | null>(
+      'user/me',
+      undefined,
+      {
+        signal,
+        silent: true,
+        suppressUnauthorizedHandler: true,
+        updateCsrfToken: false,
+      },
+    )
+  } catch (error) {
+    if (error instanceof ApiError && error.status === 401) {
+      return { profile: null }
+    }
+    throw error
+  }
   markPerformanceEvent('auth-response', {
-    authenticated: Boolean(profile),
+    authenticated: Boolean(response),
   })
-  return profile
+  return response
+    ? {
+        profile: profileFromSession(response),
+        csrfToken: response.csrfToken,
+      }
+    : { profile: null }
 }
 
 function configureAuth(): void {
@@ -35,7 +61,6 @@ function configureAuth(): void {
   configured = true
   authStore.configure({
     clearSession() {
-      XHR.token = ''
       XHR.csrfToken = ''
       clearProfileHint()
     },
@@ -43,14 +68,18 @@ function configureAuth(): void {
       if (csrfToken !== undefined) XHR.csrfToken = csrfToken
       saveProfileHint(profile)
     },
-    async loadProfile() {
-      return requestAuthProfile()
+    async loadProfile(signal) {
+      return requestAuthSession(signal)
+    },
+    reportError(error) {
+      logFrontendError(error, 'failed to verify authentication')
     },
   })
-  XHR.unauthorizedHandler = () => {
+  XHR.authEpochProvider = () => authStore.currentSessionEpoch()
+  XHR.unauthorizedHandler = (requestEpoch) => {
+    if (!authStore.clearIfSessionEpoch(requestEpoch)) return
     invalidateUserCommentCache()
     commentsStore.clearViewerLikes()
-    authStore.clear()
   }
 }
 
@@ -72,19 +101,73 @@ export function hydrateAuth(
   return authStore.hydrate(hydration)
 }
 
-export function loadAuthFallback(): Promise<UserProfile | null> {
+export function loadAuthFallback(): Promise<AuthHydration> {
   configureAuth()
-  return requestAuthProfile()
+  return requestAuthSession()
 }
 
-export async function refreshAuth(): Promise<UserProfile | null> {
+export async function refreshAuth(
+  signal?: AbortSignal,
+): Promise<UserProfile | null> {
+  configureAuth()
+  const profile = await authStore.refresh(signal)
+  if (!profile && authStore.state.loginState === 'unauthenticated') {
+    invalidateUserCommentCache()
+    commentsStore.clearViewerLikes()
+  }
+  return profile
+}
+
+export interface AuthenticatedSessionResponse extends UserProfile {
+  csrfToken: string
+}
+
+function profileFromSession(
+  response: AuthenticatedSessionResponse,
+): UserProfile {
+  return {
+    id: response.id,
+    name: response.name,
+    avatar: response.avatar,
+    ...(response.email === undefined ? {} : { email: response.email }),
+    ...(response.hasEmail === undefined ? {} : { hasEmail: response.hasEmail }),
+    ...(response.hasRecoveryKey === undefined
+      ? {}
+      : { hasRecoveryKey: response.hasRecoveryKey }),
+    ...(response.role === undefined ? {} : { role: response.role }),
+    ...(response.create_time === undefined
+      ? {}
+      : { create_time: response.create_time }),
+  }
+}
+
+export function applyAuthenticatedSession(
+  response: AuthenticatedSessionResponse,
+): UserProfile {
   configureAuth()
   invalidateUserCommentCache()
-  const profile = await authStore.refresh()
-  if (profile) {
-    void commentsStore.hydrateViewerLikes().catch(() => undefined)
-  } else commentsStore.clearViewerLikes()
-  return profile
+  return authStore.establish({
+    profile: profileFromSession(response),
+    csrfToken: response.csrfToken,
+  })
+}
+
+export function continueAfterAuthentication(): void {
+  backgroundVerification?.abort()
+  backgroundVerification = new AbortController()
+  void refreshAuth(backgroundVerification.signal)
+  void commentsStore
+    .refreshIncrementally()
+    .catch((error: unknown) =>
+      logFrontendError(
+        error,
+        'failed to refresh comments after authentication',
+      ),
+    )
+    .then(() => commentsStore.hydrateViewerLikes())
+    .catch((error: unknown) =>
+      logFrontendError(error, 'failed to hydrate viewer likes'),
+    )
 }
 
 export function applyUpdatedProfile(profile: UserProfile): UserProfile {
@@ -101,8 +184,13 @@ export async function ensureLoggedIn(): Promise<boolean> {
   return false
 }
 
-export function getCurrentUser(): Promise<UserProfile> {
-  return XHR.get<UserProfile>('user/me', undefined, { silentStatuses: [401] })
+export async function getCurrentUser(): Promise<UserProfile> {
+  const response = await XHR.get<AuthenticatedSessionResponse>(
+    'user/me',
+    undefined,
+    { silentStatuses: [401] },
+  )
+  return profileFromSession(response)
 }
 
 function changeName(): void {

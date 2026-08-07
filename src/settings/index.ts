@@ -4,10 +4,9 @@ import { lang, changeLang } from './lang'
 import { elementFromHtml } from '../lib/dom'
 
 const pinnedHidden = ref(false)
+const timelineVisible = ref(true)
 
 const Settings = {
-  elements: {},
-
   init() {
     this.load()
   },
@@ -15,6 +14,7 @@ const Settings = {
   load() {
     changeLang(getConfig('lang'))
     pinnedHidden.value = getConfig('hideTopComment') === 'true'
+    timelineVisible.value = getConfig('showTimeline') !== 'false'
 
     if (Settings.graphicsMode != 'high') {
       Settings.graphicsMode = Settings.graphicsMode
@@ -64,6 +64,14 @@ const Settings = {
   set pinnedHidden(value) {
     pinnedHidden.value = value
     setConfig('hideTopComment', value)
+  },
+
+  get showTimeline() {
+    return timelineVisible.value
+  },
+  set showTimeline(value) {
+    timelineVisible.value = value
+    setConfig('showTimeline', value)
   },
 
   get graphicsMode() {

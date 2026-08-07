@@ -14,7 +14,7 @@ import { loadBootstrap, type ParsedBootstrapResponse } from './bootstrap-api'
 
 interface BootstrapControllerDependencies {
   loadBootstrap(): Promise<ParsedBootstrapResponse>
-  loadProfile(): Promise<UserProfile | null>
+  loadProfile(): Promise<UserProfile | null | AuthHydration>
   loadComments(): Promise<CommentPage>
   loadTodayCount(): Promise<number>
   hydrateAuth(hydration: AuthHydrationSource): Promise<UserProfile | null>
@@ -32,6 +32,13 @@ export function createBootstrapController(
 ): BootstrapController {
   let startup: Promise<void> | null = null
 
+  async function loadProfileFallback(): Promise<AuthHydration> {
+    const fallback = await dependencies.loadProfile()
+    return fallback && typeof fallback === 'object' && 'profile' in fallback
+      ? fallback
+      : { profile: fallback }
+  }
+
   function start(): Promise<void> {
     if (startup) return startup
 
@@ -44,7 +51,7 @@ export function createBootstrapController(
         parsed = await bootstrapRequest
       } catch (error) {
         if (!isCurrent()) throw error
-        return { profile: await dependencies.loadProfile() }
+        return loadProfileFallback()
       }
       if (parsed.protocolError) {
         dependencies.onProtocolError?.(parsed.protocolError)
@@ -54,7 +61,7 @@ export function createBootstrapController(
         parsed.protocolError?.sections.has('csrfToken')
       ) {
         if (!isCurrent()) throw new Error('初始化认证响应已过期')
-        return { profile: await dependencies.loadProfile() }
+        return loadProfileFallback()
       }
       return {
         profile: parsed.response.profile,

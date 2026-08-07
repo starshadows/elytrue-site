@@ -119,9 +119,7 @@ export interface TimelineControllerCallbacks {
   isFullscreen(): boolean
   loadCommentsAtTime(time: number): void | Promise<unknown>
   logError(error: unknown, message: string): void
-  persistVisibility(visible: boolean): void
   refreshComments(): void | Promise<unknown>
-  setCommentsScrollbarHidden(hidden: boolean): void
 }
 
 export interface TimelineControllerOptions {
@@ -134,7 +132,6 @@ export interface TimelineController {
   load(unixSeconds: number): void
   render(maxUnixSeconds?: number): void
   setActiveDate(scroll?: boolean): void
-  toggle(): void
 }
 
 class TimelineControllerImpl implements TimelineController {
@@ -145,7 +142,6 @@ class TimelineControllerImpl implements TimelineController {
   private document?: Document
   private initialized = false
   private timeline?: HTMLElement
-  private visibilityInput?: HTMLInputElement
 
   constructor(
     callbacks: TimelineControllerCallbacks,
@@ -161,19 +157,14 @@ class TimelineControllerImpl implements TimelineController {
     const container = documentObject.getElementById('timelineContainer')
     const timeline = documentObject.getElementById('timeline')
     const calendar = documentObject.getElementById('hoverCalendar')
-    const visibilityInput = documentObject.getElementById('showTimeline')
     if (!container || !timeline || !calendar) {
       throw new Error('Timeline elements are missing')
-    }
-    if (visibilityInput && !(visibilityInput instanceof HTMLInputElement)) {
-      throw new Error('Timeline visibility control is not an input')
     }
 
     this.document = documentObject
     this.container = container
     this.timeline = timeline
     this.calendar = calendar
-    this.visibilityInput = visibilityInput ?? undefined
     container.addEventListener('click', this.handleClick)
     container.addEventListener('wheel', this.handleWheel)
     container.addEventListener('mouseover', this.handleMouseOver)
@@ -192,7 +183,6 @@ class TimelineControllerImpl implements TimelineController {
     this.container = undefined
     this.timeline = undefined
     this.calendar = undefined
-    this.visibilityInput = undefined
     this.initialized = false
   }
 
@@ -249,16 +239,6 @@ class TimelineControllerImpl implements TimelineController {
     } catch (error) {
       this.callbacks.logError(error, 'failed to update active timeline month')
     }
-  }
-
-  toggle(): void {
-    const input = this.visibilityInput
-    const container = this.requireContainer()
-    if (!input) throw new Error('Timeline visibility control is missing')
-    const visible = input.checked
-    this.callbacks.persistVisibility(visible)
-    container.style.display = visible ? 'block' : 'none'
-    this.callbacks.setCommentsScrollbarHidden(visible)
   }
 
   private readonly handleClick = (event: Event): void => {

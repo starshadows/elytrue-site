@@ -1,62 +1,34 @@
 # 星花札记 · elytrue.com
 
-以爱莉希雅为主题的非商业个人同人网站。项目保留原有全屏背景、主题、音乐、时间轴、账号与留言交互，并以 Vue 3、TypeScript 和 EdgeOne Makers 维护为单仓库全栈应用。
+以爱莉希雅为主题的非商业个人同人网站。项目使用 Vue 3、Vite、Node.js Cloud Functions 和 EdgeOne Pages Blob/KV，保持 EdgeOne Makers 单仓库全栈部署。
 
-## 运行环境
+## 运行环境与目录
 
-```text
-构建与前端工具链：Node 22.17.1
-EdgeOne Cloud Functions：平台管理的 Node 20.x
-middleware.js：Edge Runtime / Web APIs / ES2023+
-```
+- 本地构建和 CI 使用 `.nvmrc` 指定的 Node 22.17.1；`package.json#engines` 是工具链支持范围。
+- `cloud-functions/api/[[default]].js` 与 `server/` 以平台管理的 Node 20.x 为生产边界。
+- `middleware.js` 运行在 Edge Runtime，只使用 Web API 与 `context.env`，不能导入 Node API。
+- `src/app/`、`src/components/`、`src/features/` 是 Vue 应用、组件和响应式状态；`src/config/` 管理站点与素材清单。
+- `server/` 持有路由、认证、服务、仓储与 Blob 访问；`shared/` 是前后端共用纯校验代码。
+- `public/assets/` 保存版本化背景、原图和音乐，`public/res/` 保存小型 UI、字体与备案资源。
+- `scripts/` 包含构建审计、只读核查及需显式确认的生产修复工具。
 
-这三个环境不能互换：
-
-- `.nvmrc` 推荐本地构建使用 Node `22.17.1`。
-- `edgeone.json#nodeVersion` 选择 EdgeOne 的依赖安装和 Vite 构建版本 `22.17.1`。
-- `package.json#engines.node` 是开发/构建工具链兼容范围：`>=20.19.0 <21 || >=22.12.0 <23`。
-- 服务端类型固定为 `@types/node@20.19.43`；`tsconfig.server.json` 以 ES2022 为输出能力上限，并已启用 `strictNullChecks`、`noUncheckedIndexedAccess` 等增量严格检查。
-- 以上配置都不会把 Cloud Functions 切换到 Node 22。`cloud-functions/api/[[default]].js` 和 `server/` 仍以平台管理的 Node 20.x 为生产基线。
-- 根目录 `middleware.js` 不是 Node 程序，只使用 `Request`、`Response`、`URL`、`context.env` 等 Edge Runtime 能力。
-
-## 目录
-
-- `src/app/`、`src/features/`、`src/components/`：唯一 Vue 根应用、功能 store/controller 与组件；留言、认证、主题、音乐、时间轴、PWA 和视口行为均由类型化模块持有。
-- `src/config/`：站点、SEO、背景、作者、原图和音乐的类型化配置。
-- `src/lib/api-client.ts`、`src/net/`：同源 `/api/*` 客户端、CSRF、超时与错误 envelope。
-- `cloud-functions/api/[[default]].js`：稳定的 EdgeOne Cloud Functions 入口。
-- `server/`：Node 20 兼容的路由、服务、仓储、认证、留言和 Blob 存储逻辑；图片、账号恢复、举报和管理员流程由独立 service/repository 承担。
-- `shared/`：不依赖 Node 或 DOM 的纯校验模块。
-- `middleware.js`：主域跳转、Edge KV 限流和按响应类型附加安全头。
-- `public/assets/`、`public/res/`：版本化站点素材、音乐、字体与 UI 资源。
-
-完整分层与数据流见 [架构文档](docs/ARCHITECTURE.md)，素材来源与保留依据见 [素材清单](docs/ASSET_INVENTORY.md)。发布前使用 [发布清单](docs/RELEASE.md)，异常部署按 [回滚清单](docs/ROLLBACK.md) 处理；Issue、Pull Request、运行时边界和素材贡献规则见 [贡献说明](CONTRIBUTING.md)。
+浏览器的同源 `/api/*` 请求经 `middleware.js` 进入 Cloud Function，再由 `server/app.js` 的手写路由表分发。静态文件和 SPA fallback 由 `edgeone.json` 管理，不存在独立服务器部署目标。
 
 ## 本地开发与验证
-
-安装 [`.nvmrc`](.nvmrc) 指定的 Node 后执行：
 
 ```powershell
 npm ci
 npm run dev
 ```
 
-`npm run dev` 只启动 Vite。需要同源 API、内存 Blob 和固定测试数据时：
+`npm run dev` 只启动 Vite，不模拟 Blob、KV 或 Functions。同源本地 API 使用构建产物和内存 Store：
 
 ```powershell
 npm run build:edgeone
 npm run mock:server
 ```
 
-连接自己的非生产 EdgeOne Makers 项目后，可运行精确锁定在 lockfile 中的 CLI：
-
-```powershell
-npm run dev:edgeone
-```
-
-Vite 开发服务器只显式接受 `localhost` 和 `127.0.0.1`；`npm run dev:host` 仍可通过本机 IP 访问。若 EdgeOne CLI 或其他受信任代理使用动态开发域名，请在启动命令的环境中设置 Vite 支持的 `__VITE_ADDITIONAL_SERVER_ALLOWED_HOSTS`（值仅填写 Host，不含协议和路径），不要把临时域名或通配配置提交到仓库。
-
-常用验收：
+连接自己的非生产 EdgeOne Makers 项目后可运行 `npm run dev:edgeone`。常用发布前验证顺序：
 
 ```powershell
 npm run lint
@@ -64,40 +36,49 @@ npm run format:check
 npm run check
 npm run check:server
 npm test
-npm run test:server
 npm run check:assets
-npm run report:assets # 输出逐文件类别、大小、首屏与迁移候选报告
 npm run build:edgeone
 npm run check:build-budget
 npm run test:e2e
-npm run audit:uploads # 需要 EdgeOne 凭据，只读审计图片与用量
-npm run audit:comment-likes # 需要 EdgeOne 凭据，只读审计留言点赞缓存
 ```
 
-CI 的 `verify` 和 `e2e` 使用 Node 22.17.1；独立 `server-node20` 任务只运行 `check:server` 与 `test:server`，不会导入 Vite、Vue SFC 或 Playwright。
+`npm run report:assets` 输出素材引用和预算报告。真实 EdgeOne 集成测试仅可使用独立非生产项目的 `EDGEONE_TEST_PROJECT_ID` 与 `EDGEONE_TEST_TOKEN`；未设置时自动跳过。
 
-页面安全头由 Edge Runtime 按响应类型附加：HTML 保持 `script-src 'self'`，API JSON 与图片二进制不附加页面 CSP；所有 HTTPS 响应带一年期、含子域但不含 preload 的 HSTS。会话 Cookie 的 `Secure` 依次依据边缘转发协议、请求 URL 和 `PUBLIC_SITE_URL`，因此 EdgeOne TLS 终止后的内部 HTTP URL 与本地 HTTP Mock 均保持正确行为。
+## EdgeOne 部署
 
-API 路由的 `auth` 与 `csrf` 声明由统一分发策略实际执行，Handler 不再各自重复通用权限检查。留言列表优先按稳定公开编号座位分批并发读取，并使用独立点赞计数缓存；`likes/{id}/{uid}.json` 仍是幂等点赞事实来源，缓存偏差可由只读审计定位和显式确认修复。历史留言首次读取会惰性核对并建立缓存，新用户留言写入倒序 v2 索引；旧索引和未编号留言继续兼容读取，不要求自动全量迁移。
+EdgeOne Makers 连接 `starshadows/elytrue-site` 的 `main` 分支，执行 `npm ci` 和 `npm run build:edgeone`，输出 `dist`。Cloud Function 地域为 `ap-shanghai`，最长执行 30 秒。生产项目必须绑定：
 
-Edge KV 固定窗口限流是多节点 best-effort 保护，可信客户端地址只取平台 `request.eo.clientIp` 或运行时注入的 `context.clientIp`，不信任转发 Header。Cloud Functions 另有单实例内存限流；生产仍应配置 EdgeOne WAF/频率控制，代码不宣称严格全局计数。
+- Blob Store `elytrue-data`：用户、会话、留言、索引、点赞、举报、repair marker 与元数据。
+- Blob Store `elytrue-uploads`：头像和留言图片。
+- Edge KV `ELYTRUE_RATE_LIMIT_KV`：边缘 best-effort 限流；生产还必须配置 EdgeOne WAF/频率控制。
 
-## 账号恢复密钥
+必需环境变量仅存放在 EdgeOne 项目设置：
 
-注册成功后会生成并只展示一次账号恢复密钥。它是忘记密码时唯一的自助恢复凭据，不用于普通登录；请立即保存到密码管理器、备忘录或离线文件，不要发送给他人。服务端只保存用途隔离的慢哈希，不保存或再次返回原文。
+- `ELYTRUE_APP_SECRET`：至少 32 个随机字符，用于服务端加密、摘要和安全派生。
+- `PUBLIC_SITE_URL`：正式站为 `https://elytrue.com`，也用于 Session Cookie 的 `Secure` 判断。
+- `ALLOWED_ORIGINS`：允许的正式域和预览域，逗号分隔。
+- `ADMIN_BOOTSTRAP_SECRET`：只为已有部署的兼容管理员恢复流程保留；新站首个注册账号自动成为管理员。
 
-已有用户无需迁移数据，可在个人主页的“编辑资料”菜单中输入当前密码生成恢复密钥；重新生成后旧密钥立即失效。忘记密码时在登录弹窗填写用户名或邮箱、恢复密钥和新密码，成功后所有旧会话与旧密钥失效，并只显示一次新的恢复密钥。密码和恢复密钥同时丢失时无法自助恢复，只能联系管理员人工处理。
+部署后核对 `/api/health` 的 `version`、`buildTime`、`commitTime`，并验证桌面/移动页面、注册登录、恢复密钥、留言发布/回复/点赞/举报/编号跳转、上传、缓存与安全头。版本不一致或持续 5xx 时在 EdgeOne 部署历史回滚到最近已验收提交，不用数据迁移代替应用回滚。
 
-邮件密码重置和外部邮件服务已移除。历史 `password-resets/*` Blob 不再读取，不要求全量用户或历史数据迁移，也不会在部署时自动删除。
+## 数据与安全边界
 
-## 生产部署
+- 不改变 `elytrue-data`、`elytrue-uploads`、Session Cookie、CSRF、API 路径、响应 envelope、Blob key 或已有字段语义。
+- `comments/{16位内部ID}.json` 是留言事实；公开编号映射、编号墓碑、公开/用户 read view、latest 快照、点赞事实、图片 alias 和 repair marker 均须保持兼容。
+- Blob 跨 key 操作不是事务；发布、图片和 read model 依赖补偿及 repair marker。不得因代码回滚删除墓碑、claim 或 operation marker。
+- 恢复密钥原文只在注册、恢复或轮换成功时返回一次；服务端只保存独立 scrypt 哈希。历史用户和历史 `password-resets/*` Blob 不自动迁移或删除。
+- `usage/uploads.json` 与留言点赞计数是可审计缓存。`npm run audit:uploads`、`npm run audit:comment-likes`、`npm run repair:user-claims`、`npm run rebuild:comment-views`、`scripts/check-duplicate-users.mjs` 和 `scripts/rebuild-usage.mjs` 默认只读。
+- 任何生产修复必须先完整备份并暂停对应写流量，再使用脚本要求的 `--fix`、`--confirm-production-repair` 或 `--confirm-production-migration`。凭据只临时放入环境变量，导出位于被忽略的 `exports/`。
+- 日志、Issue、提交和构建产物不得包含密码、恢复密钥、Cookie、完整邮箱、EdgeOne Token、应用密钥或生产 Blob 导出。
 
-唯一生产部署目标是 EdgeOne Makers。项目连接、环境变量和 Blob/KV 见 [EdgeOne 运维清单](docs/EDGEONE_SETUP.md)，日常发布与回滚分别使用 [发布清单](docs/RELEASE.md) 和 [回滚清单](docs/ROLLBACK.md)。本仓库不包含 Vercel、GitHub Pages、ECS 或独立 Node 服务器部署流程。
+## 素材与权利
 
-所有历史 Blob key、字段语义、内部 ID、公开编号、索引、墓碑、repair marker 和图片别名状态保持存储结构兼容；现有数据无需整体迁移或重新序列化。
+仓库没有开源许可证；公开可见不代表授予复制、修改、商用或再分发代码、文字和素材的许可。角色、作品名称、官方美术及 HOYO-MiX 音乐权利归官方权利人，二创图片权利归各画师：
 
-## 权利与使用说明
+- `landscape1`、`landscape2`：官方美术。
+- `landscape3`、`landscape4`、`portrait4`、`portrait5`：合悟昂，Pixiv 56022318，按作者主页转载要求标注。
+- `landscape5` 至 `landscape7`、`portrait6` 至 `portrait9`：喵咕君QAQ(KH3)，Pixiv 58434088，经许可转载。
+- `portrait1`、`portrait2`：nami，Pixiv 89748593，经许可转载。
+- `portrait3`：roena，Pixiv 35132995，经许可转载。
 
-仓库公开用于项目展示、学习和协作查看。仓库未附带开源许可证，也未主动授予复制、修改或再分发代码的许可；本站原创文字与页面内容同样不因公开而获得再分发许可，第三方素材继续受各自权利人的规则约束。
-
-素材来源与画师致谢见 [ASSETS.md](ASSETS.md)，完整权利说明见 [NOTICE.md](NOTICE.md)。角色、作品、图片与音乐权利归各自原作者或官方权利人所有。
+页面图片保存界面展示作者、来源链接和原图入口。使用素材前仍须遵守权利人的最新规则并在需要时另行取得授权。新增或替换素材必须更新 `src/config/assets.ts`、页面致谢与本节，并通过 `npm run report:assets`；任何单文件不得超过 EdgeOne 25 MiB 限制。

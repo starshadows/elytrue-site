@@ -125,7 +125,7 @@ describe('typed API client', () => {
   })
 
   test('clears authentication and preserves the API envelope on 401', async () => {
-    let unauthorized = 0
+    const unauthorizedEpochs: number[] = []
     globalThis.fetch = async () =>
       Response.json(
         { code: 401, message: '登录状态已失效', data: { reason: 'expired' } },
@@ -133,8 +133,9 @@ describe('typed API client', () => {
       )
     const client = new ApiClient('/api/', {
       origin: 'https://elytrue.com',
-      onUnauthorized: () => {
-        unauthorized += 1
+      getAuthEpoch: () => 7,
+      onUnauthorized: (epoch) => {
+        unauthorizedEpochs.push(epoch)
       },
     })
 
@@ -148,7 +149,28 @@ describe('typed API client', () => {
         return true
       },
     )
-    assert.equal(unauthorized, 1)
+    assert.deepEqual(unauthorizedEpochs, [7])
+  })
+
+  test('can suppress global 401 handling for generation-aware auth requests', async () => {
+    let unauthorized = 0
+    globalThis.fetch = async () =>
+      Response.json(
+        { code: 401, message: '登录状态已失效', data: null },
+        { status: 401 },
+      )
+    const client = new ApiClient('/api/', {
+      origin: 'https://elytrue.com',
+      onUnauthorized: () => {
+        unauthorized += 1
+      },
+    })
+
+    await assert.rejects(
+      () => client.request('user/me', { suppressUnauthorizedHandler: true }),
+      ApiError,
+    )
+    assert.equal(unauthorized, 0)
   })
 
   test('preserves a valid non-401 error envelope', async () => {

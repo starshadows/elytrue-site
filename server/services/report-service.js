@@ -17,7 +17,6 @@ export async function createReport(data, commentId, user, reason) {
     const repository = createReportRepository(data)
     const comment = await repository.getComment(commentId)
     if (!comment) throw httpError(404, '留言不存在')
-    if (comment.uid === user.id) throw httpError(403, '不能举报自己的留言')
     const cleanReason = sanitizePlainText(reason || '用户举报').slice(0, 500)
     try {
         await repository.create(commentId, user.id, {
@@ -59,6 +58,7 @@ export async function listReports(data) {
         const comment = await repository.getComment(report.commentId).catch(() => null)
         reports.push({
             ...report,
+            selfReport: comment?.uid === report.userId,
             displayId: validPublicNumber(report.commentNumber)
                 ?? validPublicNumber(comment?.number),
             deleted: comment === null,

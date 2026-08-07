@@ -611,7 +611,7 @@ describe('EdgeOne comments, uploads and moderation API', () => {
         assert.deepEqual(newest.payload.data.items.map(comment => comment.displayId), [2, 1])
     })
 
-    it('accepts reports from others, rejects self-report and duplicates', async () => {
+    it('accepts self-reports and other reports while rejecting duplicates', async () => {
         const reporter = createState('10.0.1.2')
         reporter.stores = state.stores
         const registered = await call(reporter, 'POST', 'user/register', {
@@ -625,8 +625,13 @@ describe('EdgeOne comments, uploads and moderation API', () => {
             commentId,
             reason: '测试自举报',
         })
-        assert.equal(selfReport.response.status, 403)
-        assert.match(selfReport.payload.message, /不能举报自己的留言/u)
+        assert.equal(selfReport.response.status, 200)
+
+        const selfDuplicate = await call(state, 'POST', 'comments/report', {
+            commentId,
+            reason: '重复自举报',
+        })
+        assert.equal(selfDuplicate.response.status, 409)
 
         const report = await call(reporter, 'POST', 'comments/report', {
             commentId,
@@ -643,8 +648,26 @@ describe('EdgeOne comments, uploads and moderation API', () => {
 
         const reports = await call(state, 'GET', 'admin/reports')
         assert.equal(reports.response.status, 200)
-        assert.equal(reports.payload.data[0].reason, '测试举报')
-        assert.equal(reports.payload.data[0].displayId, 1)
+        const selfReportEntry = reports.payload.data.find(report => report.reason === '测试自举报')
+        const otherReportEntry = reports.payload.data.find(report => report.reason === '测试举报')
+        assert.equal(selfReportEntry.reason, '测试自举报')
+        assert.equal(selfReportEntry.selfReport, true)
+        assert.equal(otherReportEntry.reason, '测试举报')
+        assert.equal(otherReportEntry.displayId, 1)
+
+        const anonymous = createState('10.0.1.3')
+        anonymous.stores = state.stores
+        const unauthenticated = await call(anonymous, 'POST', 'comments/report', {
+            commentId,
+            reason: '未登录举报',
+        })
+        assert.equal(unauthenticated.response.status, 401)
+
+        const missing = await call(reporter, 'POST', 'comments/report', {
+            commentId: 9_999_999,
+            reason: '不存在的留言',
+        })
+        assert.equal(missing.response.status, 404)
 
         const hidden = await call(state, 'POST', 'admin/comments/moderate', {
             commentId,

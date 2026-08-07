@@ -202,12 +202,4 @@ onBeforeUnmount(() => {
       </div>
     </div>
   </div>
-  <footer id="siteFooter">
-    <a
-      href="https://beian.miit.gov.cn/"
-      target="_blank"
-      rel="noopener noreferrer"
-      >赣ICP备2026015414号-1</a
-    >
-  </footer>
 </template>

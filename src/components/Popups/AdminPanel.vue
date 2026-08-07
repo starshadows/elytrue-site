@@ -54,6 +54,10 @@
         <time>{{ new Date(report.createdAt).toLocaleString() }}</time>
       </header>
       <p>{{ report.reason }}</p>
+      <p v-if="report.selfReport" class="self-report">
+        <span class="ui zh">留言作者自举报</span>
+        <span class="ui en">Self-report by the author</span>
+      </p>
       <div v-if="!report.deleted">
         <button @click="moderate(report, 'hide')">
           <span class="ui zh">隐藏</span><span class="ui en">Hide</span>
@@ -85,6 +89,7 @@ interface Report {
   userId: string
   displayId?: number | null
   deleted?: boolean
+  selfReport?: boolean
   createdAt: number
   reason: string
 }

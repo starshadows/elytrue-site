@@ -40,6 +40,20 @@ async function putComment(data, id, number = 7) {
 }
 
 describe('report public number records', () => {
+    test('authors can report their own comment without changing the report key', async () => {
+        const data = new CountingStore()
+        await putComment(data, 122, 6)
+        await createReport(data, 122, author, 'self report')
+        const stored = await data.get(blobKeys.commentReport(122, author.id), { type: 'json' })
+        assert.equal(stored.commentId, 122)
+        assert.equal(stored.commentNumber, 6)
+        assert.equal(stored.userId, author.id)
+        assert.equal(stored.reason, 'self report')
+        assert.equal(stored.status, 'open')
+        const reports = await listReports(data)
+        assert.equal(reports[0].selfReport, true)
+    })
+
     test('new reports persist commentNumber without number-index scans', async () => {
         const data = new CountingStore()
         await putComment(data, 123, 7)

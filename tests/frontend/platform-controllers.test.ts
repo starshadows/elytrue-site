@@ -265,11 +265,9 @@ describe('timeline date calculations', () => {
             loadedTimes.push(time)
           },
           logError() {},
-          persistVisibility() {},
           refreshComments: () => {
             refreshes += 1
           },
-          setCommentsScrollbarHidden() {},
         },
         { document: documentObject as unknown as Document },
       )

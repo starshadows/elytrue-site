@@ -3,6 +3,10 @@
     src: url('/res/AaWoyoudianfangLite.ttf?1') format('truetype');
 }
 
+#app {
+    display: contents;
+}
+
 .ui.en {
     font-family: 'Segoe UI', Tahoma, Geneva, Verdana, sans-serif;
 }
@@ -180,8 +184,13 @@ body > #app > * {
 #mainCaptions p {
     font-size: 4vh;
     font-size: min(6vw, 4vh);
-    white-space: nowrap;
+    max-width: 86vw;
+    white-space: normal;
     text-shadow: 0 0 0.25em black, 0 0 0.25em black, 0 0 0.25em black;
+}
+
+#mainCaptions .captionSource {
+    font-size: min(3.5vw, 2.25vh);
 }
 
 #mainCaptions .ui.en {
@@ -473,6 +482,7 @@ body:not(.fullscreen) #lowerPanel.animating:not(.lowerPanelUp) {
 }
 
 #lowerPanel:hover:not(.lowerPanelDown),
+#lowerPanel:focus-within:not(.lowerPanelDown),
 #lowerPanel.lowerPanelUp {
     transform: translateY(0vh);
 }
@@ -500,6 +510,7 @@ body:not(.fullscreen) #lowerPanel.animating:not(.lowerPanelUp) {
 }
 
 #lowerPanel:hover:not(.lowerPanelDown)>.tooltip,
+#lowerPanel:focus-within:not(.lowerPanelDown)>.tooltip,
 #lowerPanel.lowerPanelUp>.tooltip {
     display: none;
 }
@@ -550,6 +561,7 @@ body:not(.fullscreen) #lowerPanel.animating:not(.lowerPanelUp) {
 }
 
 #lowerPanel:hover:not(.lowerPanelDown) #comments,
+#lowerPanel:focus-within:not(.lowerPanelDown) #comments,
 #lowerPanel.lowerPanelUp #comments,
 .fullscreen #comments {
     opacity: 1;
@@ -642,8 +654,10 @@ body:not(.fullscreen) #lowerPanel.animating:not(.lowerPanelUp) {
 }
 
 #lowerPanel:hover:not(.lowerPanelDown) .enableClickDelayed,
+#lowerPanel:focus-within:not(.lowerPanelDown) .enableClickDelayed,
 #lowerPanel.lowerPanelUp .enableClickDelayed,
 #lowerPanel:hover:not(.lowerPanelDown) #comments .commentBox>*:not(.loadingCircle),
+#lowerPanel:focus-within:not(.lowerPanelDown) #comments .commentBox>*:not(.loadingCircle),
 #lowerPanel.lowerPanelUp #comments .commentBox>*:not(.loadingCircle) {
     animation-name: enableClickDelayed;
     animation-duration: 0.2s;
@@ -1320,6 +1334,41 @@ body:not(.fullscreen) #lowerPanel.animating:not(.lowerPanelUp) {
     font-weight: bold;
 }
 
+.legalLinks {
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    flex-wrap: wrap;
+    gap: 0.25rem 0.8rem;
+    min-height: 1.25rem;
+    margin: 0 5% 0.2rem;
+    color: rgba(255, 255, 255, 0.82);
+    font-size: 0.68rem;
+    line-height: 1.2;
+    text-align: center;
+    text-shadow: 0 0 0.25rem rgba(0, 0, 0, 0.72);
+}
+
+.legalLinks a {
+    display: inline-flex;
+    align-items: center;
+    gap: 0.25rem;
+    color: inherit;
+    white-space: nowrap;
+}
+
+.legalLinks a:focus-visible {
+    border-radius: 0.2rem;
+    outline: 0.125rem solid rgba(255, 255, 255, 0.9);
+    outline-offset: 0.125rem;
+}
+
+.legalLinks img {
+    width: 0.9rem;
+    height: 1rem;
+    object-fit: contain;
+}
+
 .commentSeekArrow {
     display: none;
     position: absolute;
@@ -1337,6 +1386,7 @@ body:not(.fullscreen) #lowerPanel.animating:not(.lowerPanelUp) {
 }
 
 #lowerPanel:hover:not(.lowerPanelDown) .commentSeekArrow,
+#lowerPanel:focus-within:not(.lowerPanelDown) .commentSeekArrow,
 #lowerPanel.lowerPanelUp .commentSeekArrow {
     display: flex;
 }
@@ -1416,6 +1466,7 @@ body:not(.fullscreen) #lowerPanel.animating:not(.lowerPanelUp) {
 }
 
 #lowerPanel:hover:not(.lowerPanelDown) .backTransparent,
+#lowerPanel:focus-within:not(.lowerPanelDown) .backTransparent,
 #lowerPanel.lowerPanelUp .backTransparent {
     display: block;
 }
@@ -2502,8 +2553,10 @@ p.altLoginOption,
 }
 
 .lowend #lowerPanel:hover:not(.lowerPanelDown) .enableClickDelayed,
+.lowend #lowerPanel:focus-within:not(.lowerPanelDown) .enableClickDelayed,
 .lowend #lowerPanel.lowerPanelUp .enableClickDelayed,
 .lowend #lowerPanel:hover:not(.lowerPanelDown) #comments .commentBox>*:not(.loadingCircle),
+.lowend #lowerPanel:focus-within:not(.lowerPanelDown) #comments .commentBox>*:not(.loadingCircle),
 .lowend #lowerPanel.lowerPanelUp #comments .commentBox>*:not(.loadingCircle) {
     animation-name: enableClickDelayed !important;
     animation-duration: 0.2s !important;
@@ -2653,6 +2706,14 @@ body.fullscreen {
     animation: showHoverCalendarFullscreen 0.2s;
 }
 
+.fullscreen .legalLinks {
+    position: absolute;
+    right: 6rem;
+    bottom: 0.45rem;
+    left: 6rem;
+    margin: 0;
+}
+
 @keyframes showHoverCalendarFullscreen {
     from {
         opacity: 0;
@@ -2680,4 +2741,64 @@ body.fullscreen {
 .fullscreen #lowerPanel #toolbarContainer {
     top: 0;
     right: 0.5rem;
+}
+
+.downloadOriginal {
+    float: right;
+    padding: 0.15rem 0.55rem;
+    border-radius: 1rem;
+    background: rgba(255, 128, 192, 0.16);
+    white-space: nowrap;
+}
+
+.artPermissionNotice {
+    width: min(92%, 56rem);
+    margin: 0.65rem auto 1rem;
+    padding: 0.8rem 1rem;
+    border: 1px solid rgba(214, 111, 165, 0.3);
+    border-radius: 1rem;
+    background: linear-gradient(135deg, rgba(255, 242, 249, 0.76), rgba(242, 244, 255, 0.72));
+    color: #57384c;
+    box-sizing: border-box;
+}
+
+.artPermissionNotice p {
+    margin: 0.22rem 0;
+    line-height: 1.55;
+}
+
+.artPermissionNotice a,
+.authorizedRepost {
+    color: #a83e77;
+    font-weight: 600;
+}
+
+.backgroundGroupTitle {
+    width: min(92%, 56rem);
+    margin: 1.6rem auto 0.8rem;
+    padding-bottom: 0.45rem;
+    border-bottom: 1px solid rgba(168, 62, 119, 0.25);
+    color: #8f3569;
+    text-align: left;
+}
+
+#themeList > div:not([data-theme="default"]) {
+    display: none;
+}
+
+@media (max-width: 600px) {
+    #mainCaptions {
+        left: 6%;
+        right: 6%;
+    }
+
+    .legalLinks {
+        gap: 0.2rem 0.55rem;
+        font-size: 0.62rem;
+    }
+
+    .fullscreen .legalLinks {
+        right: 4.5rem;
+        left: 4.5rem;
+    }
 }

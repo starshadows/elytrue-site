@@ -12,6 +12,8 @@ import { readHomeCommentsCache, writeHomeCommentsCache } from './comments-cache'
 import { reconcileComments } from './comments-reconcile'
 
 type LoadKind = 'initial' | 'newer' | 'older' | 'replacement'
+const MAX_REFRESH_PAGES = 10
+const MAX_REFRESH_ADDITIONS = 500
 export type CommentRenderOrigin =
   'cache' | 'initial-network' | 'revalidated' | 'new' | 'created' | 'pagination'
 
@@ -81,6 +83,7 @@ export function createCommentsStore(api: CommentsApi) {
   const enteringCommentIds = new Set<number>()
   let homeCacheHasMore = false
   let homeCacheNextCursor: number | null = null
+  let homeView = true
 
   function merge(items: CommentRecord[], origin: CommentRenderOrigin): void {
     const merged = new Map(state.items.map((item) => [item.id, item]))
@@ -287,16 +290,20 @@ export function createCommentsStore(api: CommentsApi) {
     })
   }
 
-  function refresh(): Promise<void> {
+  function refreshIncrementally(): Promise<void> {
     if (refreshRequest) return refreshRequest
-    const request = refreshIncrementally().finally(() => {
+    const request = performIncrementalRefresh().finally(() => {
       if (refreshRequest === request) refreshRequest = undefined
     })
     refreshRequest = request
     return request
   }
 
-  async function refreshIncrementally(): Promise<void> {
+  function refresh(): Promise<void> {
+    return refreshIncrementally()
+  }
+
+  async function performIncrementalRefresh(): Promise<void> {
     const initialRequest = pending.get('initial') ?? pending.get('replacement')
     if (initialRequest) {
       await initialRequest
@@ -308,10 +315,39 @@ export function createCommentsStore(api: CommentsApi) {
     }
 
     const refreshGeneration = generation
+    const seenCursors = new Set<number>()
+    let pages = 0
+    let additions = 0
     state.reachedNewest = false
     nextNewerCursor = null
     do {
+      const cursorBefore = nextNewerCursor ?? state.items[0]?.id ?? null
+      if (cursorBefore !== null) {
+        if (seenCursors.has(cursorBefore)) {
+          state.reachedNewest = true
+          break
+        }
+        seenCursors.add(cursorBefore)
+      }
+      const idsBefore = new Set(state.items.map((item) => item.id))
       await loadNewer(100)
+      pages += 1
+      const pageAdditions = state.items.reduce(
+        (count, item) => count + (idsBefore.has(item.id) ? 0 : 1),
+        0,
+      )
+      additions += pageAdditions
+      const cursorAfter = nextNewerCursor
+      if (
+        !state.reachedNewest &&
+        (pageAdditions === 0 ||
+          cursorAfter === cursorBefore ||
+          (cursorAfter !== null && seenCursors.has(cursorAfter)) ||
+          pages >= MAX_REFRESH_PAGES ||
+          additions >= MAX_REFRESH_ADDITIONS)
+      ) {
+        state.reachedNewest = true
+      }
     } while (
       refreshGeneration === generation &&
       !state.jumping &&
@@ -320,11 +356,14 @@ export function createCommentsStore(api: CommentsApi) {
     if (refreshGeneration !== generation || state.jumping) return
 
     state.initialError = false
-    writeHomeCommentsCache(state.items, homeCacheHasMore, homeCacheNextCursor)
+    if (homeView) {
+      writeHomeCommentsCache(state.items, homeCacheHasMore, homeCacheNextCursor)
+    }
     void refreshTodayCount()
   }
 
   function initialize(): Promise<void> {
+    homeView = true
     const cacheUsed = hydrateHomeCache()
     if (state.items.length > 0 && !state.initialError) {
       return (
@@ -352,6 +391,7 @@ export function createCommentsStore(api: CommentsApi) {
   function hydrateBootstrap(
     hydration: BootstrapCommentHydrationSource,
   ): Promise<boolean> {
+    homeView = true
     hydrateHomeCache()
     const hydrationGeneration = generation
     let metadata: BootstrapCommentHydration | undefined
@@ -471,7 +511,9 @@ export function createCommentsStore(api: CommentsApi) {
     state.initialError = false
     if (wasEmpty) state.currentVisibleTime = comment.time
     state.todayCount += 1
-    writeHomeCommentsCache(state.items, homeCacheHasMore, homeCacheNextCursor)
+    if (homeView) {
+      writeHomeCommentsCache(state.items, homeCacheHasMore, homeCacheNextCursor)
+    }
     void refreshTodayCount()
   }
 
@@ -492,6 +534,7 @@ export function createCommentsStore(api: CommentsApi) {
     likeMutationVersions.clear()
     todayCountFresh = false
     state.initialError = false
+    homeView = false
   }
 
   function finishJump(): void {
@@ -601,6 +644,7 @@ export function createCommentsStore(api: CommentsApi) {
     clearViewerLikes,
     consumeAnimationIds,
     refresh,
+    refreshIncrementally,
     refreshTodayCount,
     setCurrentVisibleTime,
     state: readonly(state),

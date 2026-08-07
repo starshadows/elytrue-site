@@ -4,9 +4,10 @@ import { toQueryString } from '../lib/query'
 import Settings from '../settings'
 
 interface XHRSettings {
-  includeToken?: boolean
+  silent?: boolean
   silentStatuses?: number[]
   signal?: AbortSignal
+  suppressUnauthorizedHandler?: boolean
   timeoutMs?: number
   updateCsrfToken?: boolean
 }
@@ -14,21 +15,21 @@ interface XHRSettings {
 type Payload = BodyInit | object
 
 const XHR = {
-  token: '',
   csrfToken: '',
   client: undefined as ApiClient | undefined,
-  unauthorizedHandler: undefined as (() => void) | undefined,
+  authEpochProvider: undefined as (() => number) | undefined,
+  unauthorizedHandler: undefined as
+    ((requestAuthEpoch: number) => void) | undefined,
 
   getClient(): ApiClient {
     this.client ??= new ApiClient('/api/', {
       getCsrfToken: () => this.csrfToken,
+      getAuthEpoch: () => this.authEpochProvider?.() ?? 0,
       setCsrfToken: (token) => {
         this.csrfToken = token
       },
-      onUnauthorized: () => {
-        this.token = ''
-        this.csrfToken = ''
-        this.unauthorizedHandler?.()
+      onUnauthorized: (requestAuthEpoch) => {
+        this.unauthorizedHandler?.(requestAuthEpoch)
       },
     })
     return this.client
@@ -46,6 +47,7 @@ const XHR = {
         body: payload,
         headers: { 'Accept-Language': Settings.lang },
         signal: settings.signal,
+        suppressUnauthorizedHandler: settings.suppressUnauthorizedHandler,
         timeoutMs: settings.timeoutMs,
         updateCsrfToken: settings.updateCsrfToken,
       })
@@ -58,7 +60,7 @@ const XHR = {
       return method === 'GET' && envelope.code === 1 ? envelope.data : envelope
     } catch (error) {
       const status = error instanceof ApiError ? error.status : 0
-      if (!settings.silentStatuses?.includes(status)) {
+      if (!settings.silent && !settings.silentStatuses?.includes(status)) {
         const timedOut =
           error instanceof DOMException && error.name === 'TimeoutError'
         FloatMsgs.show({

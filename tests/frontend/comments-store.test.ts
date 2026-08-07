@@ -6,7 +6,11 @@ import type {
   CommentsApi,
 } from '../../src/features/comments/comments-api'
 import { createCommentsStore } from '../../src/features/comments/comments-store'
-import { HOME_COMMENTS_CACHE_KEY } from '../../src/features/comments/comments-cache'
+import {
+  HOME_COMMENTS_CACHE_KEY,
+  HOME_COMMENTS_CACHE_LIMIT,
+  writeHomeCommentsCache,
+} from '../../src/features/comments/comments-cache'
 import { reconcileComments } from '../../src/features/comments/comments-reconcile'
 import type {
   CommentPage,
@@ -457,6 +461,134 @@ describe('comments store', () => {
       { cursor: 3, direction: 'after', count: -100 },
     ])
     assert.deepEqual([...store.consumeAnimationIds()], [3, 4])
+  })
+
+  test('stops an incremental refresh when a page repeats without new ids', async () => {
+    const queries: CommentQuery[] = []
+    const store = createCommentsStore(
+      apiWith({
+        async list(query = {}) {
+          queries.push(query)
+          if (queries.length === 1) {
+            return { items: [comment(2), comment(1)], hasMore: false }
+          }
+          return { items: [comment(3)], hasMore: true, nextCursor: 3 }
+        },
+      }),
+    )
+    await store.initialize()
+
+    await store.refreshIncrementally()
+
+    assert.equal(queries.length, 3)
+    assert.deepEqual(
+      store.state.items.map((item) => item.id),
+      [3, 2, 1],
+    )
+    assert.equal(store.state.reachedNewest, true)
+  })
+
+  test('caps a single incremental refresh at ten pages', async () => {
+    let calls = 0
+    const store = createCommentsStore(
+      apiWith({
+        async list(query = {}) {
+          calls += 1
+          if (calls === 1) return { items: [comment(1)], hasMore: false }
+          const cursor = Number(query.cursor)
+          return {
+            items: [comment(cursor + 1)],
+            hasMore: true,
+            nextCursor: cursor + 1,
+          }
+        },
+      }),
+    )
+    await store.initialize()
+
+    await store.refreshIncrementally()
+
+    assert.equal(calls, 11)
+    assert.equal(store.state.items.length, 11)
+    assert.equal(store.state.reachedNewest, true)
+  })
+
+  test('caps a single incremental refresh at five hundred additions', async () => {
+    let calls = 0
+    const store = createCommentsStore(
+      apiWith({
+        async list(query = {}) {
+          calls += 1
+          if (calls === 1) return { items: [comment(1)], hasMore: false }
+          const cursor = Number(query.cursor)
+          return {
+            items: Array.from({ length: 100 }, (_, index) =>
+              comment(cursor + index + 1),
+            ),
+            hasMore: true,
+            nextCursor: cursor + 100,
+          }
+        },
+      }),
+    )
+    await store.initialize()
+
+    await store.refreshIncrementally()
+
+    assert.equal(calls, 6)
+    assert.equal(store.state.items.length, 501)
+    assert.equal(store.state.reachedNewest, true)
+  })
+
+  test('bounds the home cache and stores matching pagination metadata', () => {
+    const storage = new TestStorage()
+    Object.defineProperty(globalThis, 'window', {
+      configurable: true,
+      value: { sessionStorage: storage },
+    })
+    try {
+      writeHomeCommentsCache(
+        Array.from({ length: 45 }, (_, index) => comment(45 - index)),
+        false,
+      )
+      const cached = JSON.parse(
+        storage.getItem(HOME_COMMENTS_CACHE_KEY) ?? 'null',
+      )
+      assert.equal(cached.items.length, HOME_COMMENTS_CACHE_LIMIT)
+      assert.equal(cached.hasMore, true)
+      assert.equal(cached.nextCursor, 16)
+    } finally {
+      delete (globalThis as { window?: unknown }).window
+    }
+  })
+
+  test('does not overwrite the home cache while refreshing a historical view', async () => {
+    const storage = new TestStorage()
+    Object.defineProperty(globalThis, 'window', {
+      configurable: true,
+      value: { sessionStorage: storage },
+    })
+    let calls = 0
+    const store = createCommentsStore(
+      apiWith({
+        async list(query = {}) {
+          calls += 1
+          if (calls === 1) return { items: [comment(5)], hasMore: false }
+          if (query.number) return { items: [comment(2)], hasMore: false }
+          return { items: [], hasMore: false }
+        },
+      }),
+    )
+    try {
+      await store.initialize()
+      const homeCache = storage.getItem(HOME_COMMENTS_CACHE_KEY)
+      await store.gotoNumber(2)
+      store.finishJump()
+      await store.refreshIncrementally()
+      assert.equal(storage.getItem(HOME_COMMENTS_CACHE_KEY), homeCache)
+    } finally {
+      delete (globalThis as { window?: unknown }).window
+    }
   })
 
   test('keeps a newly posted comment when an older initial response resolves later', async () => {

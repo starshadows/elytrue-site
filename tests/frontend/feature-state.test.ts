@@ -43,9 +43,10 @@ describe('auth feature state', () => {
     assert.deepEqual(store.state.profile, profile)
   })
 
-  test('failed refresh clears session and session invalidation is immediate', async () => {
+  test('transport failure preserves an authenticated profile and reports the error', async () => {
     let shouldFail = false
     let clears = 0
+    let errors = 0
     const store = createAuthStore({
       clearSession() {
         clears += 1
@@ -54,16 +55,38 @@ describe('auth feature state', () => {
         if (shouldFail) throw new Error('expired')
         return profile
       },
+      reportError() {
+        errors += 1
+      },
     })
 
     await store.initialize()
     shouldFail = true
+    assert.deepEqual(await store.refresh(), profile)
+    assert.equal(clears, 0)
+    assert.equal(errors, 1)
+    assert.equal(store.authenticated.value, true)
+    assert.deepEqual(store.state.profile, profile)
+  })
+
+  test('an explicit null profile clears the current session', async () => {
+    let authenticated = true
+    let clears = 0
+    const store = createAuthStore({
+      clearSession() {
+        clears += 1
+      },
+      async loadProfile() {
+        return authenticated ? profile : null
+      },
+    })
+
+    await store.initialize()
+    authenticated = false
     assert.equal(await store.refresh(), null)
     assert.equal(clears, 1)
     assert.equal(store.authenticated.value, false)
     assert.equal(store.state.loginState, 'unauthenticated')
-    assert.equal(store.state.userId, null)
-    assert.equal(store.state.profile, null)
   })
 
   test('a stale initialization cannot overwrite a newer refresh', async () => {
@@ -105,6 +128,61 @@ describe('auth feature state', () => {
 
     assert.deepEqual(store.state.profile, updated)
     assert.deepEqual(await store.ready(), updated)
+  })
+
+  test('a pre-login profile response cannot overwrite an established session', async () => {
+    let resolveProfile: ((value: UserProfile | null) => void) | undefined
+    let hydratedCsrf = ''
+    const store = createAuthStore({
+      clearSession() {},
+      applyHydratedSession(_profile, csrfToken) {
+        hydratedCsrf = csrfToken ?? ''
+      },
+      loadProfile() {
+        return new Promise<UserProfile | null>((resolve) => {
+          resolveProfile = resolve
+        })
+      },
+    })
+    const stale = store.initialize()
+    const loggedIn = { ...profile, id: 'new-session' }
+
+    store.establish({ profile: loggedIn, csrfToken: 'csrf-new' })
+    resolveProfile?.(null)
+    await stale
+
+    assert.equal(store.state.userId, 'new-session')
+    assert.equal(store.state.loginState, 'authenticated')
+    assert.equal(hydratedCsrf, 'csrf-new')
+  })
+
+  test('only a 401 from the current session epoch clears authentication', () => {
+    const store = createAuthStore({
+      clearSession() {},
+      async loadProfile() {
+        return null
+      },
+    })
+    const oldEpoch = store.currentSessionEpoch()
+    store.establish({ profile, csrfToken: 'csrf' })
+
+    assert.equal(store.clearIfSessionEpoch(oldEpoch), false)
+    assert.equal(store.state.loginState, 'authenticated')
+    assert.equal(store.clearIfSessionEpoch(store.currentSessionEpoch()), true)
+    assert.equal(store.state.loginState, 'unauthenticated')
+  })
+
+  test('an unconfirmed startup remains loading after a network failure', async () => {
+    const store = createAuthStore({
+      clearSession() {},
+      async loadProfile() {
+        throw new Error('offline')
+      },
+    })
+
+    assert.equal(await store.initialize(), null)
+    assert.equal(store.state.loginState, 'loading')
+    assert.equal(store.state.userId, null)
   })
 })
 

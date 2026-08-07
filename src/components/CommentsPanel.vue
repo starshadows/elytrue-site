@@ -14,9 +14,9 @@ import FloatMsgs from './FloatMsgs'
 import Popups from './Popups'
 import TimelinePanel from './TimelinePanel.vue'
 import ToolsPanel from './ToolsPanel.vue'
+import LegalLinks from './LegalLinks.vue'
 import { commentsStore } from '../features/comments/comments-store'
 import Settings from '../settings'
-import { getConfig } from '../settings/config'
 import type { CommentRecord } from '../features/comments/comment-types'
 import { useAuth } from '../features/auth/useAuth'
 import StableAvatar from './StableAvatar.vue'
@@ -434,10 +434,6 @@ onMounted(() => {
     attributes: true,
     attributeFilter: ['class'],
   })
-  if (getConfig('showTimeline') === 'false')
-    document
-      .getElementById('timelineContainer')
-      ?.style.setProperty('display', 'none')
 })
 
 onBeforeUnmount(() => {
@@ -479,7 +475,11 @@ defineExpose({ forceLowerPanelDown, forceLowerPanelUp, pauseScroll })
       ><span class="ui en">Messages today: </span
       ><span id="todayCommentCount">{{ commentsStore.state.todayCount }}</span>
     </div>
-    <div id="comments" ref="container" class="noscrollbar">
+    <div
+      id="comments"
+      ref="container"
+      :class="{ noscrollbar: Settings.showTimeline }"
+    >
       <div
         ref="newestSentinel"
         class="paginationSentinel"
@@ -597,6 +597,7 @@ defineExpose({ forceLowerPanelDown, forceLowerPanelUp, pauseScroll })
       ></div>
     </div>
     <TimelinePanel />
+    <LegalLinks />
     <button
       type="button"
       class="commentSeekArrow semanticButton"

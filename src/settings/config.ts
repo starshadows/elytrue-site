@@ -1,10 +1,3 @@
-export function setCookie(cname: string, cvalue: string, exdays = 999) {
-  const d = new Date()
-  d.setTime(d.getTime() + exdays * 24 * 60 * 60 * 1000)
-  let expires = 'expires=' + d.toUTCString()
-  document.cookie = cname + '=' + cvalue + ';' + expires + ';path=/'
-}
-
 export function getCookie(cname: string) {
   let name = cname + '='
   let ca = document.cookie.split(';')
@@ -23,8 +16,9 @@ export function getCookie(cname: string) {
 
 export function getConfig(key: string) {
   if (localStorage.getItem(key) == null) {
-    if (getCookie(key) != '') {
-      setConfig(key, getCookie(key))
+    const legacyValue = getCookie(key)
+    if (legacyValue != '') {
+      setConfig(key, legacyValue)
       document.cookie = `${key}=;expires=${new Date(0).toUTCString()};path=/`
     } else {
       return ''

@@ -732,7 +732,7 @@ test('缓存用户名在 100ms 内显示,服务端确认未登录后才清除', 
   ).toBeNull()
 })
 
-test('认证请求失败会清除缓存用户名', async ({ page }) => {
+test('认证请求失败会保留缓存用户名', async ({ page }) => {
   await installProfileHint(page, '失效缓存用户')
   await page.route('**/api/bootstrap', (route) =>
     fulfillBootstrap(route, { status: 503 }),
@@ -745,10 +745,11 @@ test('认证请求失败会清除缓存用户名', async ({ page }) => {
   await expect(page.locator('#userInfoName')).toHaveText('失效缓存用户', {
     timeout: 100,
   })
-  await expect(page.locator('#userInfoName')).toHaveText(/访客/)
+  await page.waitForTimeout(500)
+  await expect(page.locator('#userInfoName')).toHaveText('失效缓存用户')
   expect(
     await page.evaluate(() => localStorage.getItem('elytrue.profileHint')),
-  ).toBeNull()
+  ).not.toBeNull()
 })
 
 test('相同 Profile Hint 头像只预加载一次且不替换节点', async ({ page }) => {

@@ -19,7 +19,6 @@ import {
 import { createTimelineController } from '../features/timeline/timeline-controller'
 import { createViewportController } from '../features/viewport/viewport-controller'
 import Settings from '../settings'
-import { setConfig } from '../settings/config'
 import { logFrontendError } from './app-events'
 import { markPerformanceEvent } from '../lib/performance'
 
@@ -67,12 +66,7 @@ const timeline = createTimelineController({
   isFullscreen: () => viewport.isFullscreen,
   loadCommentsAtTime: (time) => commentsStore.loadAtTime(time),
   logError: logFrontendError,
-  persistVisibility: (visible) => setConfig('showTimeline', visible),
   refreshComments: () => commentsStore.refresh(),
-  setCommentsScrollbarHidden: (hidden) =>
-    document
-      .getElementById('comments')
-      ?.classList.toggle('noscrollbar', hidden),
 })
 const viewport = createViewportController({
   closeImageViewer: ImgViewer.close,

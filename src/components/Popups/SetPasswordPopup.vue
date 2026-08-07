@@ -58,7 +58,6 @@ export default {
       XHR.put('user/update', { password: this.password }).then((r) => {
         if (r.code == 1) {
           this.$emit('close')
-          XHR.token = ''
           XHR.csrfToken = ''
           authStore.clear()
           void refreshAuth()

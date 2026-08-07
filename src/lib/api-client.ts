@@ -11,6 +11,7 @@ export interface ApiRequestOptions {
   readonly body?: BodyInit | object
   readonly headers?: HeadersInit
   readonly signal?: AbortSignal
+  readonly suppressUnauthorizedHandler?: boolean
   readonly timeoutMs?: number
   readonly updateCsrfToken?: boolean
 }
@@ -70,8 +71,9 @@ export class ApiUrlError extends Error {
 
 export interface ApiClientHooks {
   readonly getCsrfToken?: () => string
+  readonly getAuthEpoch?: () => number
   readonly setCsrfToken?: (token: string) => void
-  readonly onUnauthorized?: () => void
+  readonly onUnauthorized?: (requestAuthEpoch: number) => void
 }
 
 export interface ApiClientOptions extends ApiClientHooks {
@@ -133,11 +135,13 @@ export class ApiClient {
       body,
       headers: suppliedHeaders,
       signal,
+      suppressUnauthorizedHandler = false,
       timeoutMs = this.timeoutMs,
       updateCsrfToken = true,
     }: ApiRequestOptions = {},
   ): Promise<ApiEnvelope<T>> {
     const requestUrl = this.buildRequestUrl(path)
+    const requestAuthEpoch = this.hooks.getAuthEpoch?.() ?? 0
     const timeoutController = new AbortController()
     const timeout = globalThis.setTimeout(
       () =>
@@ -201,7 +205,9 @@ export class ApiClient {
         }
       }
 
-      if (response.status === 401) this.hooks.onUnauthorized?.()
+      if (response.status === 401 && !suppressUnauthorizedHandler) {
+        this.hooks.onUnauthorized?.(requestAuthEpoch)
+      }
       if (!response.ok) {
         const envelope = isEnvelope(parsed) ? parsed : null
         throw new ApiError(envelope?.message || response.statusText, {

@@ -20,9 +20,10 @@ interface MutableAuthState {
 }
 
 export interface AuthAdapter {
-  loadProfile(): Promise<UserProfile | null>
+  loadProfile(signal?: AbortSignal): Promise<UserProfile | null | AuthHydration>
   clearSession(): void
   applyHydratedSession?(profile: UserProfile, csrfToken?: string): void
+  reportError?(error: unknown): void
 }
 
 export interface AuthHydration {
@@ -54,6 +55,7 @@ export function createAuthStore(initialAdapter?: AuthAdapter) {
   let adapter = initialAdapter
   let initialization: Promise<UserProfile | null> | null = null
   let requestGeneration = 0
+  let sessionEpoch = 0
 
   function configure(nextAdapter: AuthAdapter): void {
     adapter = nextAdapter
@@ -82,31 +84,53 @@ export function createAuthStore(initialAdapter?: AuthAdapter) {
 
   function clear(): null {
     requestGeneration += 1
+    sessionEpoch += 1
     initialization = null
     return clearState()
   }
 
-  function apply(profile: UserProfile): UserProfile {
+  function apply(profile: UserProfile, csrfToken?: string): UserProfile {
     requestGeneration += 1
-    const applied = applyProfile(profile)
+    const applied = applyProfile(profile, csrfToken)
     initialization = Promise.resolve(applied)
     return applied
   }
 
+  function establish({ profile, csrfToken }: AuthHydration): UserProfile {
+    if (!profile) throw new Error('Authenticated session requires a profile')
+    sessionEpoch += 1
+    return apply(profile, csrfToken)
+  }
+
+  function clearIfSessionEpoch(requestEpoch: number): boolean {
+    if (requestEpoch !== sessionEpoch) return false
+    clear()
+    return true
+  }
+
   async function requestProfile(
     generation: number,
+    signal?: AbortSignal,
   ): Promise<UserProfile | null> {
     try {
-      const profile = await requireAdapter().loadProfile()
-      if (!profile)
-        return generation === requestGeneration ? clearState() : null
+      const loaded = await requireAdapter().loadProfile(signal)
+      const { profile, csrfToken } =
+        loaded && typeof loaded === 'object' && 'profile' in loaded
+          ? loaded
+          : { profile: loaded }
+      if (!profile) {
+        if (generation !== requestGeneration) return mutableState.profile
+        sessionEpoch += 1
+        return clearState()
+      }
       return generation === requestGeneration
-        ? applyProfile(profile)
+        ? applyProfile(profile, csrfToken)
         : mutableState.profile
-    } catch {
-      return generation === requestGeneration
-        ? clearState()
-        : mutableState.profile
+    } catch (error) {
+      if (!(error instanceof DOMException && error.name === 'AbortError')) {
+        adapter?.reportError?.(error)
+      }
+      return mutableState.profile
     }
   }
 
@@ -118,9 +142,9 @@ export function createAuthStore(initialAdapter?: AuthAdapter) {
     return initialization
   }
 
-  function refresh(): Promise<UserProfile | null> {
+  function refresh(signal?: AbortSignal): Promise<UserProfile | null> {
     requestGeneration += 1
-    const request = requestProfile(requestGeneration)
+    const request = requestProfile(requestGeneration, signal)
     initialization = request
     return request
   }
@@ -139,9 +163,12 @@ export function createAuthStore(initialAdapter?: AuthAdapter) {
         if (generation !== requestGeneration) return mutableState.profile
         return profile ? applyProfile(profile, csrfToken) : clearState()
       })
-      .catch(() =>
-        generation === requestGeneration ? clearState() : mutableState.profile,
-      )
+      .catch((error: unknown) => {
+        if (!(error instanceof DOMException && error.name === 'AbortError')) {
+          adapter?.reportError?.(error)
+        }
+        return mutableState.profile
+      })
     initialization = request
     return request
   }
@@ -163,8 +190,11 @@ export function createAuthStore(initialAdapter?: AuthAdapter) {
     ),
     apply,
     clear,
+    clearIfSessionEpoch,
     configure,
+    currentSessionEpoch: () => sessionEpoch,
     ensureAuthenticated,
+    establish,
     hydrate,
     initialize,
     ready,

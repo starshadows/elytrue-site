@@ -2,6 +2,7 @@ import { parseCommentRecord, type CommentRecord } from './comment-types'
 
 export const HOME_COMMENTS_CACHE_KEY = 'elytrue:home-comments:v1'
 export const HOME_COMMENTS_CACHE_TTL = 5 * 60 * 1_000
+export const HOME_COMMENTS_CACHE_LIMIT = 30
 
 export interface CachedHomeComments {
   version: 1
@@ -82,6 +83,7 @@ export function readHomeCommentsCache(
       savedAt > now ||
       now - savedAt > HOME_COMMENTS_CACHE_TTL ||
       !Array.isArray(items) ||
+      items.length > HOME_COMMENTS_CACHE_LIMIT ||
       typeof hasMore !== 'boolean' ||
       (nextCursor !== undefined && !Number.isSafeInteger(nextCursor))
     )
@@ -124,12 +126,21 @@ export function writeHomeCommentsCache(
 ): void {
   const store = storage()
   if (!store) return
+  const publicItems = items.filter((item) => !item.hidden)
+  const cacheItems = publicItems
+    .slice(0, HOME_COMMENTS_CACHE_LIMIT)
+    .map(publicRecord)
+  const truncated = publicItems.length > cacheItems.length
+  const cacheHasMore = hasMore || truncated
+  const cacheNextCursor = truncated ? cacheItems.at(-1)?.id : nextCursor
   const value: CachedHomeComments = {
     version: 1,
     savedAt: Date.now(),
-    items: items.filter((item) => !item.hidden).map(publicRecord),
-    hasMore,
-    ...(nextCursor === undefined || nextCursor === null ? {} : { nextCursor }),
+    items: cacheItems,
+    hasMore: cacheHasMore,
+    ...(cacheNextCursor === undefined || cacheNextCursor === null
+      ? {}
+      : { nextCursor: cacheNextCursor }),
   }
   try {
     store.setItem(HOME_COMMENTS_CACHE_KEY, JSON.stringify(value))
