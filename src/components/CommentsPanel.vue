@@ -279,6 +279,17 @@ function handleScroll(): void {
   updateSeekAvailability()
 }
 
+function hasScrollableWheelTarget(event: WheelEvent): boolean {
+  return event.composedPath().some((target) => {
+    if (!(target instanceof HTMLElement)) return false
+    const overflowY = window.getComputedStyle(target).overflowY
+    return (
+      (overflowY === 'auto' || overflowY === 'scroll') &&
+      target.scrollHeight > target.clientHeight
+    )
+  })
+}
+
 function handleDocumentWheel(event: WheelEvent): void {
   if (
     document.body.classList.contains('fullscreen') ||
@@ -286,6 +297,7 @@ function handleDocumentWheel(event: WheelEvent): void {
     !event.deltaY
   )
     return
+  if (hasScrollableWheelTarget(event)) return
   const target = event.target
   if (panel.value && target instanceof Node && panel.value.contains(target))
     return

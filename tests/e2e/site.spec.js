@@ -154,6 +154,53 @@ test('页面加载后默认显示访客', async ({ page }) => {
   await expect(page.locator('#popups .loginPopup')).toHaveCount(0)
 })
 
+test('歌曲列表和背景图库保留原生纵向滚动', async ({ page }) => {
+  await page.goto('/')
+  await page.locator('.mainTitleUnder').click()
+  const themePopup = page.locator(
+    '#popups [data-popup-name="themeSelectorPopup"]',
+  )
+  await expect(themePopup).toBeVisible()
+
+  const playlist = page.locator('#musicPlayerList')
+  await playlist.hover()
+  const songList = page.locator('#songList')
+  await expect
+    .poll(() =>
+      songList.evaluate(
+        (element) => element.scrollHeight > element.clientHeight,
+      ),
+    )
+    .toBe(true)
+  const songListBox = await songList.boundingBox()
+  if (!songListBox) throw new Error('Song list is not visible')
+  await page.mouse.move(songListBox.x + 20, songListBox.y + 20)
+  await page.mouse.wheel(0, 160)
+  await expect
+    .poll(() => songList.evaluate((element) => element.scrollTop))
+    .toBeGreaterThan(0)
+
+  await page.mouse.move(20, 400)
+  await themePopup.getByText('下载背景图片').click()
+  const gallery = page.locator('#popups [data-popup-name="getImgPopup"]')
+  await expect(gallery).toBeVisible()
+  const galleryScroller = gallery.locator('.popupItem > div').first()
+  await expect
+    .poll(() =>
+      galleryScroller.evaluate(
+        (element) => element.scrollHeight > element.clientHeight,
+      ),
+    )
+    .toBe(true)
+  const galleryBox = await galleryScroller.boundingBox()
+  if (!galleryBox) throw new Error('Gallery is not visible')
+  await page.mouse.move(galleryBox.x + 20, galleryBox.y + 180)
+  await page.mouse.wheel(0, 240)
+  await expect
+    .poll(() => galleryScroller.evaluate((element) => element.scrollTop))
+    .toBeGreaterThan(0)
+})
+
 test('注册：展示一次性恢复密钥，支持复制下载并确认保存', async ({
   page,
   context,
