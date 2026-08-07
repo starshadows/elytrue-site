@@ -283,14 +283,32 @@ function handleDocumentWheel(event: WheelEvent): void {
   if (
     document.body.classList.contains('fullscreen') ||
     event.deltaX ||
-    event.deltaY <= 0
+    !event.deltaY
   )
     return
   const target = event.target
   if (panel.value && target instanceof Node && panel.value.contains(target))
     return
-  forceLowerPanelUp()
+  if (event.deltaY > 0) {
+    forceLowerPanelUp()
+  } else if (panelMode.value === 'forced-up') {
+    pointerInside = false
+    forceLowerPanelDown()
+  } else {
+    return
+  }
   event.preventDefault()
+}
+
+function handleDocumentClick(event: MouseEvent): void {
+  if (
+    panelMode.value !== 'forced-up' ||
+    !panel.value ||
+    (event.target instanceof Node && panel.value.contains(event.target))
+  )
+    return
+  pointerInside = false
+  forceLowerPanelDown()
 }
 
 watch(
@@ -470,6 +488,7 @@ onMounted(() => {
   document.addEventListener('elytrue:open-comment-editor', onOpenEditor)
   document.addEventListener('pointermove', handleDocumentPointerMove)
   document.addEventListener('wheel', handleDocumentWheel, { passive: false })
+  document.addEventListener('click', handleDocumentClick)
   setupPaginationObserver()
   syncEnteringComments()
   void nextTick(updateSeekAvailability)
@@ -492,6 +511,7 @@ onBeforeUnmount(() => {
   document.removeEventListener('elytrue:open-comment-editor', onOpenEditor)
   document.removeEventListener('pointermove', handleDocumentPointerMove)
   document.removeEventListener('wheel', handleDocumentWheel)
+  document.removeEventListener('click', handleDocumentClick)
   if (pauseTimer !== undefined) window.clearTimeout(pauseTimer)
   disposePaginationObserver()
   bodyObserver?.disconnect()

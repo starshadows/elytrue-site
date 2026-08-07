@@ -925,6 +925,19 @@ test('页面向下滚轮展开,留言横向滚动不拦截置顶正文且箭头�
   const panel = page.locator('#lowerPanel')
   await page.mouse.wheel(0, 120)
   await expect(panel).toHaveClass(/lowerPanelUp/u)
+  await page.mouse.wheel(0, -120)
+  await expectPanelCollapsed(page)
+  await page.mouse.wheel(0, 120)
+  await expect(panel).toHaveClass(/lowerPanelUp/u)
+  await page.mouse.click(640, 100)
+  await expectPanelCollapsed(page)
+  await page.mouse.wheel(0, 120)
+  await expect(panel).toHaveClass(/lowerPanelUp/u)
+  await expect
+    .poll(() =>
+      panel.evaluate((element) => element.getBoundingClientRect().top),
+    )
+    .toBeLessThan(350)
 
   const comments = page.locator('#comments')
   await expect
