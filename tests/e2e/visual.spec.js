@@ -42,7 +42,7 @@ async function setVisualBaselineBackground(page, source, position) {
 
 async function setPinnedBaselineBackground(page) {
   await page.locator('#topComment .bg').evaluate(async (image) => {
-    image.src = '/assets/elytrue-20260817/bg/auto/portrait/portrait1.webp'
+    image.src = '/assets/elytrue-20260817-fmp4/bg/auto/portrait/portrait1.webp'
     if (!image.complete) {
       await new Promise((resolve) => {
         image.addEventListener('load', resolve, { once: true })
@@ -70,7 +70,7 @@ test('desktop home matches the current media visual baseline', async ({
   await page.evaluate(() => document.fonts.ready)
   await setVisualBaselineBackground(
     page,
-    '/assets/elytrue-20260817/bg/auto/landscape/landscape2.webp',
+    '/assets/elytrue-20260817-fmp4/bg/auto/landscape/landscape2.webp',
     '38% 50%',
   )
   await setPinnedBaselineBackground(page)
@@ -105,7 +105,7 @@ test('mobile home matches the current media visual baseline', async ({
   await page.evaluate(() => document.fonts.ready)
   await setVisualBaselineBackground(
     page,
-    '/assets/elytrue-20260817/bg/auto/portrait/portrait2.webp',
+    '/assets/elytrue-20260817-fmp4/bg/auto/portrait/portrait2.webp',
     '50% 50%',
   )
   await page
@@ -114,7 +114,7 @@ test('mobile home matches the current media visual baseline', async ({
     .evaluate(
       (image) =>
         (image.src =
-          '/assets/elytrue-20260817/bg/auto/portrait/portrait2.webp'),
+          '/assets/elytrue-20260817-fmp4/bg/auto/portrait/portrait2.webp'),
     )
   await setPinnedBaselineBackground(page)
   await waitForCommentImages(page)

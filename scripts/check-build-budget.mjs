@@ -21,7 +21,7 @@ const imageExtensions = new Set([
   '.webp',
 ])
 const audioExtensions = new Set(['.flac', '.m4a', '.mp3', '.ogg', '.wav'])
-const videoSegmentExtensions = new Set(['.ts'])
+const videoSegmentExtensions = new Set(['.m4s', '.mp4'])
 const fontExtensions = new Set(['.otf', '.ttf', '.woff', '.woff2'])
 const forbiddenPath =
   /(?:^|\/)(?:cloud-functions|server|tests?|scripts?)(?:\/|$)|(?:^|\/)\.env(?:\.[^/]*)?$|\.(?:map|pem|key)$/iu

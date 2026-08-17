@@ -13,9 +13,12 @@ from PIL import Image, ImageOps
 REPOSITORY = Path(__file__).resolve().parents[1]
 SOURCE = REPOSITORY.parent / "爱莉希雅"
 PUBLIC = REPOSITORY / "public"
-PREVIOUS_ASSET_ROOT = PUBLIC / "assets" / "elytrue-20260813-r2"
-OLD_ASSET_ROOT = PUBLIC / "assets" / "elytrue-20260813"
-ASSET_VERSION = "elytrue-20260817"
+PREVIOUS_ASSET_ROOT = PUBLIC / "assets" / "elytrue-20260817"
+OLD_ASSET_ROOTS = (
+    PUBLIC / "assets" / "elytrue-20260813-r2",
+    PUBLIC / "assets" / "elytrue-20260813",
+)
+ASSET_VERSION = "elytrue-20260817-fmp4"
 ASSET_ROOT = PUBLIC / "assets" / ASSET_VERSION
 MAX_VIDEO_SEGMENT_BYTES = 15_000_000
 
@@ -251,18 +254,24 @@ def run_ffmpeg(source: Path, output: Path, *, reencode: bool) -> None:
         command.extend(["-c", "copy"])
     command.extend(
         [
+            "-tag:v",
+            "hvc1",
             "-hls_time",
             "10",
             "-hls_playlist_type",
             "vod",
+            "-hls_segment_type",
+            "fmp4",
+            "-hls_fmp4_init_filename",
+            "init.mp4",
             "-hls_flags",
             "independent_segments",
             "-hls_segment_filename",
-            str(output / "segment-%03d.ts"),
-            str(output / "index.m3u8"),
+            "segment-%03d.m4s",
+            "index.m3u8",
         ]
     )
-    subprocess.run(command, check=True)
+    subprocess.run(command, check=True, cwd=output)
 
 
 def prepare_video(slug: str, source: Path) -> tuple[int, int]:
@@ -270,12 +279,12 @@ def prepare_video(slug: str, source: Path) -> tuple[int, int]:
         raise FileNotFoundError(source)
     output = ASSET_ROOT / "video" / slug
     run_ffmpeg(source, output, reencode=False)
-    segments = sorted(output.glob("segment-*.ts"))
+    segments = sorted(output.glob("segment-*.m4s"))
     if not segments:
         raise RuntimeError(f"no HLS segments generated for {source}")
     if max(segment.stat().st_size for segment in segments) > MAX_VIDEO_SEGMENT_BYTES:
         run_ffmpeg(source, output, reencode=True)
-        segments = sorted(output.glob("segment-*.ts"))
+        segments = sorted(output.glob("segment-*.m4s"))
     maximum = max(segment.stat().st_size for segment in segments)
     if maximum > MAX_VIDEO_SEGMENT_BYTES:
         raise RuntimeError(
@@ -284,6 +293,8 @@ def prepare_video(slug: str, source: Path) -> tuple[int, int]:
     playlist = (output / "index.m3u8").read_text("utf8")
     if "#EXT-X-ENDLIST" not in playlist:
         raise RuntimeError(f"HLS playlist is not VOD-complete: {source}")
+    if '#EXT-X-MAP:URI="init.mp4"' not in playlist:
+        raise RuntimeError(f"HLS playlist has no fMP4 initialization segment: {source}")
     return len(segments), maximum
 
 
@@ -304,7 +315,7 @@ def main() -> None:
     current_music = next(
         (
             candidate / "bgm"
-            for candidate in (PREVIOUS_ASSET_ROOT, OLD_ASSET_ROOT, ASSET_ROOT)
+            for candidate in (PREVIOUS_ASSET_ROOT, *OLD_ASSET_ROOTS, ASSET_ROOT)
             if (candidate / "bgm").is_dir()
         ),
         ASSET_ROOT / "bgm",
@@ -325,7 +336,7 @@ def main() -> None:
             slug: prepare_video(slug, source) for slug, source in VIDEOS
         }
 
-    for legacy_root in (PREVIOUS_ASSET_ROOT, OLD_ASSET_ROOT):
+    for legacy_root in (PREVIOUS_ASSET_ROOT, *OLD_ASSET_ROOTS):
         if legacy_root.exists():
             shutil.rmtree(legacy_root)
 

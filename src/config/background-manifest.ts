@@ -63,7 +63,7 @@ export interface VideoTheme {
 
 export type MediaTheme = ImageTheme | VideoTheme
 
-export const ASSET_ROOT = '/assets/elytrue-20260817'
+export const ASSET_ROOT = '/assets/elytrue-20260817-fmp4'
 
 const officialCredit = { zh: '官方美术', en: 'Official art' } as const
 const illustratorUrls = {

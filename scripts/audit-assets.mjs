@@ -74,7 +74,11 @@ function assetCategory(path) {
   if (/^assets\/[^/]+\/bg\//u.test(path)) return 'background-preview'
   if (/^assets\/[^/]+\/originals\//u.test(path)) return 'background-original'
   if (extension === '.m3u8') return 'video-manifest'
-  if (extension === '.ts' || extension === '.mp4' || extension === '.webm')
+  if (
+    extension === '.m4s' ||
+    extension === '.webm' ||
+    /\/video\/[^/]+\/init\.mp4$/u.test(path)
+  )
     return 'video-segment'
   if (audioExtensions.has(extension)) return 'audio'
   if (fontExtensions.has(extension)) return 'font'
@@ -302,8 +306,14 @@ for (const [path, file] of publicByPath) {
       `video segment exceeds strict 15,000,000-byte limit: ${path} (${info.size})`,
     )
   }
-  if (path.endsWith('.mp4') || path.endsWith('.webm')) {
+  if (
+    (path.endsWith('.mp4') && !/\/video\/[^/]+\/init\.mp4$/u.test(path)) ||
+    path.endsWith('.webm')
+  ) {
     failures.push(`source video container must not be published: ${path}`)
+  }
+  if (/\/video\/[^/]+\/[^/]+\.ts$/u.test(path)) {
+    failures.push(`transport-stream HLS segment must not be published: ${path}`)
   }
   if (
     category === 'audio' &&
@@ -342,19 +352,28 @@ for (const [path, file] of publicByPath) {
   if (!playlist.includes('#EXT-X-ENDLIST')) {
     failures.push(`HLS playlist is not VOD-complete: ${path}`)
   }
-  const listedSegments = [...playlist.matchAll(/^([^#\r\n]+\.ts)$/gmu)].map(
+  const listedSegments = [...playlist.matchAll(/^([^#\r\n]+\.m4s)$/gmu)].map(
     (match) => `${directory}${match[1]}`,
   )
   if (listedSegments.length === 0) {
-    failures.push(`HLS playlist has no transport-stream segments: ${path}`)
+    failures.push(`HLS playlist has no fragmented MP4 segments: ${path}`)
   }
   for (const segment of listedSegments) {
     if (!publicByPath.has(segment)) {
       failures.push(`HLS playlist references a missing segment: ${segment}`)
     }
   }
+  const initialization = playlist.match(/#EXT-X-MAP:URI="([^"]+\.mp4)"/u)?.[1]
+  if (!initialization) {
+    failures.push(`HLS playlist has no fMP4 initialization segment: ${path}`)
+  } else if (!publicByPath.has(`${directory}${initialization}`)) {
+    failures.push(
+      `HLS playlist references a missing initialization segment: ${directory}${initialization}`,
+    )
+  }
   const actualSegments = [...publicByPath.keys()].filter(
-    (candidate) => candidate.startsWith(directory) && candidate.endsWith('.ts'),
+    (candidate) =>
+      candidate.startsWith(directory) && candidate.endsWith('.m4s'),
   )
   for (const segment of actualSegments) {
     if (!listedSegments.includes(segment)) {

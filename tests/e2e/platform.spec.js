@@ -68,8 +68,9 @@ test('PWA manifest and current asset metadata stay complete', async ({
   expect(new Set(backgrounds.map((item) => item.id)).size).toBe(28)
   expect(backgrounds.find((item) => item.id === 'landscape2')).toMatchObject({
     layout: 'landscape',
-    source: 'assets/elytrue-20260817/bg/auto/landscape/landscape2.webp',
-    original: 'assets/elytrue-20260817/originals/auto/landscape/landscape2.jpg',
+    source: 'assets/elytrue-20260817-fmp4/bg/auto/landscape/landscape2.webp',
+    original:
+      'assets/elytrue-20260817-fmp4/originals/auto/landscape/landscape2.jpg',
     focus: '38% 50%',
   })
   const imagePreloads = await page
@@ -84,7 +85,7 @@ test('PWA manifest and current asset metadata stay complete', async ({
     )
   expect(imagePreloads).toEqual([
     {
-      href: '/assets/elytrue-20260817/bg/auto/landscape/landscape1.webp',
+      href: '/assets/elytrue-20260817-fmp4/bg/auto/landscape/landscape1.webp',
       media: null,
       type: 'image/webp',
       fetchpriority: 'high',
@@ -157,7 +158,7 @@ test('a reload can choose another valid hero without cache-busting its URL', asy
   const href = await page
     .locator('link[rel="preload"][as="image"]')
     .getAttribute('href')
-  expect(href).toBe('/assets/elytrue-20260817/bg/auto/landscape/封面.webp')
+  expect(href).toBe('/assets/elytrue-20260817-fmp4/bg/auto/landscape/封面.webp')
   expect(href).not.toContain('?')
 })
 
@@ -197,7 +198,7 @@ test('first-screen network prioritizes the selected hero and public comments ove
   const loadedBackgrounds = new Set(timings.backgrounds)
   expect(loadedBackgrounds.size).toBe(2)
   expect(loadedBackgrounds).toContain(
-    '/assets/elytrue-20260817/bg/auto/landscape/landscape1.webp',
+    '/assets/elytrue-20260817-fmp4/bg/auto/landscape/landscape1.webp',
   )
   expect(
     [...loadedBackgrounds].some((path) =>

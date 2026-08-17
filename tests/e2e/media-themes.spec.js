@@ -559,7 +559,10 @@ test('video themes use blur and prompt-free fullscreen, then restore image UI an
 }) => {
   const sourceVideos = []
   page.on('request', (request) => {
-    if (/\.(?:mp4|webm)(?:$|\?)/iu.test(request.url())) {
+    if (
+      /\.(?:mp4|webm)(?:$|\?)/iu.test(request.url()) &&
+      !/\/init\.mp4(?:$|\?)/iu.test(request.url())
+    ) {
       sourceVideos.push(request.url())
     }
   })
