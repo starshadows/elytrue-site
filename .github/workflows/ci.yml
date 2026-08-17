@@ -1,0 +1,123 @@
+name: Verify EdgeOne build
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: ${{ github.workflow }}-${{ github.event.pull_request.number || github.ref }}
+  cancel-in-progress: ${{ github.event_name == 'pull_request' }}
+
+jobs:
+  edgeone-contract:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 10
+    env:
+      EDGEONE_CONTRACT_ENABLED: ${{ vars.EDGEONE_CONTRACT_ENABLED }}
+      EDGEONE_TEST_PROJECT_ID: ${{ secrets.EDGEONE_TEST_PROJECT_ID }}
+      EDGEONE_TEST_TOKEN: ${{ secrets.EDGEONE_TEST_TOKEN }}
+    steps:
+      - uses: actions/checkout@d23441a48e516b6c34aea4fa41551a30e30af803 # v6.1.0
+      - uses: actions/setup-node@249970729cb0ef3589644e2896645e5dc5ba9c38 # v6.5.0
+        with:
+          node-version: 22.17.1
+          cache: npm
+      - run: npm ci --no-audit
+      - name: Run real Blob contract when enabled
+        shell: bash
+        run: |
+          if [[ "$EDGEONE_CONTRACT_ENABLED" != "true" ]]; then
+            echo "Blob contract is disabled; set EDGEONE_CONTRACT_ENABLED=true after configuring both secrets."
+            exit 0
+          fi
+          if [[ -z "$EDGEONE_TEST_PROJECT_ID" || -z "$EDGEONE_TEST_TOKEN" ]]; then
+            echo "::error::Blob contract is enabled but credentials are missing."
+            exit 1
+          fi
+          npm run test:edgeone-contract
+
+  verify:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 10
+    steps:
+      - uses: actions/checkout@d23441a48e516b6c34aea4fa41551a30e30af803 # v6.1.0
+      - uses: actions/setup-node@249970729cb0ef3589644e2896645e5dc5ba9c38 # v6.5.0
+        with:
+          node-version: 22.17.1
+          cache: npm
+      - run: npm ci --no-audit
+      - name: Audit production dependencies
+        run: npm audit --omit=dev --audit-level=high
+      - name: Audit development dependencies (critical)
+        run: npm run audit:dev:critical
+      - run: npm run lint
+      - run: npm run format:check
+      - run: npm run check
+      - run: npm test
+      - name: Build and enforce asset budgets
+        run: npm run build:edgeone
+      - name: Print build budget report
+        if: success()
+        run: npm run check:build-budget
+      - name: Report failed verify stage
+        if: failure()
+        run: |
+          echo "::error::verify job failed; inspect the first failed named stage."
+          echo "## verify failure" >> "$GITHUB_STEP_SUMMARY"
+          echo "Inspect the first failed named stage in this job." >> "$GITHUB_STEP_SUMMARY"
+
+  e2e:
+    # PNG 基线在 Windows Chromium 生成；固定同一 OS，避免字体栅格化差异被误报为视觉回归。
+    runs-on: windows-2022
+    timeout-minutes: 15
+    steps:
+      - uses: actions/checkout@d23441a48e516b6c34aea4fa41551a30e30af803 # v6.1.0
+      - uses: actions/setup-node@249970729cb0ef3589644e2896645e5dc5ba9c38 # v6.5.0
+        with:
+          node-version: 22.17.1
+          cache: npm
+      - run: npm ci --no-audit
+      - run: npm run install:playwright
+      # E2E 前必须重新构建,不依赖本地遗留 dist
+      - run: npm run build:edgeone
+      - name: Print build budget report
+        if: success()
+        run: npm run check:build-budget
+      - run: npm run test:e2e
+      - name: Upload E2E failure diagnostics
+        if: failure()
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
+        with:
+          name: e2e-failure-${{ github.run_id }}
+          path: test-results/
+          if-no-files-found: ignore
+          retention-days: 7
+      - name: Report failed E2E stage
+        if: failure()
+        shell: pwsh
+        run: |
+          Write-Error "e2e job failed; inspect the first failed named stage."
+          "## e2e failure`nInspect the first failed named stage and test-results artifact." | Out-File -FilePath $env:GITHUB_STEP_SUMMARY -Append
+
+  server-node20:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 10
+    steps:
+      - uses: actions/checkout@d23441a48e516b6c34aea4fa41551a30e30af803 # v6.1.0
+      - uses: actions/setup-node@249970729cb0ef3589644e2896645e5dc5ba9c38 # v6.5.0
+        with:
+          node-version: 20.x
+          cache: npm
+      - run: npm ci --no-audit
+      - run: npm run check:server
+      - run: npm run test:server
+      - name: Report failed Node 20 stage
+        if: failure()
+        run: |
+          echo "::error::server-node20 job failed; inspect the first failed named stage."
+          echo "## server-node20 failure" >> "$GITHUB_STEP_SUMMARY"
+          echo "Inspect the first failed named stage in this job." >> "$GITHUB_STEP_SUMMARY"

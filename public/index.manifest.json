@@ -1,0 +1,16 @@
+{
+  "name": "星花札记",
+  "short_name": "星花札记",
+  "description": "以爱莉希雅为主题的非商业个人同人展示网站。",
+  "start_url": "/",
+  "theme_color": "#ffaacc",
+  "background_color": "#f6d7ea",
+  "display": "standalone",
+  "icons": [
+    {
+      "src": "assets/elytrue-shell-20260805/favicon-320-c998712d.png",
+      "sizes": "320x320",
+      "type": "image/png"
+    }
+  ]
+}

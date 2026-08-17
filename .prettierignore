@@ -1,0 +1,14 @@
+dist
+node_modules
+public
+server/build-info.js
+test-results
+tests/e2e/baseline
+
+# Existing large files are formatted only when their refactor phase touches them.
+index.html
+src/style.scss
+server
+cloud-functions
+shared
+tests/*.test.js
