@@ -21,6 +21,17 @@ test('站点只保留展示功能并固定显示备案信息', async ({ page }) 
   await expect(legal).toBeVisible()
   await expect(legal).toHaveCSS('position', 'fixed')
   await expect(legal).toHaveCSS('bottom', '0px')
+  const glass = await legal.evaluate((element) => {
+    const style = getComputedStyle(element, '::before')
+    return {
+      backdropFilter: style.backdropFilter,
+      backgroundImage: style.backgroundImage,
+      maskImage: style.maskImage,
+    }
+  })
+  expect(glass.backdropFilter).toContain('blur(16px)')
+  expect(glass.backgroundImage).toContain('linear-gradient')
+  expect(glass.maskImage).toContain('linear-gradient')
   await expect(legal.getByText('赣ICP备2026015414号')).toBeVisible()
   await expect(legal.getByText('赣公网安备36073502000226号')).toBeVisible()
   await expect(legal.locator('a')).toHaveCount(2)
