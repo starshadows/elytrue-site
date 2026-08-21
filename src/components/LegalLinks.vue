@@ -1,5 +1,5 @@
 <template>
-  <nav class="legalLinks" aria-label="网站备案信息">
+  <nav class="legalLinks siteLegalLinks" aria-label="网站备案信息">
     <a
       href="https://beian.miit.gov.cn/"
       target="_blank"

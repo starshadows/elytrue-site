@@ -17,18 +17,12 @@ async function loadBuildInfo() {
     return buildInfoPromise
 }
 
-function hasRateLimitBinding(environment) {
-    const binding = environment?.ELYTRUE_RATE_LIMIT_KV
-    return Boolean(binding?.get && binding?.put)
-}
-
-export async function health(context = {}) {
+export async function health() {
     const build = await loadBuildInfo()
-    const rateLimit = hasRateLimitBinding(context.env || process.env) ? 'ok' : 'degraded'
     return apiResponse({
         service: 'elytrue-edgeone',
-        status: rateLimit === 'ok' ? 'ok' : 'degraded',
-        checks: { rateLimitKv: rateLimit },
+        status: 'ok',
+        mode: 'display-only',
         version: build.version,
         buildTime: build.buildTime,
         commitTime: build.commitTime,

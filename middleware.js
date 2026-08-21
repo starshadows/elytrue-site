@@ -1,25 +1,9 @@
-import { resolveTrustedClientAddress } from './shared/client-identity.js'
 import {
-  API_SECURITY_HEADERS,
   DOCUMENT_SECURITY_HEADERS,
   TRANSPORT_SECURITY_HEADERS,
 } from './shared/security-headers.js'
 
-export const RATE_LIMIT_POLICIES = {
-  '/api/user/register': { methods: ['POST'], action: 'register', limit: 20, windowSeconds: 60 * 60 },
-  '/api/user/login': { methods: ['POST'], action: 'login', limit: 12, windowSeconds: 15 * 60 },
-  '/api/user/logout': { methods: ['POST'], action: 'logout', limit: 30, windowSeconds: 10 * 60 },
-  '/api/user/resettoken': { methods: ['POST'], action: 'logout_all', limit: 10, windowSeconds: 60 * 60 },
-  '/api/user/recover': { methods: ['POST'], action: 'recover', limit: 5, windowSeconds: 60 * 60 },
-  '/api/user/recovery-key': { methods: ['POST'], action: 'recovery_key', limit: 5, windowSeconds: 60 * 60 },
-  '/api/user/update': { methods: ['PUT'], action: 'user_update', limit: 30, windowSeconds: 10 * 60 },
-  '/api/user/find': { methods: ['GET'], action: 'user_find', limit: 120, windowSeconds: 10 * 60 },
-  '/api/comments/post': { methods: ['POST'], action: 'comment', limit: 10, windowSeconds: 10 * 60 },
-  '/api/comments/like': { methods: ['POST', 'DELETE'], action: 'like', limit: 60, windowSeconds: 10 * 60 },
-  '/api/comments/report': { methods: ['POST'], action: 'report', limit: 10, windowSeconds: 60 * 60 },
-  '/api/uploads/image': { methods: ['POST', 'DELETE'], action: 'upload', limit: 12, windowSeconds: 10 * 60 },
-  '/api/admin/bootstrap': { methods: ['POST'], action: 'admin_bootstrap', limit: 5, windowSeconds: 60 * 60 },
-}
+export const RATE_LIMIT_POLICIES = Object.freeze({})
 
 const STATIC_PATHS = new Set(['/index.manifest.json', '/social-share.jpg'])
 
@@ -49,74 +33,6 @@ function withSecurityHeaders(response) {
   })
 }
 
-function stableHash(value) {
-  let hash = 2166136261
-  for (let index = 0; index < value.length; index += 1) {
-    hash ^= value.charCodeAt(index)
-    hash = Math.imul(hash, 16777619)
-  }
-  return (hash >>> 0).toString(16).padStart(8, '0')
-}
-
-function jsonResponse(status, message) {
-  return new Response(JSON.stringify({ code: status, message, data: null }), {
-    status,
-    headers: {
-      'content-type': 'application/json; charset=utf-8',
-      'cache-control': 'no-store',
-      ...API_SECURITY_HEADERS,
-    },
-  })
-}
-
-async function enforceEdgeRateLimit(context, pathname) {
-  let policy = RATE_LIMIT_POLICIES[pathname]
-  if (!policy && pathname.startsWith('/api/admin/')) {
-    policy = { methods: ['POST', 'DELETE'], action: 'admin', limit: 30, windowSeconds: 10 * 60 }
-  }
-  const method = context.request.method.toUpperCase()
-  if (!policy || !policy.methods.includes(method)) {
-    return null
-  }
-
-  const kv = context.env?.ELYTRUE_RATE_LIMIT_KV
-    // KV read-modify-write is deliberately best-effort; strict global limits
-    // belong to EdgeOne WAF/platform frequency controls.
-    if (!kv?.get || !kv?.put) return null
-
-  const { action, limit, windowSeconds } = policy
-  const bucket = Math.floor(Date.now() / 1000 / windowSeconds)
-  const identity = resolveTrustedClientAddress(context.request, context)
-  // 缺少可信客户端 IP 时跳过这一层限流，避免所有访客共享全站注册桶。
-  // Cloud Functions 仍会执行输入校验、唯一索引和可用身份下的二次限流。
-  if (!identity) return null
-  const prefix = `rl_edge_${action}_${stableHash(identity)}_`
-  const key = `${prefix}${bucket}`
-
-  try {
-    const count = Number((await kv.get(key, { type: 'text' })) || 0)
-    if (count >= limit) return jsonResponse(429, '操作过于频繁，请稍后再试')
-    await kv.put(key, String(count + 1))
-
-    if (kv.list && kv.delete) {
-      context.waitUntil?.(
-        (async () => {
-          const records = await kv.list({ prefix, limit: 20 })
-          await Promise.all(
-            (records?.keys || [])
-              .filter((item) => item.key !== key)
-              .map((item) => kv.delete(item.key)),
-          )
-        })().catch(() => {}),
-      )
-    }
-  } catch {
-    // KV 暂时不可用时继续交给 Cloud Functions 的进程内二次限流。
-  }
-
-  return null
-}
-
 export async function middleware(context) {
   const url = new URL(context.request.url)
   if (
@@ -128,19 +44,9 @@ export async function middleware(context) {
     return withSecurityHeaders(context.redirect(url.toString(), 301))
   }
 
-  // EdgeOne matcher rules only receive the URL path, so excluding static
-  // paths there would also skip the required www/blog canonical redirects.
-  // Keep the global matcher and fast-path static responses after that check;
-  // edgeone.json supplies their transport headers and cache policy.
   if (isStaticAssetRequest(context.request, url.pathname)) {
     return context.next()
   }
-
-  const limited = await enforceEdgeRateLimit(
-    context,
-    url.pathname.toLowerCase(),
-  )
-  if (limited) return limited
 
   return withSecurityHeaders(await context.next())
 }

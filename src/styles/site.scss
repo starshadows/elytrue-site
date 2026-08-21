@@ -1471,6 +1471,30 @@ body:not(.fullscreen) #lowerPanel.animating:not(.lowerPanelUp) {
   object-fit: contain;
 }
 
+.siteLegalLinks {
+  right: 0;
+  bottom: 0;
+  left: 0;
+  z-index: 7;
+  box-sizing: border-box;
+  width: 100%;
+  min-height: 2.2rem;
+  margin: 0;
+  padding: 0.45rem 1rem;
+  border-top: 0.0625rem solid rgba(255, 255, 255, 0.58);
+  background: linear-gradient(
+    105deg,
+    rgba(255, 206, 232, 0.7) 0%,
+    rgba(238, 215, 255, 0.68) 48%,
+    rgba(255, 232, 245, 0.74) 100%
+  );
+  box-shadow:
+    0 -0.25rem 1.25rem rgba(70, 35, 60, 0.14),
+    inset 0 0.0625rem rgba(255, 255, 255, 0.36);
+  -webkit-backdrop-filter: blur(1rem) saturate(1.25);
+  backdrop-filter: blur(1rem) saturate(1.25);
+}
+
 .commentSeekArrow {
   display: none;
   position: absolute;
@@ -1667,6 +1691,11 @@ body:not(.fullscreen) #lowerPanel.animating:not(.lowerPanelUp) {
 }
 
 .toolbarItem:hover > ul {
+  display: block;
+}
+
+.toolbarItem:focus-within > ul,
+.toolbarItem.open > ul {
   display: block;
 }
 
@@ -2959,6 +2988,7 @@ body.fullscreen {
 
 body.video-focus #header,
 body.video-focus #lowerPanel,
+body.video-focus .siteLegalLinks,
 body.video-focus #popups,
 body.video-focus #floatMsgs,
 body.video-focus #imgViewer,

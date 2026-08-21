@@ -72,10 +72,7 @@ describe('EdgeOne build output', () => {
       packageLock.packages['node_modules/@edgeone/pages-blob'].version,
       '0.0.15',
     )
-    assert.match(
-      packageJson.scripts['build:deploy'],
-      /npm run test:edgeone-contract && npm run build:edgeone/u,
-    )
+    assert.equal(packageJson.scripts['build:deploy'], 'npm run build:edgeone')
     assert.match(
       packageJson.scripts.build,
       /vite build && node scripts\/stage-public-assets\.mjs/u,
@@ -136,8 +133,9 @@ describe('EdgeOne build output', () => {
     assert.match(html, /fetchPriority='high'/u)
     const startupScript = [...html.matchAll(/<script>([\s\S]*?)<\/script>/gu)]
       .map((match) => match[1])
-      .find((script) => script.includes('__ELY_EARLY_COMMENTS__'))
+      .find((script) => script.includes('__ELY_VISIT_ASSETS__'))
     assert.ok(startupScript)
+    assert.doesNotMatch(startupScript, /comments|\/api\//iu)
     assert.equal(
       `sha256-${createHash('sha256').update(startupScript).digest('base64')}`,
       CRITICAL_STARTUP_SCRIPT_HASH,
@@ -189,6 +187,10 @@ describe('EdgeOne build output', () => {
     assert.doesNotMatch(
       javascript,
       /@edgeone\/pages-blob|edgeone makers|playwright|node:fs|node:crypto|server\/app/u,
+    )
+    assert.doesNotMatch(
+      javascript,
+      /\/api\/(?:user|comments|uploads|admin)|loginPopup|userHome/u,
     )
     assert.doesNotMatch(
       javascript,
@@ -287,12 +289,8 @@ describe('EdgeOne build output', () => {
       'public, max-age=300, must-revalidate',
     )
     assert.equal(
-      headersFor('/api/comments/public')['Cache-Control'],
-      'public, max-age=0, s-maxage=10, stale-while-revalidate=30',
-    )
-    assert.equal(
-      headersFor('/api/comments/public-fast')['Cache-Control'],
-      'public, max-age=0, s-maxage=10, stale-while-revalidate=30',
+      config.headers.some((rule) => rule.source.startsWith('/api/comments')),
+      false,
     )
     assert.equal(
       matchingCacheRules(

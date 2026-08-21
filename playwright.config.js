@@ -2,6 +2,7 @@ import { defineConfig } from '@playwright/test'
 
 export default defineConfig({
   testDir: 'tests/e2e',
+  testMatch: 'display-only.spec.js',
   globalSetup: './tests/e2e/global-setup.js',
   timeout: 30 * 1000,
   fullyParallel: false,

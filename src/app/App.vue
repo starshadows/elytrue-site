@@ -1,29 +1,21 @@
 <script setup lang="ts">
-import { onBeforeUnmount, onMounted, provide, useTemplateRef, watch } from 'vue'
+import { onBeforeUnmount, onMounted, provide } from 'vue'
 import AppShell from '../components/AppShell.vue'
 import BackgroundLayer from '../components/BackgroundLayer.vue'
-import CommentsPanel from '../components/CommentsPanel.vue'
 import FloatMessages from '../components/FloatMsgs/FloatMsgs.vue'
 import ImageViewer from '../components/ImgViewer/ImgViewer.vue'
+import LegalLinks from '../components/LegalLinks.vue'
 import PopupHost from '../components/Popups/Popups.vue'
-import FloatMsgs from '../components/FloatMsgs'
 import ImgViewer from '../components/ImgViewer'
 import Popups from '../components/Popups'
-import { commentsStore } from '../features/comments/comments-store'
 import { musicController } from '../features/music/music-controller'
-import { createPwaController } from '../features/pwa/pwa-controller'
 import {
   createThemeController,
   themeControllerKey,
 } from '../features/theme/theme-controller'
-import { createTimelineController } from '../features/timeline/timeline-controller'
-import { createViewportController } from '../features/viewport/viewport-controller'
 import Settings from '../settings'
 import { logFrontendError } from './app-events'
 import { markPerformanceEvent } from '../lib/performance'
-
-const commentsPanel =
-  useTemplateRef<InstanceType<typeof CommentsPanel>>('commentsPanel')
 
 function shuffle<T>(items: T[]): T[] {
   for (let index = items.length - 1; index > 0; index -= 1) {
@@ -41,9 +33,7 @@ const theme = createThemeController({
   logError: logFrontendError,
   onThemeMusicChanged(name, reason) {
     if (reason !== 'initial') return
-    if (musicController.consumeInitialThemeRestoreProtection()) {
-      return
-    }
+    if (musicController.consumeInitialThemeRestoreProtection()) return
     try {
       musicController.setActiveSong(name)
     } catch {
@@ -68,79 +58,39 @@ const theme = createThemeController({
 })
 provide(themeControllerKey, theme)
 
-const pwa = createPwaController()
-const timeline = createTimelineController({
-  getCurrentCommentTime: () =>
-    commentsStore.state.currentVisibleTime ?? undefined,
-  getMaxTimelineTime: () =>
-    commentsStore.state.items[0]?.time ?? Date.now() / 1_000,
-  isFullscreen: () => viewport.isFullscreen,
-  loadCommentsAtTime: (time) => commentsStore.loadAtTime(time),
-  logError: logFrontendError,
-  returnToLatest: () => commentsStore.returnToLatest(),
-})
-const viewport = createViewportController({
-  closeImageViewer: ImgViewer.close,
-  closePopup: Popups.close,
-  forceLowerPanelDown: () => commentsPanel.value?.forceLowerPanelDown(),
-  getPageScale: () => Settings.pageScale,
-  isImageViewerOpen: ImgViewer.isOpen,
-  isPopupOpen: Popups.isOpen,
-  pauseCommentsScroll: (milliseconds) =>
-    commentsPanel.value?.pauseScroll(milliseconds),
-  setMusicVolume: (volume) => {
-    try {
-      musicController.setVolume(volume)
-    } catch {
-      // The host may set Wallpaper Engine properties before audio mounts.
-    }
-  },
-  setPageScale: (scale) => (Settings.pageScale = scale),
-  updateTimelineActiveMonth: (scroll) => timeline.setActiveDate(scroll),
-})
+let previousWallpaperListener: Window['wallpaperPropertyListener']
 
-async function installPwa(): Promise<void> {
-  if (await pwa.prompt()) return
-  if (pwa.isStandalone) {
-    FloatMsgs.show({
-      type: 'info',
-      msg: '<span class="ui zh">你已安装过App</span><span class="ui en">App already installed</span>',
-    })
-    return
-  }
-  window.alert(
-    '你的浏览器不支持安装PWA App\n\n建议使用谷歌Chrome/微软Edge浏览器\n\n你也可以从浏览器菜单手动添加到桌面\n\nYour browser does not seem to support PWA Apps.\nWe recommend using Google Chrome or Microsoft Edge to do this.',
-  )
+function handleKeyDown(event: KeyboardEvent): void {
+  if (event.key !== 'Escape') return
+  if (ImgViewer.isOpen()) ImgViewer.close()
+  else if (Popups.isOpen()) Popups.close()
 }
 
 onMounted(() => {
   markPerformanceEvent('app-mounted')
   theme.init()
-  timeline.init()
-  pwa.init()
-  viewport.init()
-  if (location.hash.startsWith('#popup-')) {
-    const popup = location.hash.slice(7)
-    if (popup === 'loginPopup') Popups.show('loginPopup')
+  previousWallpaperListener = window.wallpaperPropertyListener
+  window.wallpaperPropertyListener = {
+    applyUserProperties(properties) {
+      if (properties.ui_scale) {
+        Settings.pageScale = properties.ui_scale.value / 100
+      }
+      if (properties.ui_volume) {
+        try {
+          musicController.setVolume(properties.ui_volume.value / 100)
+        } catch {
+          // Audio can still be mounting when Wallpaper Engine restores settings.
+        }
+      }
+    },
   }
+  document.addEventListener('keydown', handleKeyDown)
   document.documentElement.dataset.appReady = 'true'
 })
 
-watch(
-  () => commentsStore.state.currentVisibleTime,
-  () => timeline.setActiveDate(),
-)
-watch(
-  () => commentsStore.state.items[0]?.time,
-  (time) => {
-    if (time) timeline.render(time)
-  },
-)
-
 onBeforeUnmount(() => {
-  viewport.dispose()
-  pwa.dispose()
-  timeline.dispose()
+  document.removeEventListener('keydown', handleKeyDown)
+  window.wallpaperPropertyListener = previousWallpaperListener
   theme.dispose()
   delete document.documentElement.dataset.appReady
 })
@@ -149,11 +99,7 @@ onBeforeUnmount(() => {
 <template>
   <BackgroundLayer />
   <AppShell />
-  <CommentsPanel
-    ref="commentsPanel"
-    @fullscreen="viewport.toggleFullscreen()"
-    @install="installPwa"
-  />
+  <LegalLinks />
   <div id="popups"><PopupHost /></div>
   <ImageViewer />
   <div id="floatMsgs"><FloatMessages /></div>

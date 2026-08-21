@@ -99,7 +99,13 @@ const MIDDLEWARE_CHECKS = [
 
 async function collectFiles(directory) {
   const files = []
-  for (const entry of await readdir(directory, { withFileTypes: true })) {
+  const entries = await readdir(directory, { withFileTypes: true }).catch(
+    (error) => {
+      if (error?.code === 'ENOENT') return []
+      throw error
+    },
+  )
+  for (const entry of entries) {
     const path = join(directory, entry.name)
     if (entry.isDirectory()) files.push(...(await collectFiles(path)))
     else if (SOURCE_EXTENSIONS.has(extname(entry.name))) files.push(path)

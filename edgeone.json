@@ -71,24 +71,6 @@
           "value": "public, max-age=300, must-revalidate"
         }
       ]
-    },
-    {
-      "source": "/api/comments/public",
-      "headers": [
-        {
-          "key": "Cache-Control",
-          "value": "public, max-age=0, s-maxage=10, stale-while-revalidate=30"
-        }
-      ]
-    },
-    {
-      "source": "/api/comments/public-fast",
-      "headers": [
-        {
-          "key": "Cache-Control",
-          "value": "public, max-age=0, s-maxage=10, stale-while-revalidate=30"
-        }
-      ]
     }
   ],
   "rewrites": [

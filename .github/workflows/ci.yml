@@ -13,33 +13,6 @@ concurrency:
   cancel-in-progress: ${{ github.event_name == 'pull_request' }}
 
 jobs:
-  edgeone-contract:
-    runs-on: ubuntu-24.04
-    timeout-minutes: 10
-    env:
-      EDGEONE_CONTRACT_ENABLED: ${{ vars.EDGEONE_CONTRACT_ENABLED }}
-      EDGEONE_TEST_PROJECT_ID: ${{ secrets.EDGEONE_TEST_PROJECT_ID }}
-      EDGEONE_TEST_TOKEN: ${{ secrets.EDGEONE_TEST_TOKEN }}
-    steps:
-      - uses: actions/checkout@d23441a48e516b6c34aea4fa41551a30e30af803 # v6.1.0
-      - uses: actions/setup-node@249970729cb0ef3589644e2896645e5dc5ba9c38 # v6.5.0
-        with:
-          node-version: 22.17.1
-          cache: npm
-      - run: npm ci --no-audit
-      - name: Run real Blob contract when enabled
-        shell: bash
-        run: |
-          if [[ "$EDGEONE_CONTRACT_ENABLED" != "true" ]]; then
-            echo "Blob contract is disabled; set EDGEONE_CONTRACT_ENABLED=true after configuring both secrets."
-            exit 0
-          fi
-          if [[ -z "$EDGEONE_TEST_PROJECT_ID" || -z "$EDGEONE_TEST_TOKEN" ]]; then
-            echo "::error::Blob contract is enabled but credentials are missing."
-            exit 1
-          fi
-          npm run test:edgeone-contract
-
   verify:
     runs-on: ubuntu-24.04
     timeout-minutes: 10

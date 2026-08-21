@@ -51,40 +51,19 @@
     >
       <component
         :is="components[item.name]"
-        v-bind="{
-          ...item.props,
-          ...(isPersistentPopup(item.name) || item.name === 'userHome'
-            ? {}
-            : { id: item.name }),
-          ...(item.name === 'userHome'
-            ? { popupClosing: item.closing, popupId: item.id }
-            : {}),
-        }"
+        v-bind="item.props"
         @close="closeComponent(item)"
       ></component>
-      <button
-        v-if="item.name !== 'recoveryKeyPopup'"
-        class="closeBtn"
-        aria-label="关闭"
-        @click="close(item)"
-      ></button>
+      <button class="closeBtn" aria-label="关闭" @click="close(item)"></button>
     </div>
   </div>
 </template>
 
 <script setup lang="ts">
 import { computed, nextTick, onBeforeUnmount, onMounted, watch } from 'vue'
-import AdminPanel from './AdminPanel.vue'
 import BackgroundGalleryPopup from './BackgroundGalleryPopup.vue'
 import DisplaySettingsPopup from './DisplaySettingsPopup.vue'
-import InputPopup from './InputPopup.vue'
-import LoginPopup from './LoginPopup.vue'
-import RecoveryKeyPopup from './RecoveryKeyPopup.vue'
-import RecoveryKeySetupPopup from './RecoveryKeySetupPopup.vue'
-import SetAvatarPopup from './SetAvatarPopup.vue'
-import SetPasswordPopup from './SetPasswordPopup.vue'
 import ThemeMusicPopup from './ThemeMusicPopup.vue'
-import UserHome from './UserHome.vue'
 import Popups, {
   SINGLETON_POPUPS,
   type PopupEntry,
@@ -93,25 +72,20 @@ import Popups, {
 
 const POPUP_Z_INDEX_BASE = 100
 const persistentPopupNames = new Set<PopupName>(SINGLETON_POPUPS)
-const components: Record<PopupName, object> = {
-  adminPanel: AdminPanel,
+const components: Partial<Record<PopupName, object>> = {
   displaySettings: DisplaySettingsPopup,
   getImgPopup: BackgroundGalleryPopup,
-  loginPopup: LoginPopup,
-  promptInputPopup: InputPopup,
-  recoveryKeyPopup: RecoveryKeyPopup,
-  recoveryKeySetupPopup: RecoveryKeySetupPopup,
-  setAvatarPopup: SetAvatarPopup,
-  setPasswordPopup: SetPasswordPopup,
   themeSelectorPopup: ThemeMusicPopup,
-  userHome: UserHome,
 }
 
 const themeEntry = computed(() =>
   Popups.popups.find((item) => item.name === 'themeSelectorPopup'),
 )
 const renderedPopups = computed(() =>
-  Popups.popups.filter((item) => item.name !== 'themeSelectorPopup'),
+  Popups.popups.filter(
+    (item) =>
+      item.name !== 'themeSelectorPopup' && components[item.name] !== undefined,
+  ),
 )
 
 let originalBodyOverflow = ''
@@ -149,12 +123,11 @@ function close(item: PopupEntry): void {
 }
 
 function dismiss(item: PopupEntry): void {
-  if (item.name !== 'recoveryKeyPopup') close(item)
+  close(item)
 }
 
 function closeComponent(item: PopupEntry): void {
-  if (item.name === 'recoveryKeyPopup') Popups.complete(item.id)
-  else Popups.close(item.id)
+  Popups.close(item.id)
 }
 
 function popupContainer(id: number): HTMLElement | null {

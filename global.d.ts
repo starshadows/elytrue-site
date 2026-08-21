@@ -17,7 +17,7 @@ declare global {
           readonly focus: string
         }
       >
-      readonly commentBackgrounds: readonly string[]
+      readonly commentBackgrounds?: readonly string[]
     }
     __ELY_EARLY_COMMENTS__?: Promise<{
       readonly ok: boolean
