@@ -34,7 +34,10 @@ const volume = ref(1)
 const desktopFullscreenActive = ref(false)
 const mobileNativeFullscreenActive = ref(false)
 const fullscreenActive = computed(
-  () => desktopFullscreenActive.value || mobileNativeFullscreenActive.value,
+  () =>
+    desktopFullscreenActive.value ||
+    mobileNativeFullscreenActive.value ||
+    Boolean(getFullscreenElement()),
 )
 const controlsVisible = ref(true)
 const errorMessage = ref('')
@@ -48,6 +51,78 @@ let restoredProgressThemeId = ''
 let mobileFullscreenKind: 'standard' | 'webkit' | undefined
 
 const VIDEO_PROGRESS_STORAGE_KEY = 'elytrue.video-progress:v1'
+const VIDEO_HISTORY_STATE_KEY = 'elytrue-video-open'
+let videoHistoryPushed = false
+
+type FullscreenDocument = Document & {
+  webkitFullscreenElement?: Element
+  mozFullScreenElement?: Element
+  msFullscreenElement?: Element
+  webkitExitFullscreen?: () => Promise<void>
+  mozCancelFullScreen?: () => Promise<void>
+  msExitFullscreen?: () => Promise<void>
+}
+
+type FullscreenElement = HTMLElement & {
+  webkitRequestFullscreen?: (options?: FullscreenOptions) => Promise<void>
+  mozRequestFullScreen?: (options?: FullscreenOptions) => Promise<void>
+  msRequestFullscreen?: (options?: FullscreenOptions) => Promise<void>
+}
+
+type WebkitFullscreenVideo = HTMLVideoElement & {
+  webkitEnterFullscreen?: () => void
+  webkitExitFullscreen?: () => void
+  webkitDisplayingFullscreen?: boolean
+}
+
+function getFullscreenElement(): Element | null {
+  if (typeof document === 'undefined') return null
+  const doc = document as FullscreenDocument
+  return (
+    doc.fullscreenElement ??
+    doc.webkitFullscreenElement ??
+    doc.mozFullScreenElement ??
+    doc.msFullscreenElement ??
+    null
+  )
+}
+
+function pushVideoHistoryState(): void {
+  if (typeof window === 'undefined' || videoHistoryPushed) return
+  try {
+    const currentState = window.history.state || {}
+    if (!currentState[VIDEO_HISTORY_STATE_KEY]) {
+      window.history.pushState(
+        { ...currentState, [VIDEO_HISTORY_STATE_KEY]: true },
+        '',
+        window.location.href,
+      )
+      videoHistoryPushed = true
+    }
+  } catch {
+    // Ignore history restrictions
+  }
+}
+
+function clearVideoHistoryState(): void {
+  if (typeof window === 'undefined' || !videoHistoryPushed) return
+  videoHistoryPushed = false
+  try {
+    if (window.history.state?.[VIDEO_HISTORY_STATE_KEY]) {
+      window.history.back()
+    }
+  } catch {
+    // Ignore
+  }
+}
+
+function handlePopState(event: PopStateEvent): void {
+  if (!activeTheme.value) return
+  if (videoHistoryPushed && !event.state?.[VIDEO_HISTORY_STATE_KEY]) {
+    videoHistoryPushed = false
+    void returnToPreviousTheme({ fromHistory: true })
+  }
+}
 
 function readVideoProgress(themeId: string): number | undefined {
   try {
@@ -105,7 +180,7 @@ function syncBodyMode(): void {
   )
   document.body.classList.toggle(
     'video-player-fullscreen',
-    Boolean(activeTheme.value) && desktopFullscreenActive.value,
+    Boolean(activeTheme.value) && fullscreenActive.value,
   )
 }
 
@@ -203,8 +278,10 @@ async function loadTheme(theme: VideoTheme | undefined): Promise<void> {
   if (!theme) {
     clearControlsTimer()
     await exitPlayerFullscreen()
+    clearVideoHistoryState()
     return
   }
+  pushVideoHistoryState()
   scheduleControlsHide()
   await nextTick()
   const element = video.value
@@ -313,30 +390,85 @@ function changeVolume(event: Event): void {
   syncPlayback()
 }
 
-function handleFullscreenEscape(event: KeyboardEvent): void {
-  if (event.key === 'Escape' && desktopFullscreenActive.value) {
-    void exitPlayerFullscreen()
+let touchStartX = 0
+let touchStartY = 0
+let touchStartTime = 0
+
+function handleStageTouchStart(event: TouchEvent): void {
+  revealControlsFromPointer()
+  if (event.touches.length === 1) {
+    const touch = event.touches[0]
+    if (touch) {
+      touchStartX = touch.clientX
+      touchStartY = touch.clientY
+      touchStartTime = Date.now()
+    }
   }
 }
 
-type WebkitFullscreenVideo = HTMLVideoElement & {
-  webkitEnterFullscreen?: () => void
-  webkitExitFullscreen?: () => void
-  webkitDisplayingFullscreen?: boolean
+function handleStageTouchEnd(event: TouchEvent): void {
+  if (event.changedTouches.length === 1 && touchStartX > 0) {
+    const touch = event.changedTouches[0]
+    if (touch) {
+      const deltaX = touch.clientX - touchStartX
+      const deltaY = Math.abs(touch.clientY - touchStartY)
+      const elapsed = Date.now() - touchStartTime
+
+      // Side-swipe right from left edge (within 80px or 20% of screen width)
+      const edgeThreshold = Math.max(80, window.innerWidth * 0.2)
+      if (
+        touchStartX <= edgeThreshold &&
+        deltaX >= 60 &&
+        deltaY <= 50 &&
+        elapsed <= 600
+      ) {
+        void returnToPreviousTheme()
+      }
+    }
+  }
+  touchStartX = 0
+  touchStartY = 0
+  touchStartTime = 0
 }
 
-function isMobilePlayer(): boolean {
-  return window.matchMedia('(max-width: 720px)').matches
+function handleEscapeKey(event: KeyboardEvent): void {
+  if (event.key !== 'Escape' || !activeTheme.value) return
+  // If an overlay/popup is currently open on top of the video player, let it handle Esc
+  if (
+    document.querySelector('.popupContainer:not(.closing)') ||
+    document.querySelector('.img-viewer-overlay:not(.closing)')
+  ) {
+    return
+  }
+  event.preventDefault()
+  if (
+    getFullscreenElement() ||
+    desktopFullscreenActive.value ||
+    mobileNativeFullscreenActive.value
+  ) {
+    void exitPlayerFullscreen()
+  } else {
+    // Esc directly acts as the "返回" (Back) button!
+    void returnToPreviousTheme()
+  }
 }
 
 function handleNativeFullscreenChange(): void {
-  const active = document.fullscreenElement === video.value
-  if (active) {
-    mobileFullscreenKind = 'standard'
-    mobileNativeFullscreenActive.value = true
-  } else if (mobileFullscreenKind === 'standard') {
+  const fsEl = getFullscreenElement()
+  if (!fsEl) {
     mobileFullscreenKind = undefined
     mobileNativeFullscreenActive.value = false
+    desktopFullscreenActive.value = false
+  } else if (fsEl === video.value) {
+    mobileFullscreenKind = 'standard'
+    mobileNativeFullscreenActive.value = true
+    desktopFullscreenActive.value = false
+  } else if (fsEl === stage.value) {
+    mobileFullscreenKind = undefined
+    desktopFullscreenActive.value = true
+    mobileNativeFullscreenActive.value = false
+  } else {
+    desktopFullscreenActive.value = true
   }
   syncBodyMode()
 }
@@ -353,14 +485,32 @@ function handleWebkitFullscreenEnd(): void {
   syncBodyMode()
 }
 
+function handleX5FullscreenStart(): void {
+  mobileFullscreenKind = 'standard'
+  mobileNativeFullscreenActive.value = true
+  syncBodyMode()
+}
+
+function handleX5FullscreenEnd(): void {
+  mobileFullscreenKind = undefined
+  mobileNativeFullscreenActive.value = false
+  syncBodyMode()
+}
+
 async function exitPlayerFullscreen(): Promise<void> {
   const element = video.value as WebkitFullscreenVideo | null
-  if (
-    element &&
-    document.fullscreenElement === element &&
-    document.exitFullscreen
-  ) {
-    await document.exitFullscreen().catch(() => undefined)
+  const doc = document as FullscreenDocument
+
+  if (getFullscreenElement()) {
+    if (doc.exitFullscreen) {
+      await doc.exitFullscreen().catch(() => undefined)
+    } else if (doc.webkitExitFullscreen) {
+      await doc.webkitExitFullscreen().catch(() => undefined)
+    } else if (doc.mozCancelFullScreen) {
+      await doc.mozCancelFullScreen().catch(() => undefined)
+    } else if (doc.msExitFullscreen) {
+      await doc.msExitFullscreen().catch(() => undefined)
+    }
   } else if (
     element &&
     (mobileFullscreenKind === 'webkit' || element.webkitDisplayingFullscreen)
@@ -377,44 +527,79 @@ async function exitPlayerFullscreen(): Promise<void> {
   syncBodyMode()
 }
 
-function toggleFullscreen(): void {
+async function toggleFullscreen(): Promise<void> {
   if (!stage.value) return
   revealControls()
-  if (isMobilePlayer()) {
-    const element = video.value as WebkitFullscreenVideo | null
-    if (!element) return
-    if (
-      mobileNativeFullscreenActive.value ||
-      document.fullscreenElement === element ||
-      element.webkitDisplayingFullscreen
-    ) {
-      void exitPlayerFullscreen()
+
+  const element = video.value as WebkitFullscreenVideo | null
+  const isCurrentlyFullscreen =
+    Boolean(getFullscreenElement()) ||
+    desktopFullscreenActive.value ||
+    mobileNativeFullscreenActive.value ||
+    Boolean(element?.webkitDisplayingFullscreen)
+
+  if (isCurrentlyFullscreen) {
+    await exitPlayerFullscreen()
+    return
+  }
+
+  // 1. Attempt real Fullscreen on the stage container so custom controls, title, and buttons stay visible
+  const stageEl = stage.value as FullscreenElement
+  const requestStageFullscreen =
+    stageEl.requestFullscreen?.bind(stageEl) ||
+    stageEl.webkitRequestFullscreen?.bind(stageEl) ||
+    stageEl.mozRequestFullScreen?.bind(stageEl) ||
+    stageEl.msRequestFullscreen?.bind(stageEl)
+
+  if (requestStageFullscreen) {
+    try {
+      await requestStageFullscreen({ navigationUI: 'hide' })
+      desktopFullscreenActive.value = true
+      syncBodyMode()
       return
+    } catch {
+      // Stage requestFullscreen failed or is unsupported (e.g., iPhone Safari)
     }
+  }
+
+  // 2. Mobile fallback: try HTMLVideoElement native fullscreen if container fullscreen failed
+  if (element) {
     if (element.webkitEnterFullscreen) {
       try {
         element.webkitEnterFullscreen()
+        return
       } catch {
         mobileFullscreenKind = undefined
         mobileNativeFullscreenActive.value = false
       }
-      return
     }
-    if (element.requestFullscreen) {
-      void element.requestFullscreen({ navigationUI: 'hide' }).catch(() => {
-        if (mobileFullscreenKind !== 'standard')
+    const requestVideoFullscreen =
+      element.requestFullscreen?.bind(element) ||
+      (element as FullscreenElement).webkitRequestFullscreen?.bind(element)
+    if (requestVideoFullscreen) {
+      try {
+        await requestVideoFullscreen({ navigationUI: 'hide' })
+        return
+      } catch {
+        if (mobileFullscreenKind !== 'standard') {
           mobileNativeFullscreenActive.value = false
-      })
-      return
+        }
+      }
     }
-    return
   }
-  desktopFullscreenActive.value = !desktopFullscreenActive.value
+
+  // 3. Fallback: CSS fullscreen if native Fullscreen API is unavailable or rejected
+  desktopFullscreenActive.value = true
   syncBodyMode()
 }
 
-async function returnToPreviousTheme(): Promise<void> {
+async function returnToPreviousTheme(options?: {
+  fromHistory?: boolean
+}): Promise<void> {
   await exitPlayerFullscreen()
+  if (!options?.fromHistory) {
+    clearVideoHistoryState()
+  }
   themeController.returnFromVideo()
 }
 
@@ -422,16 +607,27 @@ watch(activeTheme, syncBodyMode, { flush: 'sync' })
 watch(activeTheme, (theme) => void loadTheme(theme), { flush: 'post' })
 watch(hidden, syncBodyMode)
 onMounted(() => {
-  document.addEventListener('keydown', handleFullscreenEscape)
+  document.addEventListener('keydown', handleEscapeKey)
   document.addEventListener('fullscreenchange', handleNativeFullscreenChange)
+  document.addEventListener(
+    'webkitfullscreenchange',
+    handleNativeFullscreenChange,
+  )
+  window.addEventListener('popstate', handlePopState)
   window.addEventListener('pagehide', persistCurrentVideoProgress)
   syncBodyMode()
 })
 
 onBeforeUnmount(() => {
-  document.removeEventListener('keydown', handleFullscreenEscape)
+  document.removeEventListener('keydown', handleEscapeKey)
   document.removeEventListener('fullscreenchange', handleNativeFullscreenChange)
+  document.removeEventListener(
+    'webkitfullscreenchange',
+    handleNativeFullscreenChange,
+  )
+  window.removeEventListener('popstate', handlePopState)
   window.removeEventListener('pagehide', persistCurrentVideoProgress)
+  clearVideoHistoryState()
   persistCurrentVideoProgress()
   clearControlsTimer()
   destroySource()
@@ -451,12 +647,13 @@ onBeforeUnmount(() => {
     ref="stage"
     :class="{
       'controls-hidden': !controlsVisible,
-      'player-fullscreen': desktopFullscreenActive,
+      'player-fullscreen': fullscreenActive,
     }"
     :aria-label="activeTheme.title.zh"
     @pointermove="revealControlsFromPointer"
     @pointerdown="revealControlsFromPointer"
-    @touchstart.passive="revealControlsFromPointer"
+    @touchstart.passive="handleStageTouchStart"
+    @touchend.passive="handleStageTouchEnd"
     @keydown.capture="revealControlsFromKeyboard"
     @focusin="revealControls"
     @focusout="handleFocusOut"
@@ -465,6 +662,16 @@ onBeforeUnmount(() => {
       ref="video"
       :poster="activeTheme.cardPreview"
       playsinline
+      webkit-playsinline="true"
+      x5-playsinline="true"
+      x5-video-player-type="h5-page"
+      x5-video-player-fullscreen="true"
+      x5-video-orientation="landscape|portrait"
+      t7-video-player-type="inline"
+      x-webkit-airplay="allow"
+      disablePictureInPicture
+      disableRemotePlayback
+      controlslist="nodownload nofullscreen noremoteplayback"
       preload="metadata"
       @play="syncPlayback"
       @pause="syncPlayback"
@@ -475,6 +682,8 @@ onBeforeUnmount(() => {
       @canplay="attemptAutoplay"
       @webkitbeginfullscreen="handleWebkitFullscreenStart"
       @webkitendfullscreen="handleWebkitFullscreenEnd"
+      @x5videoenterfullscreen="handleX5FullscreenStart"
+      @x5videoexitfullscreen="handleX5FullscreenEnd"
     ></video>
     <label class="videoFocusToggle setting-switch">
       <span>
@@ -518,7 +727,7 @@ onBeforeUnmount(() => {
             fullscreenActive ? 'Exit fullscreen' : 'Fullscreen'
           }}</span>
         </button>
-        <button type="button" @click="returnToPreviousTheme">
+        <button type="button" @click="() => returnToPreviousTheme()">
           <span class="ui zh">返回</span><span class="ui en">Back</span>
         </button>
       </div>
@@ -545,11 +754,14 @@ onBeforeUnmount(() => {
 }
 
 #videoPlayerLayer.player-fullscreen,
-#videoPlayerLayer:fullscreen {
+#videoPlayerLayer:fullscreen,
+#videoPlayerLayer:-webkit-full-screen {
   inset: 0;
   z-index: 10000;
   width: 100vw;
+  width: 100%;
   height: 100vh;
+  height: 100%;
   aspect-ratio: auto;
   transform: none;
   box-shadow: none;
@@ -563,6 +775,7 @@ video {
   height: 100%;
   object-fit: contain;
   background: #08060a;
+  -webkit-touch-callout: none;
 }
 
 .videoPlayerControls {
@@ -659,9 +872,12 @@ button {
   }
 
   #videoPlayerLayer.player-fullscreen,
-  #videoPlayerLayer:fullscreen {
+  #videoPlayerLayer:fullscreen,
+  #videoPlayerLayer:-webkit-full-screen {
     width: 100vw;
+    width: 100%;
     height: 100vh;
+    height: 100%;
   }
 
   .videoPlayerControls {
