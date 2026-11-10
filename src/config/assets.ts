@@ -4,6 +4,7 @@ import {
   IMAGE_THEMES,
   VIDEO_THEMES,
   type BackgroundAsset,
+  type VideoTheme,
 } from './background-manifest'
 
 export * from './background-manifest'
@@ -45,27 +46,46 @@ export const DOWNLOAD_IMAGE_GROUPS: readonly DownloadImageGroup[] = [
           (background) => background.layout === 'landscape',
         ),
       ),
-      ...VIDEO_THEMES.map((theme) => ({
-        id: `${theme.id}-poster`,
-        layout: 'landscape' as const,
-        preview: theme.cardPreview,
-        original: theme.posterOriginal,
-        credit: { zh: '官方美术', en: 'Official art' },
-      })).filter((item) => {
-        if (seenOriginals.has(item.original)) return false
-        seenOriginals.add(item.original)
-        return true
-      }),
+      ...VIDEO_THEMES.filter(
+        (theme: VideoTheme) => (theme.layout ?? 'landscape') === 'landscape',
+      )
+        .map((theme) => ({
+          id: `${theme.id}-poster`,
+          layout: 'landscape' as const,
+          preview: theme.cardPreview,
+          original: theme.posterOriginal,
+          credit: { zh: '官方美术', en: 'Official art' },
+        }))
+        .filter((item) => {
+          if (seenOriginals.has(item.original)) return false
+          seenOriginals.add(item.original)
+          return true
+        }),
     ],
   },
   {
     id: 'portrait',
     title: { zh: '竖屏背景', en: 'Portrait backgrounds' },
-    images: uniqueBackgrounds(
-      IMAGE_THEMES.flatMap((theme) => theme.backgrounds).filter(
-        (background) => background.layout === 'portrait',
+    images: [
+      ...uniqueBackgrounds(
+        IMAGE_THEMES.flatMap((theme) => theme.backgrounds).filter(
+          (background) => background.layout === 'portrait',
+        ),
       ),
-    ),
+      ...VIDEO_THEMES.filter((theme: VideoTheme) => theme.layout === 'portrait')
+        .map((theme) => ({
+          id: `${theme.id}-poster`,
+          layout: 'portrait' as const,
+          preview: theme.cardPreview,
+          original: theme.posterOriginal,
+          credit: { zh: '官方美术', en: 'Official art' },
+        }))
+        .filter((item) => {
+          if (seenOriginals.has(item.original)) return false
+          seenOriginals.add(item.original)
+          return true
+        }),
+    ],
   },
 ]
 

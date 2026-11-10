@@ -95,9 +95,18 @@ export function resolveThemeSelection(
   const video = videoThemeForSelection(requested)
   if (video) return video
 
-  const imageSelection =
-    requested === 'auto' && isShanghaiBirthday(date) ? 'birthday' : requested
-  const compatible = imageThemeForSelection(imageSelection, audience)
+  if (requested === 'auto' && isShanghaiBirthday(date)) {
+    if (audience === 'mobile') {
+      const birthdayVideo = videoThemeForSelection('birthday-video')
+      if (birthdayVideo) return birthdayVideo
+    }
+    const compatible = imageThemeForSelection('birthday', audience)
+    return (
+      compatible ?? imageThemeForSelection('auto', audience) ?? IMAGE_THEMES[0]
+    )
+  }
+
+  const compatible = imageThemeForSelection(requested, audience)
   return (
     compatible ?? imageThemeForSelection('auto', audience) ?? IMAGE_THEMES[0]
   )
@@ -129,7 +138,7 @@ export interface ThemeController {
   readonly currentCaption: number
   readonly theme: ImageThemeId | VideoThemeId
   readonly selection: ThemeSelectionId
-  getAutoTheme(): ImageThemeId
+  getAutoTheme(): ImageThemeId | VideoThemeId
   getCurrentBgCount(): number
   getCurrentBgs(): NodeListOf<HTMLElement>
   getThemeMusic(): string
@@ -154,7 +163,7 @@ class ThemeControllerImpl implements ThemeController {
     '#youth': 'youth',
     '#for-elysia': 'for-elysia',
   }
-  private lastAutoTheme: ImageThemeId | undefined
+  private lastAutoTheme: ImageThemeId | VideoThemeId | undefined
   private layoutQuery?: MediaQueryList
   private relayout?: () => void
   private autoThemeInterval?: number
@@ -367,10 +376,8 @@ class ThemeControllerImpl implements ThemeController {
       })
   }
 
-  getAutoTheme(): ImageThemeId {
+  getAutoTheme(): ImageThemeId | VideoThemeId {
     const resolved = resolveThemeSelection('auto', this.audience(), this.now())
-    if (resolved.kind !== 'image')
-      throw new Error('Automatic theme must be an image')
     return resolved.id
   }
 
@@ -379,7 +386,13 @@ class ThemeControllerImpl implements ThemeController {
   }
 
   returnFromVideo(): void {
-    this.setTheme(this.previousImageSelection, 'user')
+    const returnSelection =
+      this.previousImageSelection === 'auto' &&
+      isShanghaiBirthday(this.now()) &&
+      this.audience() === 'mobile'
+        ? 'birthday'
+        : this.previousImageSelection
+    this.setTheme(returnSelection, 'user')
   }
 
   setTheme(

@@ -10,7 +10,10 @@ export type ImageThemeId =
   | 'birthday-mobile'
   | 'for-elysia'
 export type VideoThemeId =
-  'story-because-of-you' | 'magical-invitation' | 'makeup-class'
+  | 'story-because-of-you'
+  | 'magical-invitation'
+  | 'makeup-class'
+  | 'birthday-video'
 export type ThemeSelectionId =
   | 'auto'
   | 'mainline'
@@ -53,6 +56,7 @@ export interface VideoTheme {
   readonly kind: 'video'
   readonly id: VideoThemeId
   readonly selection: VideoThemeId
+  readonly layout?: BackgroundLayout
   readonly title: LocalizedText
   readonly cardTitle?: LocalizedText
   readonly cardPreview: `/assets/${string}.webp`
@@ -275,6 +279,13 @@ const mobileBirthday = background(
   'bg/themes/birthday-mobile/5.webp',
   'originals/themes/birthday-mobile/5.jpg',
 )
+const mobileBirthday2026 = background(
+  'birthday-mobile-2026',
+  'portrait',
+  'bg/themes/birthday-mobile/2026.webp',
+  'originals/themes/birthday-mobile/2026.png',
+  '50% 30%',
+)
 
 function themedBackground(
   id: string,
@@ -408,9 +419,9 @@ export const IMAGE_THEMES = [
     selection: 'birthday',
     audience: 'mobile',
     title: { zh: '生日快乐！', en: 'Happy Birthday!' },
-    cardPreview: mobileBirthday.preview,
-    cardFocus: '50% 35%',
-    backgrounds: [mobileBirthday],
+    cardPreview: mobileBirthday2026.preview,
+    cardFocus: '50% 30%',
+    backgrounds: [mobileBirthday2026, mobileBirthday],
     automatic: false,
     showCaptions: false,
   },
@@ -432,6 +443,7 @@ export const VIDEO_THEMES = [
     kind: 'video',
     id: 'story-because-of-you',
     selection: 'story-because-of-you',
+    layout: 'landscape',
     title: { zh: '因你而在的故事', en: 'Because of You' },
     cardPreview: official10.preview,
     posterOriginal: official10.original,
@@ -441,6 +453,7 @@ export const VIDEO_THEMES = [
     kind: 'video',
     id: 'magical-invitation',
     selection: 'magical-invitation',
+    layout: 'landscape',
     title: {
       zh: '妖精小姐的魔法邀约',
       en: "Miss Elf's Magical Invitation",
@@ -453,10 +466,21 @@ export const VIDEO_THEMES = [
     kind: 'video',
     id: 'makeup-class',
     selection: 'makeup-class',
+    layout: 'landscape',
     title: { zh: '爱莉希雅的化妆小课堂', en: "Elysia's Makeup Class" },
     cardPreview: `${ASSET_ROOT}/bg/video/makeup-class/封面.webp`,
     posterOriginal: `${ASSET_ROOT}/originals/video/makeup-class/封面.jpg`,
     playlist: `${ASSET_ROOT}/video/makeup-class/index.m3u8`,
+  },
+  {
+    kind: 'video',
+    id: 'birthday-video',
+    selection: 'birthday-video',
+    layout: 'portrait',
+    title: { zh: '生日特别视频', en: 'Birthday Video' },
+    cardPreview: `${ASSET_ROOT}/bg/video/birthday/封面.webp`,
+    posterOriginal: `${ASSET_ROOT}/originals/video/birthday/封面.jpg`,
+    playlist: `${ASSET_ROOT}/video/birthday/index.m3u8`,
   },
 ] as const satisfies readonly VideoTheme[]
 
@@ -470,11 +494,13 @@ export const DESKTOP_THEME_SELECTIONS = [
   'story-because-of-you',
   'magical-invitation',
   'makeup-class',
+  'birthday-video',
 ] as const satisfies readonly ThemeSelectionId[]
 
 export const MOBILE_THEME_SELECTIONS = [
   'auto',
   'birthday',
+  'birthday-video',
   'story-because-of-you',
   'magical-invitation',
   'makeup-class',

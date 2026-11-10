@@ -27,7 +27,9 @@ async function stageFile(source, destination, totals) {
     totals.hardlinkedBytes += sourceStats.size
     totals.hardlinkedFiles += 1
   } catch (error) {
-    if (!['EXDEV', 'ENOSYS', 'ENOTSUP', 'EPERM'].includes(error?.code)) {
+    if (
+      !['EXDEV', 'ENOSYS', 'ENOTSUP', 'EPERM', 'EACCES'].includes(error?.code)
+    ) {
       throw error
     }
     await copyFile(source, destination)

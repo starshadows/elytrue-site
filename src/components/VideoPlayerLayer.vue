@@ -357,6 +357,13 @@ function handleTimeUpdate(): void {
   persistCurrentVideoProgress()
 }
 
+function handleEnded(): void {
+  const element = video.value
+  if (!element) return
+  element.currentTime = 0
+  void element.play()
+}
+
 function seek(ratio: number): void {
   const element = video.value
   if (!element || !Number.isFinite(element.duration) || element.duration <= 0)
@@ -648,6 +655,7 @@ onBeforeUnmount(() => {
     :class="{
       'controls-hidden': !controlsVisible,
       'player-fullscreen': fullscreenActive,
+      'portrait-video': activeTheme.layout === 'portrait',
     }"
     :aria-label="activeTheme.title.zh"
     @pointermove="revealControlsFromPointer"
@@ -673,6 +681,7 @@ onBeforeUnmount(() => {
       disableRemotePlayback
       controlslist="nodownload nofullscreen noremoteplayback"
       preload="metadata"
+      loop
       @play="syncPlayback"
       @pause="syncPlayback"
       @timeupdate="handleTimeUpdate"
@@ -680,6 +689,7 @@ onBeforeUnmount(() => {
       @loadedmetadata="restoreVideoProgress"
       @volumechange="syncPlayback"
       @canplay="attemptAutoplay"
+      @ended="handleEnded"
       @webkitbeginfullscreen="handleWebkitFullscreenStart"
       @webkitendfullscreen="handleWebkitFullscreenEnd"
       @x5videoenterfullscreen="handleX5FullscreenStart"
@@ -751,6 +761,11 @@ onBeforeUnmount(() => {
   transition:
     width 0.25s ease,
     box-shadow 0.25s ease;
+}
+
+#videoPlayerLayer.portrait-video {
+  width: min(calc(100vw - 4rem), calc((100vh - 4rem) * 9 / 16));
+  aspect-ratio: 9 / 16;
 }
 
 #videoPlayerLayer.player-fullscreen,
@@ -869,6 +884,21 @@ button {
 @media (max-width: 720px) {
   #videoPlayerLayer {
     width: min(calc(100vw - 0.75rem), calc((100vh - 0.75rem) * 16 / 9));
+  }
+
+  #videoPlayerLayer.portrait-video {
+    width: min(calc(100vw - 0.75rem), calc((100vh - 0.75rem) * 9 / 16));
+    aspect-ratio: 9 / 16;
+  }
+
+  body.video-focus #videoPlayerLayer {
+    width: 100vw;
+    width: 100%;
+    height: 100vh;
+    height: 100%;
+    aspect-ratio: auto;
+    border-radius: 0;
+    box-shadow: none;
   }
 
   #videoPlayerLayer.player-fullscreen,

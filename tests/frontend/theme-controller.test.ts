@@ -24,7 +24,7 @@ test('November 11 is a full Asia/Shanghai birthday day', () => {
   )
   assert.equal(
     resolveThemeSelection('auto', 'mobile', birthday).id,
-    'birthday-mobile',
+    'birthday-video',
   )
 })
 
@@ -39,15 +39,17 @@ test('theme manifests lock desktop and mobile card order', () => {
     'story-because-of-you',
     'magical-invitation',
     'makeup-class',
+    'birthday-video',
   ])
   assert.deepEqual(MOBILE_THEME_SELECTIONS, [
     'auto',
     'birthday',
+    'birthday-video',
     'story-because-of-you',
     'magical-invitation',
     'makeup-class',
   ])
-  assert.equal(VIDEO_THEMES.length, 3)
+  assert.equal(VIDEO_THEMES.length, 4)
 })
 
 test('automatic pools and fixed-cover image themes remain distinct', () => {
@@ -102,11 +104,11 @@ test('automatic pools and fixed-cover image themes remain distinct', () => {
   assert.equal(
     IMAGE_THEMES.find((theme) => theme.id === 'birthday-mobile')?.backgrounds
       .length,
-    1,
+    2,
   )
   assert.equal(
     IMAGE_THEMES.find((theme) => theme.id === 'birthday-mobile')?.cardFocus,
-    '50% 35%',
+    '50% 30%',
   )
 })
 
