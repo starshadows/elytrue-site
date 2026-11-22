@@ -1,0 +1,9 @@
+{
+  "extends": "@vue/tsconfig/tsconfig.dom.json",
+  "compilerOptions": {
+    "noEmit": true,
+    "strict": true,
+    "types": ["node"]
+  },
+  "include": ["tests/frontend/**/*.ts", "global.d.ts", "jsmediatags.d.ts"]
+}
