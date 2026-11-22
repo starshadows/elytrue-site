@@ -157,6 +157,15 @@ const landscape7 = background(
   '喵咕君QAQ(KH3)',
   illustratorUrls.miaogujun,
 )
+const landscape8 = background(
+  'landscape8',
+  'landscape',
+  'bg/auto/landscape/landscape8.webp',
+  'originals/auto/landscape/landscape8.jpg',
+  '48% 50%',
+  '喵咕君QAQ(KH3)',
+  illustratorUrls.miaogujun,
+)
 
 function officialLandscape(name: string, extension: 'jpg' | 'png') {
   return background(
@@ -303,6 +312,7 @@ const summer14 = themedBackground('summer-14', official14)
 const youthCover = themedBackground('youth-cover', official9)
 const forElysiaCover = themedBackground('for-elysia-cover', official12)
 const forElysia1 = themedBackground('for-elysia-1', official1)
+const desktopBirthday8 = themedBackground('birthday-desktop-8', landscape8)
 
 export const AUTO_LANDSCAPE_BACKGROUNDS = [
   landscape1,
@@ -312,6 +322,7 @@ export const AUTO_LANDSCAPE_BACKGROUNDS = [
   landscape5,
   landscape6,
   landscape7,
+  landscape8,
   official1,
   official2,
   official3,
@@ -409,7 +420,7 @@ export const IMAGE_THEMES = [
     audience: 'desktop',
     title: { zh: '生日快乐！', en: 'Happy Birthday!' },
     cardPreview: desktopBirthday.preview,
-    backgrounds: [desktopBirthday],
+    backgrounds: [desktopBirthday, desktopBirthday8],
     automatic: false,
     showCaptions: false,
   },

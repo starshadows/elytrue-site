@@ -58,7 +58,7 @@ test('automatic pools and fixed-cover image themes remain distinct', () => {
     (theme) => theme.id === 'auto-landscape',
   )
   const mobileAuto = IMAGE_THEMES.find((theme) => theme.id === 'auto-portrait')
-  assert.equal(desktopAuto?.backgrounds.length, 17)
+  assert.equal(desktopAuto?.backgrounds.length, 18)
   assert.equal(mobileAuto?.backgrounds.length, 11)
   assert.match(desktopAuto?.cardPreview ?? '', /\/封面\.webp$/u)
   assert.equal(desktopAuto?.cardTitle?.zh, '爱莉希雅')
@@ -100,7 +100,7 @@ test('automatic pools and fixed-cover image themes remain distinct', () => {
   assert.equal(
     IMAGE_THEMES.find((theme) => theme.id === 'birthday-desktop')?.backgrounds
       .length,
-    1,
+    2,
   )
   assert.equal(
     IMAGE_THEMES.find((theme) => theme.id === 'birthday-mobile')?.backgrounds

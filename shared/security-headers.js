@@ -4,7 +4,7 @@ export const TRANSPORT_SECURITY_HEADERS = Object.freeze({
 })
 
 export const CRITICAL_STARTUP_SCRIPT_HASH =
-  'sha256-98wEKMYbrArsobYVYW2aI4tgCAHNBn/bIONvxKDgJDc='
+  'sha256-0mNEE3c5qQcgaTMDHhIZH3a+4xUXR/IGcFmglQrjedU='
 
 export const DOCUMENT_SECURITY_HEADERS = Object.freeze({
   ...TRANSPORT_SECURITY_HEADERS,

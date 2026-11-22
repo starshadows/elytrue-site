@@ -146,7 +146,7 @@ describe('EdgeOne build output', () => {
           (match) => match[1],
         ),
       ).size,
-      28,
+      29,
     )
     assert.ok((await stat(new URL('index.html', dist))).size < 10 * 1024)
   })

@@ -65,7 +65,7 @@ EdgeOne Makers 连接 `starshadows/elytrue-site` 的 `main` 分支，执行 `npm
 
 - `landscape1`、`landscape2`：官方美术。
 - `landscape3`、`landscape4`、`portrait4`、`portrait5`：合悟昂，Pixiv 56022318，按作者主页转载要求标注。
-- `landscape5` 至 `landscape7`、`portrait6` 至 `portrait9`：喵咕君QAQ(KH3)，Pixiv 58434088，经许可转载。
+- `landscape5` 至 `landscape8`、`portrait6` 至 `portrait9`：喵咕君QAQ(KH3)，Pixiv 58434088，经许可转载。
 - `portrait1`、`portrait2`：nami，Pixiv 89748593，经许可转载。
 - `portrait3`：roena，Pixiv 35132995，经许可转载。
 
